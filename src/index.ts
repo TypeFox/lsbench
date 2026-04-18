@@ -1,14 +1,12 @@
 // Public API for lsbench
 // Action scripts import from "lsbench" to get type information
 
+export { loadActionScript, resolveServerConfig, runBenchmark } from "./runner";
+export { buildReport, computeMethodStats, printSummary } from "./stats";
 export type {
-  BenchContext,
   ActionScript,
+  BenchContext,
+  EditOperation,
   Position,
   Range,
-  EditOperation,
 } from "./types";
-
-export { runBenchmark } from "./runner";
-export { resolveServerConfig, loadActionScript } from "./runner";
-export { buildReport, computeMethodStats, printSummary } from "./stats";

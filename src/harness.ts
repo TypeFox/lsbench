@@ -1,7 +1,7 @@
-import * as cp from "child_process";
-import * as path from "path";
+import * as cp from "node:child_process";
+import * as path from "node:path";
 import * as rpc from "vscode-jsonrpc/node";
-import { ServerConfig } from "./types";
+import type { ServerConfig } from "./types";
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
 interface ServerCapabilities {
@@ -33,14 +33,17 @@ export class LspHarness {
   private process: cp.ChildProcess | null = null;
   private connection: rpc.MessageConnection | null = null;
   private diagnosticsMap = new Map<string, Diagnostic[]>();
-  private diagnosticsListeners = new Map<string, Array<(diags: Diagnostic[]) => void>>();
+  private diagnosticsListeners = new Map<
+    string,
+    Array<(diags: Diagnostic[]) => void>
+  >();
   private _capabilities: ServerCapabilities | null = null;
   private verbose: boolean;
 
   constructor(
     private config: ServerConfig,
     private workspaceRoot: string,
-    verbose = false
+    verbose = false,
   ) {
     this.verbose = verbose;
   }
@@ -86,7 +89,7 @@ export class LspHarness {
     const output = this.process.stdin!;
     this.connection = rpc.createMessageConnection(
       new rpc.StreamMessageReader(input),
-      new rpc.StreamMessageWriter(output)
+      new rpc.StreamMessageWriter(output),
     );
 
     this.connection.listen();
@@ -101,7 +104,7 @@ export class LspHarness {
           for (const cb of listeners) cb(params.diagnostics);
           this.diagnosticsListeners.delete(params.uri);
         }
-      }
+      },
     );
 
     // Log window messages from the server
@@ -109,14 +112,14 @@ export class LspHarness {
       "window/logMessage",
       (params: { type: number; message: string }) => {
         this.log(`[server] ${params.message}`);
-      }
+      },
     );
 
     this.connection.onNotification(
       "window/showMessage",
       (params: { type: number; message: string }) => {
         this.log(`[server msg] ${params.message}`);
-      }
+      },
     );
 
     // Handle workspace/configuration requests (many servers need this)
@@ -124,16 +127,13 @@ export class LspHarness {
       "workspace/configuration",
       (params: { items: unknown[] }) => {
         return params.items.map(() => ({}));
-      }
+      },
     );
 
     // Handle client/registerCapability (dynamic registration)
-    this.connection.onRequest(
-      "client/registerCapability",
-      () => {
-        return; // Accept all registrations
-      }
-    );
+    this.connection.onRequest("client/registerCapability", () => {
+      return; // Accept all registrations
+    });
 
     // Perform LSP initialize
     const workspaceUri = pathToUri(this.workspaceRoot);
@@ -150,7 +150,10 @@ export class LspHarness {
     };
 
     this.log("Sending initialize...");
-    const result = await this.connection.sendRequest("initialize", initParams) as InitializeResult;
+    const result = (await this.connection.sendRequest(
+      "initialize",
+      initParams,
+    )) as InitializeResult;
     this._capabilities = result.capabilities;
 
     // Send initialized notification
@@ -182,7 +185,7 @@ export class LspHarness {
           }
           resolve();
         }, 3000);
-        this.process!.on("exit", () => {
+        this.process?.on("exit", () => {
           clearTimeout(timer);
           resolve();
         });
@@ -262,7 +265,9 @@ export class LspHarness {
             snippetSupport: true,
             commitCharactersSupport: true,
             documentationFormat: ["markdown", "plaintext"],
-            resolveSupport: { properties: ["documentation", "detail", "additionalTextEdits"] },
+            resolveSupport: {
+              properties: ["documentation", "detail", "additionalTextEdits"],
+            },
           },
           contextSupport: true,
         },

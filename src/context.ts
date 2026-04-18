@@ -1,10 +1,9 @@
-import * as fs from "fs";
-import * as path from "path";
-import { LspHarness, Diagnostic, pathToUri } from "./harness";
-import {
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { type Diagnostic, type LspHarness, pathToUri } from "./harness";
+import type {
   BenchContext,
   EditOperation,
-  Position,
   Range,
   RequestTiming,
 } from "./types";
@@ -18,7 +17,10 @@ export class BenchContextImpl implements BenchContext {
   readonly workspaceRoot: string;
   private harness: LspHarness;
   private timings: RequestTiming[] = [];
-  private openDocuments = new Map<string, { uri: string; version: number; text: string }>();
+  private openDocuments = new Map<
+    string,
+    { uri: string; version: number; text: string }
+  >();
   private verbose: boolean;
 
   constructor(harness: LspHarness, workspaceRoot: string, verbose = false) {
@@ -93,7 +95,7 @@ export class BenchContextImpl implements BenchContext {
   async hover(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/hover", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -104,7 +106,7 @@ export class BenchContextImpl implements BenchContext {
   async completion(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/completion", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -115,7 +117,7 @@ export class BenchContextImpl implements BenchContext {
   async definition(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/definition", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -126,7 +128,7 @@ export class BenchContextImpl implements BenchContext {
   async references(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/references", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -135,9 +137,7 @@ export class BenchContextImpl implements BenchContext {
     });
   }
 
-  async documentSymbol(
-    relativePath: string
-  ): Promise<unknown | null> {
+  async documentSymbol(relativePath: string): Promise<unknown | null> {
     return this.timedRequest("textDocument/documentSymbol", {
       textDocument: { uri: this.getUri(relativePath) },
     });
@@ -154,7 +154,7 @@ export class BenchContextImpl implements BenchContext {
     relativePath: string,
     line: number,
     character: number,
-    newName: string
+    newName: string,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/rename", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -166,7 +166,7 @@ export class BenchContextImpl implements BenchContext {
   async codeAction(
     relativePath: string,
     range: Range,
-    diagnosticCodes?: (string | number)[]
+    diagnosticCodes?: (string | number)[],
   ): Promise<unknown | null> {
     const uri = this.getUri(relativePath);
     const diagnostics = diagnosticCodes
@@ -185,7 +185,7 @@ export class BenchContextImpl implements BenchContext {
   async signatureHelp(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/signatureHelp", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -196,7 +196,7 @@ export class BenchContextImpl implements BenchContext {
   async typeDefinition(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/typeDefinition", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -207,7 +207,7 @@ export class BenchContextImpl implements BenchContext {
   async implementation(
     relativePath: string,
     line: number,
-    character: number
+    character: number,
   ): Promise<unknown | null> {
     return this.timedRequest("textDocument/implementation", {
       textDocument: { uri: this.getUri(relativePath) },
@@ -219,12 +219,12 @@ export class BenchContextImpl implements BenchContext {
 
   async edit(
     relativePath: string,
-    edits: EditOperation | EditOperation[]
+    edits: EditOperation | EditOperation[],
   ): Promise<void> {
     const doc = this.openDocuments.get(relativePath);
     if (!doc) {
       throw new Error(
-        `Document ${relativePath} is not open. Call openDocument() first.`
+        `Document ${relativePath} is not open. Call openDocument() first.`,
       );
     }
 
@@ -235,7 +235,7 @@ export class BenchContextImpl implements BenchContext {
       (e) => ({
         range: toLspRange(e.range),
         text: e.text,
-      })
+      }),
     );
 
     // Apply edits to our local copy of the text (simplified: just for version tracking)
@@ -250,7 +250,7 @@ export class BenchContextImpl implements BenchContext {
 
   async waitForDiagnostics(
     relativePath: string,
-    timeoutMs = 30000
+    timeoutMs = 30000,
   ): Promise<Diagnostic[]> {
     const uri = this.getUri(relativePath);
     return this.harness.onDiagnostics(uri, timeoutMs);
@@ -262,7 +262,11 @@ export class BenchContextImpl implements BenchContext {
 
   // ── Custom timing ───────────────────────────────────────────────────
 
-  async request<R>(method: string, params: unknown, label?: string): Promise<R> {
+  async request<R>(
+    method: string,
+    params: unknown,
+    label?: string,
+  ): Promise<R> {
     return this.timedRequest<R>(method, params, label);
   }
 
@@ -282,7 +286,7 @@ export class BenchContextImpl implements BenchContext {
   private async timedRequest<R>(
     method: string,
     params: unknown,
-    label?: string
+    label?: string,
   ): Promise<R> {
     const start = process.hrtime.bigint();
     let success = true;
@@ -298,8 +302,7 @@ export class BenchContextImpl implements BenchContext {
     }
 
     const end = process.hrtime.bigint();
-    const duration_ms =
-      Number(end - start) / 1_000_000; // nanoseconds → milliseconds
+    const duration_ms = Number(end - start) / 1_000_000; // nanoseconds → milliseconds
 
     this.timings.push({
       method,
@@ -310,7 +313,7 @@ export class BenchContextImpl implements BenchContext {
     });
 
     this.log(
-      `${method}${label ? ` [${label}]` : ""}: ${duration_ms.toFixed(1)}ms${success ? "" : ` ERROR: ${error}`}`
+      `${method}${label ? ` [${label}]` : ""}: ${duration_ms.toFixed(1)}ms${success ? "" : ` ERROR: ${error}`}`,
     );
 
     return result;
@@ -325,7 +328,10 @@ export class BenchContextImpl implements BenchContext {
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 
-function toLspRange(range: Range): { start: { line: number; character: number }; end: { line: number; character: number } } {
+function toLspRange(range: Range): {
+  start: { line: number; character: number };
+  end: { line: number; character: number };
+} {
   return {
     start: { line: range.start.line, character: range.start.character },
     end: { line: range.end.line, character: range.end.character },

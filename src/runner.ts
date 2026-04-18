@@ -1,8 +1,8 @@
-import * as path from "path";
-import { LspHarness } from "./harness";
+import * as path from "node:path";
 import { BenchContextImpl } from "./context";
+import { LspHarness } from "./harness";
 import { buildReport, printSummary } from "./stats";
-import {
+import type {
   ActionScript,
   BenchOptions,
   BenchReport,
@@ -19,7 +19,7 @@ import {
  */
 export async function resolveServerConfig(
   serverArg: string,
-  extraArgs?: string[]
+  extraArgs?: string[],
 ): Promise<ServerConfig> {
   // Check if it's a file path to a config
   if (
@@ -50,7 +50,7 @@ export async function resolveServerConfig(
  * Supports .js files (require) and .ts files (via tsx or ts-node if available).
  */
 export async function loadActionScript(
-  scriptPath: string
+  scriptPath: string,
 ): Promise<ActionScript> {
   const absPath = path.resolve(scriptPath);
 
@@ -67,7 +67,7 @@ export async function loadActionScript(
       } catch {
         throw new Error(
           `Action script is TypeScript but neither 'tsx' nor 'ts-node' is installed.\n` +
-            `Install one of them: npm install -g tsx`
+            `Install one of them: npm install -g tsx`,
         );
       }
     }
@@ -79,7 +79,7 @@ export async function loadActionScript(
 
   if (typeof fn !== "function") {
     throw new Error(
-      `Action script ${scriptPath} must export a function (default export or module.exports).`
+      `Action script ${scriptPath} must export a function (default export or module.exports).`,
     );
   }
 
@@ -101,7 +101,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
   console.log(`  Workspace:  ${workspaceRoot}`);
   console.log(`  Script:     ${opts.script}`);
   console.log(`  Iterations: ${opts.iterations} (+ ${opts.warmup} warmup)`);
-  console.log(`  Restart:    ${opts.restart ? "each iteration" : "keep alive"}`);
+  console.log(
+    `  Restart:    ${opts.restart ? "each iteration" : "keep alive"}`,
+  );
   console.log();
 
   const benchStart = process.hrtime.bigint();
@@ -118,7 +120,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
   for (let i = 0; i < totalIterations; i++) {
     const isWarmup = i < opts.warmup;
-    const iterNum = isWarmup ? `warmup ${i + 1}/${opts.warmup}` : `${i - opts.warmup + 1}/${opts.iterations}`;
+    const iterNum = isWarmup
+      ? `warmup ${i + 1}/${opts.warmup}`
+      : `${i - opts.warmup + 1}/${opts.iterations}`;
 
     process.stdout.write(`  Running iteration ${iterNum}...`);
 
@@ -146,6 +150,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     const iterMs = Number(iterEnd - iterStart) / 1_000_000;
 
     // Collect timings
+    // biome-ignore lint/style/noNonNullAssertion: ctx is always set at this point
     const timings = ctx!.collectTimings();
 
     if (!isWarmup) {
@@ -160,7 +165,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
     // Reset document state between iterations (if not restarting)
     if (!opts.restart) {
-      await ctx!.resetDocuments();
+      await ctx?.resetDocuments();
     }
 
     // If restarting, stop the server

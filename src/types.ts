@@ -1,4 +1,3 @@
-
 // ── Server Configuration ────────────────────────────────────────────────────
 
 export interface ServerConfig {
@@ -123,27 +122,70 @@ export interface BenchContext {
   closeDocument(relativePath: string): Promise<void>;
 
   // ── Timed LSP requests ──────────────────────────────────────────────
-  hover(relativePath: string, line: number, character: number): Promise<unknown | null>;
-  completion(relativePath: string, line: number, character: number): Promise<unknown | null>;
-  definition(relativePath: string, line: number, character: number): Promise<unknown | null>;
-  references(relativePath: string, line: number, character: number): Promise<unknown | null>;
+  hover(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
+  completion(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
+  definition(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
+  references(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
   documentSymbol(relativePath: string): Promise<unknown | null>;
   formatting(relativePath: string): Promise<unknown | null>;
-  rename(relativePath: string, line: number, character: number, newName: string): Promise<unknown | null>;
-  codeAction(relativePath: string, range: Range, diagnosticCodes?: (string | number)[]): Promise<unknown | null>;
-  signatureHelp(relativePath: string, line: number, character: number): Promise<unknown | null>;
-  typeDefinition(relativePath: string, line: number, character: number): Promise<unknown | null>;
-  implementation(relativePath: string, line: number, character: number): Promise<unknown | null>;
+  rename(
+    relativePath: string,
+    line: number,
+    character: number,
+    newName: string,
+  ): Promise<unknown | null>;
+  codeAction(
+    relativePath: string,
+    range: Range,
+    diagnosticCodes?: (string | number)[],
+  ): Promise<unknown | null>;
+  signatureHelp(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
+  typeDefinition(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
+  implementation(
+    relativePath: string,
+    line: number,
+    character: number,
+  ): Promise<unknown | null>;
 
   // ── Document mutations ──────────────────────────────────────────────
-  edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;
+  edit(
+    relativePath: string,
+    edits: EditOperation | EditOperation[],
+  ): Promise<void>;
 
   // ── Synchronization helpers ─────────────────────────────────────────
   /**
    * Wait until the server publishes diagnostics for the given file.
    * Useful after opening a document or making edits.
    */
-  waitForDiagnostics(relativePath: string, timeoutMs?: number): Promise<unknown[]>;
+  waitForDiagnostics(
+    relativePath: string,
+    timeoutMs?: number,
+  ): Promise<unknown[]>;
 
   /**
    * Sleep for the given number of milliseconds.

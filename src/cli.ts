@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Command } from "commander";
 import { runBenchmark } from "./runner";
-import { BenchOptions } from "./types";
+import type { BenchOptions } from "./types";
 
 const program = new Command();
 
@@ -18,33 +18,37 @@ program
       "    --script ./bench-actions.ts \\\n" +
       "    --iterations 50\n\n" +
       "  lsbench ./server-config.json \\\n" +
-      "    -w ./workspace -s ./actions.ts -n 100 -o results.json"
+      "    -w ./workspace -s ./actions.ts -n 100 -o results.json",
   )
   .version("0.1.0")
   .argument(
     "<server>",
-    'Server command (e.g. "typescript-language-server --stdio") or path to a config file (.json/.js/.ts)'
+    'Server command (e.g. "typescript-language-server --stdio") or path to a config file (.json/.js/.ts)',
   )
   .requiredOption(
     "-w, --workspace <path>",
-    "Path to the workspace directory to benchmark against"
+    "Path to the workspace directory to benchmark against",
   )
   .requiredOption(
     "-s, --script <path>",
-    "Path to the action driver script (.ts or .js)"
+    "Path to the action driver script (.ts or .js)",
   )
   .option("-n, --iterations <number>", "Number of timed iterations", "10")
-  .option("--warmup <number>", "Number of warmup iterations (not recorded)", "2")
+  .option(
+    "--warmup <number>",
+    "Number of warmup iterations (not recorded)",
+    "2",
+  )
   .option("-o, --output <path>", "Output file for JSON report", "")
   .option(
     "--restart",
     "Restart the server between each iteration (measures cold start)",
-    false
+    false,
   )
   .option("-v, --verbose", "Enable verbose logging", false)
   .option(
     "-- <args...>",
-    "Extra arguments to pass to the language server command"
+    "Extra arguments to pass to the language server command",
   )
   .action(async (server: string, rawOpts: Record<string, unknown>) => {
     const opts: BenchOptions = {
@@ -65,18 +69,20 @@ program
       process.exit(1);
     }
     if (!fs.statSync(opts.workspace).isDirectory()) {
-      console.error(`Error: Workspace path is not a directory: ${opts.workspace}`);
+      console.error(
+        `Error: Workspace path is not a directory: ${opts.workspace}`,
+      );
       process.exit(1);
     }
     if (!fs.existsSync(opts.script)) {
       console.error(`Error: Action script not found: ${opts.script}`);
       process.exit(1);
     }
-    if (isNaN(opts.iterations) || opts.iterations < 1) {
+    if (Number.isNaN(opts.iterations) || opts.iterations < 1) {
       console.error("Error: --iterations must be a positive integer");
       process.exit(1);
     }
-    if (isNaN(opts.warmup) || opts.warmup < 0) {
+    if (Number.isNaN(opts.warmup) || opts.warmup < 0) {
       console.error("Error: --warmup must be a non-negative integer");
       process.exit(1);
     }
@@ -93,10 +99,7 @@ program
 
       process.exit(0);
     } catch (err: unknown) {
-      console.error(
-        "\nFatal error:",
-        err instanceof Error ? err.message : err
-      );
+      console.error("\nFatal error:", err instanceof Error ? err.message : err);
       if (opts.verbose && err instanceof Error) {
         console.error(err.stack);
       }

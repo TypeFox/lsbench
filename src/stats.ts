@@ -1,4 +1,10 @@
-import { MethodStats, RequestTiming, IterationResult, BenchReport, BenchOptions } from "./types";
+import type {
+  BenchOptions,
+  BenchReport,
+  IterationResult,
+  MethodStats,
+  RequestTiming,
+} from "./types";
 
 /** Sort numbers ascending (in-place) and return the array */
 function sorted(arr: number[]): number[] {
@@ -76,7 +82,7 @@ function computeIterationSummary(runs: IterationResult[]) {
 export function buildReport(
   opts: BenchOptions,
   runs: IterationResult[],
-  totalDuration: number
+  totalDuration: number,
 ): BenchReport {
   // Group all timings by method across all runs
   const byMethod = new Map<string, RequestTiming[]>();
@@ -84,7 +90,7 @@ export function buildReport(
     for (const req of run.requests) {
       const key = req.label ? `${req.method} (${req.label})` : req.method;
       if (!byMethod.has(key)) byMethod.set(key, []);
-      byMethod.get(key)!.push(req);
+      byMethod.get(key)?.push(req);
     }
   }
 
@@ -110,21 +116,33 @@ export function buildReport(
 
 /** Pretty-print a summary table to the console */
 export function printSummary(report: BenchReport): void {
-  console.log("\n╔══════════════════════════════════════════════════════════════╗");
+  console.log(
+    "\n╔══════════════════════════════════════════════════════════════╗",
+  );
   console.log("║                     lsbench results                        ║");
-  console.log("╚══════════════════════════════════════════════════════════════╝\n");
+  console.log(
+    "╚══════════════════════════════════════════════════════════════╝\n",
+  );
 
   console.log(`  Server:      ${report.server}`);
   console.log(`  Workspace:   ${report.workspace}`);
-  console.log(`  Iterations:  ${report.iterations} (+ ${report.warmup} warmup)`);
-  console.log(`  Total time:  ${(report.total_duration_ms / 1000).toFixed(1)}s`);
-  console.log(`  Restart:     ${report.restart_between_iterations ? "yes" : "no"}`);
+  console.log(
+    `  Iterations:  ${report.iterations} (+ ${report.warmup} warmup)`,
+  );
+  console.log(
+    `  Total time:  ${(report.total_duration_ms / 1000).toFixed(1)}s`,
+  );
+  console.log(
+    `  Restart:     ${report.restart_between_iterations ? "yes" : "no"}`,
+  );
   console.log();
 
   // Iteration summary
   const is = report.iteration_summary;
   console.log("  Iteration totals:");
-  console.log(`    avg=${is.avg_ms}ms  median=${is.median_ms}ms  p95=${is.p95_ms}ms  min=${is.min_ms}ms  max=${is.max_ms}ms`);
+  console.log(
+    `    avg=${is.avg_ms}ms  median=${is.median_ms}ms  p95=${is.p95_ms}ms  min=${is.min_ms}ms  max=${is.max_ms}ms`,
+  );
   console.log();
 
   // Per-method table
@@ -150,7 +168,7 @@ export function printSummary(report: BenchReport): void {
     "Fail%".padStart(8);
 
   console.log(header);
-  console.log("  " + "─".repeat(header.length - 2));
+  console.log(`  ${"─".repeat(header.length - 2)}`);
 
   for (const method of methods) {
     const s = report.summary[method];
