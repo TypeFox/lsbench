@@ -2,36 +2,28 @@
 
 Benchmark arbitrary language servers with scripted LSP actions.
 
-```
-lsbench "typescript-language-server --stdio" \
-  --workspace ./my-project \
-  --script ./bench-actions.ts \
-  --iterations 50 \
-  --output results.json
-```
-
-## Install
-
 ```bash
-# From source
-git clone <repo> && cd lsbench
-npm install
-npm run build
-npm link   # makes `lsbench` available globally
-
-# Or use directly
-npx ts-node src/cli.ts ...
+# bench a ts language server over stdio
+lsbench "typescript-language-server --stdio" \
+  # point to your workspace
+  --workspace ./my-project \
+  # set the benchmark script
+  --script ./bench-actions.ts \
+  # set iteration count
+  --iterations 50 \
+  # configure output
+  --output results.json
 ```
 
 ## How it works
 
 lsbench spawns a language server process, performs the LSP
-initialize/initialized handshake, then runs your **action script** — a
+initialize/initialized handshake, then runs your action script, which is a
 TypeScript (or JavaScript) file that drives a sequence of LSP requests
-against a target workspace. Each request is timed with
-nanosecond-precision clocks. The script runs for N iterations, producing
-a JSON report with per-method statistics (avg, median, p95, p99, min,
-max, stddev) and full per-run breakdowns.
+against a target workspace.
+
+Each request is then timed. The script runs for N iterations, producing
+a JSON report with per-method statistics and per-run breakdowns.
 
 ## Writing an action script
 

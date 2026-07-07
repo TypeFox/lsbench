@@ -58,13 +58,15 @@ export async function loadActionScript(
     // Try to register ts-node or tsx for on-the-fly TS compilation
     try {
       require("tsx/cjs/api").register();
-    } catch {
+    } catch(e1) {
+      console.error(e1);
       try {
         require("ts-node").register({
           transpileOnly: true,
           compilerOptions: { module: "commonjs" },
         });
-      } catch {
+      } catch (e2) {
+        console.error(e2);
         throw new Error(
           `Action script is TypeScript but neither 'tsx' nor 'ts-node' is installed.\n` +
             `Install one of them: npm install -g tsx`,
