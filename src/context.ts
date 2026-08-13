@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { type Diagnostic, type LspHarness, pathToUri } from './harness';
-import type { BenchContext, EditOperation, Range, RequestTiming } from './types';
+import { type Diagnostic, type LspHarness, pathToUri } from './harness.js';
+import type { BenchContext, EditOperation, Range, RequestTiming } from './types.js';
 
 /**
  * Concrete implementation of BenchContext.

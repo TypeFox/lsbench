@@ -13,7 +13,7 @@
  *
  * Adapt the file paths and positions to your own workspace.
  */
-import { BenchContext } from 'lsbench';
+import type { BenchContext } from 'lsbench';
 
 export default async function (ctx: BenchContext) {
     // ── 1. Open the main file and wait for diagnostics ────────────────

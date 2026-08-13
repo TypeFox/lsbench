@@ -1,4 +1,4 @@
-import type { BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types';
+import type { BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
 
 /** Sort numbers ascending (in-place) and return the array */
 function sorted(arr: number[]): number[] {

@@ -1,7 +1,7 @@
 import * as cp from 'node:child_process';
 import * as path from 'node:path';
-import * as rpc from 'vscode-jsonrpc/node';
-import type { ServerConfig } from './types';
+import * as rpc from 'vscode-jsonrpc/node.js';
+import type { ServerConfig } from './types.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
 interface ServerCapabilities {

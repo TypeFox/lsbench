@@ -1,0 +1,6 @@
+{
+    "preferences": {
+        "includeInlayParameterNameHints": "none",
+        "includeInlayVariableTypeHints": false
+    }
+}

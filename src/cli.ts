@@ -3,8 +3,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Command } from 'commander';
-import { runBenchmark } from './runner';
-import type { BenchOptions } from './types';
+import { runBenchmark } from './runner.js';
+import type { BenchOptions } from './types.js';
 
 const program = new Command();
 
@@ -17,23 +17,41 @@ program
             '    --workspace ./my-project \\\n' +
             '    --script ./bench-actions.ts \\\n' +
             '    --iterations 50\n\n' +
-            '  lsbench ./server-config.json \\\n' +
-            '    -w ./workspace -s ./actions.ts -n 100 -o results.json',
+            '  lsbench "typescript-language-server --stdio" \\\n' +
+            '    -w ./workspace -s ./actions.ts -n 100 -o results.json \\\n' +
+            '    --init-options-file ./init-options.json',
     )
     .version('0.1.0')
-    .argument(
-        '<server>',
-        'Server command (e.g. "typescript-language-server --stdio") or path to a config file (.json/.js/.ts)',
-    )
+    .allowExcessArguments(true)
+    .argument('<server>', 'Server command, e.g. "typescript-language-server --stdio"')
     .requiredOption('-w, --workspace <path>', 'Path to the workspace directory to benchmark against')
-    .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts or .js)')
+    .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts)')
     .option('-n, --iterations <number>', 'Number of timed iterations', '10')
     .option('--warmup <number>', 'Number of warmup iterations (not recorded)', '2')
     .option('-o, --output <path>', 'Output file for JSON report', '')
+    .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('-v, --verbose', 'Enable verbose logging', false)
-    .option('-- <args...>', 'Extra arguments to pass to the language server command')
-    .action(async (server: string, rawOpts: Record<string, unknown>) => {
+    .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
+        // Extra arguments after `--` are passed through to the language server command
+        const serverArgs = command.args.slice(1);
+        // Load initializationOptions from a JSON file if provided
+        let initializationOptions: unknown;
+        const initOptionsFile = rawOpts.initOptionsFile as string | undefined;
+        if (initOptionsFile) {
+            if (!fs.existsSync(initOptionsFile)) {
+                console.error(`Error: Init options file not found: ${initOptionsFile}`);
+                process.exit(1);
+            }
+            try {
+                initializationOptions = JSON.parse(fs.readFileSync(initOptionsFile, 'utf8'));
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`Error: Failed to parse init options file ${initOptionsFile}: ${msg}`);
+                process.exit(1);
+            }
+        }
+
         const opts: BenchOptions = {
             server,
             workspace: rawOpts.workspace as string,
@@ -43,7 +61,8 @@ program
             output: rawOpts.output as string,
             restart: rawOpts.restart as boolean,
             verbose: rawOpts.verbose as boolean,
-            serverArgs: rawOpts.args as string[] | undefined,
+            serverArgs: serverArgs.length ? serverArgs : undefined,
+            initializationOptions,
         };
 
         // Validate inputs
@@ -53,6 +72,10 @@ program
         }
         if (!fs.statSync(opts.workspace).isDirectory()) {
             console.error(`Error: Workspace path is not a directory: ${opts.workspace}`);
+            process.exit(1);
+        }
+        if (!opts.script.endsWith('.ts')) {
+            console.error(`Error: Action script must be a TypeScript (.ts) file: ${opts.script}`);
             process.exit(1);
         }
         if (!fs.existsSync(opts.script)) {

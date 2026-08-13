@@ -7,10 +7,6 @@ export interface ServerConfig {
     args?: string[];
     /** Environment variables for the server process */
     env?: Record<string, string>;
-    /** Transport mechanism */
-    transport?: 'stdio' | 'tcp';
-    /** Port for TCP transport */
-    port?: number;
     /** Initialization options sent during LSP initialize */
     initializationOptions?: unknown;
 }
@@ -18,11 +14,11 @@ export interface ServerConfig {
 // ── CLI Options ─────────────────────────────────────────────────────────────
 
 export interface BenchOptions {
-    /** Path to the language server executable, or a JSON/JS config file */
+    /** Command to spawn the language server, e.g. "typescript-language-server --stdio" */
     server: string;
     /** Path to the workspace root to benchmark against */
     workspace: string;
-    /** Path to the action driver script (.ts or .js) */
+    /** Path to the action driver script (.ts) */
     script: string;
     /** Number of timed iterations */
     iterations: number;
@@ -34,6 +30,8 @@ export interface BenchOptions {
     restart: boolean;
     /** Extra args to pass to the server command (after --) */
     serverArgs?: string[];
+    /** Initialization options sent during the LSP initialize handshake */
+    initializationOptions?: unknown;
     /** Verbose logging */
     verbose: boolean;
 }
@@ -163,5 +161,5 @@ export interface BenchContext {
     notify(method: string, params: unknown): void;
 }
 
-/** The shape of a user-authored action script's default export */
+/** The shape of a user-authored action script's default export (default-exported function) */
 export type ActionScript = (ctx: BenchContext) => Promise<void>;

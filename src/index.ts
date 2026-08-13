@@ -3,11 +3,11 @@
 // drive a language server session directly, or get type information for
 // authoring action scripts.
 
-export { BenchContextImpl } from './context';
-export { LspHarness, pathToUri, uriToPath } from './harness';
-export type { Diagnostic } from './harness';
-export { loadActionScript, resolveServerConfig, runBenchmark } from './runner';
-export { buildReport, computeMethodStats, printSummary } from './stats';
+export { BenchContextImpl } from './context.js';
+export { LspHarness, pathToUri, uriToPath } from './harness.js';
+export type { Diagnostic } from './harness.js';
+export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
+export { buildReport, computeMethodStats, printSummary } from './stats.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 export type {
@@ -22,4 +22,4 @@ export type {
     Range,
     RequestTiming,
     ServerConfig,
-} from './types';
+} from './types.js';

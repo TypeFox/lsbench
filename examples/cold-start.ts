@@ -11,7 +11,7 @@
  *     --iterations 10 \
  *     --restart
  */
-import { BenchContext } from 'lsbench';
+import type { BenchContext } from 'lsbench';
 
 export default async function (ctx: BenchContext) {
     // Open a file — this triggers project loading
