@@ -53,7 +53,9 @@ export class LspHarness {
   }
 
   get conn(): rpc.MessageConnection {
-    if (!this.connection) throw new Error("LSP connection not initialized");
+    if (!this.connection) {
+      throw new Error("LSP connection not initialized");
+    }
     return this.connection;
   }
 
@@ -101,7 +103,9 @@ export class LspHarness {
         this.diagnosticsMap.set(params.uri, params.diagnostics);
         const listeners = this.diagnosticsListeners.get(params.uri);
         if (listeners) {
-          for (const cb of listeners) cb(params.diagnostics);
+          for (const cb of listeners) {
+            cb(params.diagnostics);
+          }
           this.diagnosticsListeners.delete(params.uri);
         }
       },
@@ -163,7 +167,9 @@ export class LspHarness {
 
   /** Gracefully shut down the server */
   async stop(): Promise<void> {
-    if (!this.connection) return;
+    if (!this.connection) {
+      return;
+    }
 
     try {
       await this.connection.sendRequest("shutdown");

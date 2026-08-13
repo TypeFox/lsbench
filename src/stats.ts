@@ -13,7 +13,9 @@ function sorted(arr: number[]): number[] {
 
 /** Compute a percentile from a sorted array (nearest-rank method) */
 function percentile(sortedArr: number[], p: number): number {
-  if (sortedArr.length === 0) return 0;
+  if (sortedArr.length === 0) {
+    return 0;
+  }
   const idx = Math.ceil((p / 100) * sortedArr.length) - 1;
   return sortedArr[Math.max(0, idx)];
 }
@@ -89,7 +91,9 @@ export function buildReport(
   for (const run of runs) {
     for (const req of run.requests) {
       const key = req.label ? `${req.method} (${req.label})` : req.method;
-      if (!byMethod.has(key)) byMethod.set(key, []);
+      if (!byMethod.has(key)) {
+        byMethod.set(key, []);
+      }
       byMethod.get(key)?.push(req);
     }
   }

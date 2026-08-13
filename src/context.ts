@@ -80,7 +80,9 @@ export class BenchContextImpl implements BenchContext {
 
   async closeDocument(relativePath: string): Promise<void> {
     const doc = this.openDocuments.get(relativePath);
-    if (!doc) return;
+    if (!doc) {
+      return;
+    }
 
     this.harness.sendNotification("textDocument/didClose", {
       textDocument: { uri: doc.uri },
@@ -278,7 +280,9 @@ export class BenchContextImpl implements BenchContext {
 
   private getUri(relativePath: string): string {
     const doc = this.openDocuments.get(relativePath);
-    if (doc) return doc.uri;
+    if (doc) {
+      return doc.uri;
+    }
     // If not opened yet, compute the URI anyway
     return pathToUri(path.resolve(this.workspaceRoot, relativePath));
   }
