@@ -6,12 +6,13 @@
   "bin": {
     "lsbench": "./dist/cli.js"
   },
+  "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "require": "./dist/index.js",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
@@ -31,17 +32,17 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "commander": "^12.1.0",
+    "@types/node": "^24.13.3",
+    "commander": "^14.0.3",
     "vscode-jsonrpc": "^8.2.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
-    "@types/node": "^20.14.0",
     "knip": "^6.32.1",
     "oxlint": "^1.78.0",
     "typescript": "^5.5.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   }
 }
