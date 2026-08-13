@@ -1,0 +1,10 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignore": ["examples/**"],
+  "ignoreBinaries": [],
+  "workspaces": {
+    ".": {
+      "ignoreDependencies": ["tsx", "ts-node"]
+    }
+  }
+}

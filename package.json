@@ -15,8 +15,10 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/cli.js",
-    "lint": "biome check src && oxlint src",
-    "lint:fix": "biome check --write src",
+    "lint": "oxlint .",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
+    "knip": "knip",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -24,9 +26,10 @@
     "vscode-jsonrpc": "^8.2.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.12",
+    "@biomejs/biome": "^2.5.8",
     "@types/node": "^20.14.0",
-    "oxlint": "^1.60.0",
+    "knip": "^6.32.1",
+    "oxlint": "^1.78.0",
     "typescript": "^5.5.0"
   },
   "engines": {
