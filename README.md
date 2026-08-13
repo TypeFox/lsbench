@@ -153,6 +153,11 @@ The JSON report contains:
 }
 ```
 
+## Primer
+
+The CLI also supports a `primer` command that will print helpful usage information work how to work with `lsbench`.
+This can be leveraged by humans as well as agents to use the tool to understand the tool, in a self-documenting fashion.
+
 ## Tips
 
 - **Warmup matters**: JIT compilation and caches need a few runs to stabilize. Use `--warmup 3-5` for reliable numbers.
