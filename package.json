@@ -21,9 +21,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "gen:version": "node scripts/gen-version.mjs",
+    "build": "node scripts/gen-version.mjs && tsc",
     "clean": "rm -rf ./dist",
-    "dev": "tsc --watch",
+    "dev": "node scripts/gen-version.mjs && tsc --watch",
     "start": "node dist/cli.js",
     "test": "vitest run",
     "lint": "oxlint .",

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import { runBenchmark } from './runner.js';
 import type { BenchOptions } from './types.js';
+import { CLI_VERSION } from './version.js';
 
 const program = new Command();
 
@@ -21,7 +22,7 @@ program
             '    -w ./workspace -s ./actions.ts -n 100 -o results.json \\\n' +
             '    --init-options-file ./init-options.json',
     )
-    .version('0.1.0');
+    .version(CLI_VERSION);
 
 // The benchmark itself is the default command, so `lsbench "<server>" ...` still
 // works while leaving room for sibling subcommands like `prime`.
