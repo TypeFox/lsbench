@@ -27,6 +27,7 @@
     "dev": "node scripts/gen-version.mjs && tsc --watch",
     "start": "node dist/cli.js",
     "test": "vitest run",
+    "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
     "lint": "oxlint .",
     "format": "biome format .",
     "format:fix": "biome format --write .",

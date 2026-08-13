@@ -323,6 +323,8 @@ function detectLanguageId(filePath: string): string {
         '.exs': 'elixir',
         '.ipl': 'ipl',
         '.ipld': 'ipl',
+        '.logo': 'minilogo',
+        '.langium': 'langium'
     };
     return map[ext] ?? 'plaintext';
 }
