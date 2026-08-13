@@ -1,6 +1,6 @@
 {
   "name": "lsbench",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Benchmark arbitrary language servers with scripted LSP actions",
   "license": "MIT",
   "bin": {
