@@ -21,6 +21,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "clean": "rm -rf ./dist",
     "dev": "tsc --watch",
     "start": "node dist/cli.js",
     "lint": "oxlint .",
