@@ -11,15 +11,15 @@
  *     --iterations 10 \
  *     --restart
  */
-import { BenchContext } from "lsbench";
+import { BenchContext } from 'lsbench';
 
 export default async function (ctx: BenchContext) {
-  // Open a file — this triggers project loading
-  await ctx.openDocument("src/index.ts");
+    // Open a file — this triggers project loading
+    await ctx.openDocument('src/index.ts');
 
-  // Wait for the server to fully load (diagnostics are a good "ready" signal)
-  await ctx.waitForDiagnostics("src/index.ts", 60_000);
+    // Wait for the server to fully load (diagnostics are a good "ready" signal)
+    await ctx.waitForDiagnostics('src/index.ts', 60_000);
 
-  // Fire one request to confirm the server is responsive
-  await ctx.hover("src/index.ts", 0, 0);
+    // Fire one request to confirm the server is responsive
+    await ctx.hover('src/index.ts', 0, 0);
 }
