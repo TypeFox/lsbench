@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# DEMO script
+# DEMO recording script
 # Run this to generate a new gif that is linked on the README
 # Update lsbench.tape accordingly to match any API changes
 

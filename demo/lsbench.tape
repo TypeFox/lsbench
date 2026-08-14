@@ -15,7 +15,7 @@ Set FontSize 16
 Set Width 1200
 Set Height 700
 Set Padding 20
-Set Theme "Catppuccin Mocha"
+Set Theme "Dracula"
 Set TypingSpeed 45ms
 
 # hop into the built minilogo workspace (hidden — keeps the frame clean)
