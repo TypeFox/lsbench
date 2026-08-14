@@ -70,6 +70,19 @@ export default async function (ctx: BenchContext) {
 | `request(method, params, label?)` | Arbitrary timed LSP request |
 | `notify(method, params)` | Send any LSP notification |
 
+In some cases you may also need to register a language ID for a given extension.
+That's straightforward to do with `addRegisteredLanguage`, which will then impact all context related actions.
+Keep in mind this is a _global_ registration for the run.
+
+```ts
+import { addRegisteredLanguage } from 'lsbench';
+
+// make sure mylanguage is recognized
+addRegisteredLanguage('mylanguage', '.dsl');
+```
+
+This will ensure that opening a document with the extension `.dsl` will have an associated language ID of `mylanguage`, to invoke the correct language server.
+
 ## CLI options
 
 ```

@@ -282,7 +282,7 @@ function toLspRange(range: Range): {
 }
 
 /**
- * Registered Language extensions + their corresponding language
+ * Mapping of extensions -> language ids
  */
 const RegisteredLanguages: Record<string, string> = {
     '.ts': 'typescript',
@@ -328,18 +328,25 @@ const RegisteredLanguages: Record<string, string> = {
 };
 
 /**
- * Adds a new registered language by name + extension
- * @param languageName To correctly associate with the correct language server by language ID
- * @param extension That should correlate with the given name (ex. `.ts`, or `.c`, or `.langium`)
+ * Adds a new registered language via a new extension -> name mapping
+ * @param languageId To be picked up by the correct language server
+ * @param extension That should correlate with the given id (ex. `.ts`, or `.c`, or `.langium`)
  */
-export function addRegisteredLanguage(languageName: string, extension: string) {
+export function addRegisteredLanguage(languageId: string, extension: string) {
     extension = extension.trim();
     if (!extension.startsWith('.')) {
         extension = '.' + extension;
     }
-    RegisteredLanguages[languageName] = extension;
+    RegisteredLanguages[languageId] = extension;
 }
 
+/**
+ * Will attempt to resolve the language id via the extension of the given file path.
+ * Will default to 'plaintext' if the language id is unrecognized.
+ * In such cases, `addRegisteredLanguage` should be invoked before opening any document.
+ * @param filePath To extract extension from (expecting at least `abc.xyz`), no extension-less files here
+ * @returns Associated language ID, or 'plaintext'
+ */
 function detectLanguageId(filePath: string): string {
     const ext = path.extname(filePath).toLowerCase();
     return RegisteredLanguages[ext] ?? 'plaintext';
