@@ -2,6 +2,8 @@
 
 Benchmark arbitrary language servers with scripted LSP actions.
 
+![lsbench example with langium-minilogo](demo/lsbench.gif)
+
 ```bash
 # bench a ts language server over stdio
 lsbench "typescript-language-server --stdio" \

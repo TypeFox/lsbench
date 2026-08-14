@@ -1,0 +1,1475 @@
+/*
+ * gallery.logo
+ *
+ * A feature-rich MiniLogo program used to benchmark the language server.
+ * It exercises parameterized definitions, nested macro calls, parameter
+ * references, arithmetic expressions, colors, and for-loops so that hover,
+ * definition, references, rename, completion, and formatting all have
+ * meaningful targets throughout the document.
+ */
+
+// low-level primitives: each draws a shape from its parameters
+
+def dot(x, y) {
+    pen(up)
+    move(x, y)
+    pen(down)
+    move(0, 0)
+    pen(up)
+}
+
+def segment(x, y, len) {
+    pen(up)
+    move(x, y)
+    pen(down)
+    move(len, 0)
+    move(0, len)
+    pen(up)
+}
+
+def square(x, y, size) {
+    pen(up)
+    move(x, y)
+    pen(down)
+    move(size, 0)
+    move(0, size)
+    move(-1 * size, 0)
+    move(0, -1 * size)
+    pen(up)
+    move(-1 * x, -1 * y)
+}
+
+def rect(x, y, w, h) {
+    pen(up)
+    move(x, y)
+    pen(down)
+    move(w, 0)
+    move(0, h)
+    move(-1 * w, 0)
+    move(0, -1 * h)
+    pen(up)
+}
+
+def triangle(x, y, base) {
+    pen(up)
+    move(x, y)
+    pen(down)
+    move(base, 0)
+    move(-1 * (base / 2), base)
+    move(-1 * (base / 2), -1 * base)
+    pen(up)
+}
+
+// composites: built by calling the primitives above
+
+def grid(ox, oy, cell, count) {
+    for i = 0 to count {
+        for j = 0 to count {
+            square(ox + i * cell, oy + j * cell, cell)
+        }
+    }
+}
+
+def frieze(ox, oy, unit, count) {
+    for k = 0 to count {
+        rect(ox + k * unit, oy, unit, unit / 2)
+        triangle(ox + k * unit, oy + unit, unit)
+    }
+}
+
+def burst(cx, cy, spread) {
+    for a = 0 to spread {
+        dot(cx + a, cy + a)
+        dot(cx - a, cy + a)
+        dot(cx + a, cy - a)
+        dot(cx - a, cy - a)
+    }
+}
+
+def fan(cx, cy, len, blades) {
+    for b = 0 to blades {
+        segment(cx, cy, len + b * 2)
+    }
+}
+
+// scene tiles: a large gallery, each tile composes the shapes above.
+// colors vary per tile to keep the arithmetic and color paths busy.
+
+def tile0(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 3)
+    burst(x + 20, y + 10, 4)
+}
+
+def tile1(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 4)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile2(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 5)
+    burst(x + 40, y + 20, 6)
+}
+
+def tile3(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 3)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile4(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 4)
+    burst(x + 60, y + 30, 8)
+}
+
+def tile5(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 5)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile6(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 3)
+    burst(x + 80, y + 40, 5)
+}
+
+def tile7(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 4)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile8(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 5)
+    burst(x + 30, y + 15, 7)
+}
+
+def tile9(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 3)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile10(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 4)
+    burst(x + 50, y + 25, 4)
+}
+
+def tile11(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 5)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile12(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 3)
+    burst(x + 70, y + 35, 6)
+}
+
+def tile13(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 4)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile14(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 5)
+    burst(x + 20, y + 10, 8)
+}
+
+def tile15(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 3)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile16(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 4)
+    burst(x + 40, y + 20, 5)
+}
+
+def tile17(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 5)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile18(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 3)
+    burst(x + 60, y + 30, 7)
+}
+
+def tile19(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 4)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile20(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 5)
+    burst(x + 80, y + 40, 4)
+}
+
+def tile21(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 3)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+def tile22(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 15, 4)
+    frieze(x + 15, y + 15, 15, 4)
+    burst(x + 30, y + 15, 6)
+}
+
+def tile23(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 20, 5)
+    frieze(x + 20, y + 20, 20, 5)
+    fan(x + 20, y + 40, 20, 6)
+}
+
+def tile24(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 25, 2)
+    frieze(x + 25, y + 25, 25, 3)
+    burst(x + 50, y + 25, 8)
+}
+
+def tile25(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 30, 3)
+    frieze(x + 30, y + 30, 30, 4)
+    fan(x + 30, y + 60, 30, 4)
+}
+
+def tile26(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 35, 4)
+    frieze(x + 35, y + 35, 35, 5)
+    burst(x + 70, y + 35, 5)
+}
+
+def tile27(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 40, 5)
+    frieze(x + 40, y + 40, 40, 3)
+    fan(x + 40, y + 80, 40, 6)
+}
+
+def tile28(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 4)
+    burst(x + 20, y + 10, 7)
+}
+
+def tile29(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 5)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile30(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 3)
+    burst(x + 40, y + 20, 4)
+}
+
+def tile31(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 4)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile32(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 5)
+    burst(x + 60, y + 30, 6)
+}
+
+def tile33(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 3)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile34(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 4)
+    burst(x + 80, y + 40, 8)
+}
+
+def tile35(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 5)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile36(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 3)
+    burst(x + 30, y + 15, 5)
+}
+
+def tile37(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 4)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile38(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 5)
+    burst(x + 50, y + 25, 7)
+}
+
+def tile39(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 3)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile40(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 4)
+    burst(x + 70, y + 35, 4)
+}
+
+def tile41(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 5)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile42(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 3)
+    burst(x + 20, y + 10, 6)
+}
+
+def tile43(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 4)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile44(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 5)
+    burst(x + 40, y + 20, 8)
+}
+
+def tile45(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 3)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile46(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 4)
+    burst(x + 60, y + 30, 5)
+}
+
+def tile47(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 5)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile48(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 3)
+    burst(x + 80, y + 40, 7)
+}
+
+def tile49(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 4)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+def tile50(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 15, 4)
+    frieze(x + 15, y + 15, 15, 5)
+    burst(x + 30, y + 15, 4)
+}
+
+def tile51(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 20, 5)
+    frieze(x + 20, y + 20, 20, 3)
+    fan(x + 20, y + 40, 20, 6)
+}
+
+def tile52(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 25, 2)
+    frieze(x + 25, y + 25, 25, 4)
+    burst(x + 50, y + 25, 6)
+}
+
+def tile53(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 30, 3)
+    frieze(x + 30, y + 30, 30, 5)
+    fan(x + 30, y + 60, 30, 4)
+}
+
+def tile54(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 35, 4)
+    frieze(x + 35, y + 35, 35, 3)
+    burst(x + 70, y + 35, 8)
+}
+
+def tile55(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 40, 5)
+    frieze(x + 40, y + 40, 40, 4)
+    fan(x + 40, y + 80, 40, 6)
+}
+
+def tile56(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 5)
+    burst(x + 20, y + 10, 5)
+}
+
+def tile57(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 3)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile58(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 4)
+    burst(x + 40, y + 20, 7)
+}
+
+def tile59(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 5)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile60(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 3)
+    burst(x + 60, y + 30, 4)
+}
+
+def tile61(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 4)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile62(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 5)
+    burst(x + 80, y + 40, 6)
+}
+
+def tile63(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 3)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile64(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 4)
+    burst(x + 30, y + 15, 8)
+}
+
+def tile65(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 5)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile66(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 3)
+    burst(x + 50, y + 25, 5)
+}
+
+def tile67(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 4)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile68(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 5)
+    burst(x + 70, y + 35, 7)
+}
+
+def tile69(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 3)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile70(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 4)
+    burst(x + 20, y + 10, 4)
+}
+
+def tile71(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 5)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile72(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 3)
+    burst(x + 40, y + 20, 6)
+}
+
+def tile73(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 4)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile74(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 5)
+    burst(x + 60, y + 30, 8)
+}
+
+def tile75(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 3)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile76(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 4)
+    burst(x + 80, y + 40, 5)
+}
+
+def tile77(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 5)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+def tile78(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 15, 4)
+    frieze(x + 15, y + 15, 15, 3)
+    burst(x + 30, y + 15, 7)
+}
+
+def tile79(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 20, 5)
+    frieze(x + 20, y + 20, 20, 4)
+    fan(x + 20, y + 40, 20, 6)
+}
+
+def tile80(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 25, 2)
+    frieze(x + 25, y + 25, 25, 5)
+    burst(x + 50, y + 25, 4)
+}
+
+def tile81(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 30, 3)
+    frieze(x + 30, y + 30, 30, 3)
+    fan(x + 30, y + 60, 30, 4)
+}
+
+def tile82(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 35, 4)
+    frieze(x + 35, y + 35, 35, 4)
+    burst(x + 70, y + 35, 6)
+}
+
+def tile83(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 40, 5)
+    frieze(x + 40, y + 40, 40, 5)
+    fan(x + 40, y + 80, 40, 6)
+}
+
+def tile84(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 3)
+    burst(x + 20, y + 10, 8)
+}
+
+def tile85(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 4)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile86(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 5)
+    burst(x + 40, y + 20, 5)
+}
+
+def tile87(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 3)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile88(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 4)
+    burst(x + 60, y + 30, 7)
+}
+
+def tile89(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 5)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile90(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 3)
+    burst(x + 80, y + 40, 4)
+}
+
+def tile91(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 4)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile92(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 5)
+    burst(x + 30, y + 15, 6)
+}
+
+def tile93(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 3)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile94(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 4)
+    burst(x + 50, y + 25, 8)
+}
+
+def tile95(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 5)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile96(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 3)
+    burst(x + 70, y + 35, 5)
+}
+
+def tile97(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 4)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile98(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 5)
+    burst(x + 20, y + 10, 7)
+}
+
+def tile99(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 3)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile100(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 4)
+    burst(x + 40, y + 20, 4)
+}
+
+def tile101(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 5)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile102(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 3)
+    burst(x + 60, y + 30, 6)
+}
+
+def tile103(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 4)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile104(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 5)
+    burst(x + 80, y + 40, 8)
+}
+
+def tile105(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 3)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+def tile106(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 15, 4)
+    frieze(x + 15, y + 15, 15, 4)
+    burst(x + 30, y + 15, 5)
+}
+
+def tile107(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 20, 5)
+    frieze(x + 20, y + 20, 20, 5)
+    fan(x + 20, y + 40, 20, 6)
+}
+
+def tile108(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 25, 2)
+    frieze(x + 25, y + 25, 25, 3)
+    burst(x + 50, y + 25, 7)
+}
+
+def tile109(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 30, 3)
+    frieze(x + 30, y + 30, 30, 4)
+    fan(x + 30, y + 60, 30, 4)
+}
+
+def tile110(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 35, 4)
+    frieze(x + 35, y + 35, 35, 5)
+    burst(x + 70, y + 35, 4)
+}
+
+def tile111(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 40, 5)
+    frieze(x + 40, y + 40, 40, 3)
+    fan(x + 40, y + 80, 40, 6)
+}
+
+def tile112(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 4)
+    burst(x + 20, y + 10, 6)
+}
+
+def tile113(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 5)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile114(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 3)
+    burst(x + 40, y + 20, 8)
+}
+
+def tile115(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 4)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile116(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 5)
+    burst(x + 60, y + 30, 5)
+}
+
+def tile117(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 3)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile118(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 4)
+    burst(x + 80, y + 40, 7)
+}
+
+def tile119(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 5)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile120(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 3)
+    burst(x + 30, y + 15, 4)
+}
+
+def tile121(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 4)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile122(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 5)
+    burst(x + 50, y + 25, 6)
+}
+
+def tile123(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 3)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile124(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 4)
+    burst(x + 70, y + 35, 8)
+}
+
+def tile125(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 5)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile126(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 3)
+    burst(x + 20, y + 10, 5)
+}
+
+def tile127(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 4)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile128(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 5)
+    burst(x + 40, y + 20, 7)
+}
+
+def tile129(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 3)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile130(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 4)
+    burst(x + 60, y + 30, 4)
+}
+
+def tile131(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 5)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile132(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 3)
+    burst(x + 80, y + 40, 6)
+}
+
+def tile133(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 4)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+def tile134(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 15, 4)
+    frieze(x + 15, y + 15, 15, 5)
+    burst(x + 30, y + 15, 8)
+}
+
+def tile135(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 20, 5)
+    frieze(x + 20, y + 20, 20, 3)
+    fan(x + 20, y + 40, 20, 6)
+}
+
+def tile136(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 25, 2)
+    frieze(x + 25, y + 25, 25, 4)
+    burst(x + 50, y + 25, 5)
+}
+
+def tile137(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 30, 3)
+    frieze(x + 30, y + 30, 30, 5)
+    fan(x + 30, y + 60, 30, 4)
+}
+
+def tile138(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 35, 4)
+    frieze(x + 35, y + 35, 35, 3)
+    burst(x + 70, y + 35, 7)
+}
+
+def tile139(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 40, 5)
+    frieze(x + 40, y + 40, 40, 4)
+    fan(x + 40, y + 80, 40, 6)
+}
+
+def tile140(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 5)
+    burst(x + 20, y + 10, 4)
+}
+
+def tile141(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 3)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile142(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 4)
+    burst(x + 40, y + 20, 6)
+}
+
+def tile143(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 5)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile144(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 3)
+    burst(x + 60, y + 30, 8)
+}
+
+def tile145(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 4)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile146(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 5)
+    burst(x + 80, y + 40, 5)
+}
+
+def tile147(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 3)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile148(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 4)
+    burst(x + 30, y + 15, 7)
+}
+
+def tile149(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 5)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile150(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 3)
+    burst(x + 50, y + 25, 4)
+}
+
+def tile151(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 4)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile152(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 5)
+    burst(x + 70, y + 35, 6)
+}
+
+def tile153(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 3)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile154(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 4)
+    burst(x + 20, y + 10, 8)
+}
+
+def tile155(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 5)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile156(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 3)
+    burst(x + 40, y + 20, 5)
+}
+
+def tile157(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 4)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile158(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 5)
+    burst(x + 60, y + 30, 7)
+}
+
+def tile159(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 3)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile160(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 4)
+    burst(x + 80, y + 40, 4)
+}
+
+def tile161(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 5)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+def tile162(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 15, 4)
+    frieze(x + 15, y + 15, 15, 3)
+    burst(x + 30, y + 15, 6)
+}
+
+def tile163(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 20, 5)
+    frieze(x + 20, y + 20, 20, 4)
+    fan(x + 20, y + 40, 20, 6)
+}
+
+def tile164(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 25, 2)
+    frieze(x + 25, y + 25, 25, 5)
+    burst(x + 50, y + 25, 8)
+}
+
+def tile165(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 30, 3)
+    frieze(x + 30, y + 30, 30, 3)
+    fan(x + 30, y + 60, 30, 4)
+}
+
+def tile166(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 35, 4)
+    frieze(x + 35, y + 35, 35, 4)
+    burst(x + 70, y + 35, 5)
+}
+
+def tile167(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 40, 5)
+    frieze(x + 40, y + 40, 40, 5)
+    fan(x + 40, y + 80, 40, 6)
+}
+
+def tile168(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 10, 2)
+    frieze(x + 10, y + 10, 10, 3)
+    burst(x + 20, y + 10, 7)
+}
+
+def tile169(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 15, 3)
+    frieze(x + 15, y + 15, 15, 4)
+    fan(x + 15, y + 30, 15, 4)
+}
+
+def tile170(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 20, 4)
+    frieze(x + 20, y + 20, 20, 5)
+    burst(x + 40, y + 20, 4)
+}
+
+def tile171(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 25, 5)
+    frieze(x + 25, y + 25, 25, 3)
+    fan(x + 25, y + 50, 25, 6)
+}
+
+def tile172(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 30, 2)
+    frieze(x + 30, y + 30, 30, 4)
+    burst(x + 60, y + 30, 6)
+}
+
+def tile173(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 35, 3)
+    frieze(x + 35, y + 35, 35, 5)
+    fan(x + 35, y + 70, 35, 4)
+}
+
+def tile174(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 40, 4)
+    frieze(x + 40, y + 40, 40, 3)
+    burst(x + 80, y + 40, 8)
+}
+
+def tile175(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 10, 5)
+    frieze(x + 10, y + 10, 10, 4)
+    fan(x + 10, y + 20, 10, 6)
+}
+
+def tile176(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 15, 2)
+    frieze(x + 15, y + 15, 15, 5)
+    burst(x + 30, y + 15, 5)
+}
+
+def tile177(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 20, 3)
+    frieze(x + 20, y + 20, 20, 3)
+    fan(x + 20, y + 40, 20, 4)
+}
+
+def tile178(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 25, 4)
+    frieze(x + 25, y + 25, 25, 4)
+    burst(x + 50, y + 25, 7)
+}
+
+def tile179(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 30, 5)
+    frieze(x + 30, y + 30, 30, 5)
+    fan(x + 30, y + 60, 30, 6)
+}
+
+def tile180(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 35, 2)
+    frieze(x + 35, y + 35, 35, 3)
+    burst(x + 70, y + 35, 4)
+}
+
+def tile181(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 40, 3)
+    frieze(x + 40, y + 40, 40, 4)
+    fan(x + 40, y + 80, 40, 4)
+}
+
+def tile182(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 10, 4)
+    frieze(x + 10, y + 10, 10, 5)
+    burst(x + 20, y + 10, 6)
+}
+
+def tile183(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 15, 5)
+    frieze(x + 15, y + 15, 15, 3)
+    fan(x + 15, y + 30, 15, 6)
+}
+
+def tile184(x, y) {
+    color(160, 120, 80)
+    grid(x, y, 20, 2)
+    frieze(x + 20, y + 20, 20, 4)
+    burst(x + 40, y + 20, 8)
+}
+
+def tile185(x, y) {
+    color(80, 80, 160)
+    grid(x, y, 25, 3)
+    frieze(x + 25, y + 25, 25, 5)
+    fan(x + 25, y + 50, 25, 4)
+}
+
+def tile186(x, y) {
+    color(32, 32, 64)
+    grid(x, y, 30, 4)
+    frieze(x + 30, y + 30, 30, 3)
+    burst(x + 60, y + 30, 5)
+}
+
+def tile187(x, y) {
+    color(64, 96, 128)
+    grid(x, y, 35, 5)
+    frieze(x + 35, y + 35, 35, 4)
+    fan(x + 35, y + 70, 35, 6)
+}
+
+def tile188(x, y) {
+    color(128, 96, 64)
+    grid(x, y, 40, 2)
+    frieze(x + 40, y + 40, 40, 5)
+    burst(x + 80, y + 40, 7)
+}
+
+def tile189(x, y) {
+    color(96, 128, 96)
+    grid(x, y, 10, 3)
+    frieze(x + 10, y + 10, 10, 3)
+    fan(x + 10, y + 20, 10, 4)
+}
+
+// lay the whole gallery out in a grid of tiles
+def gallery(cols, rows, gap) {
+    for c = 0 to cols {
+        for r = 0 to rows {
+            tile0(c * gap + 0, r * gap)
+            tile1(c * gap + 4, r * gap)
+            tile2(c * gap + 8, r * gap)
+            tile3(c * gap + 12, r * gap)
+            tile4(c * gap + 16, r * gap)
+            tile5(c * gap + 20, r * gap)
+            tile6(c * gap + 24, r * gap)
+            tile7(c * gap + 28, r * gap)
+        }
+    }
+}
+
+// top-level program: set a pen, then render everything
+pen(up)
+move(0, 0)
+color(16, 16, 32)
+gallery(6, 6, 120)
+
+// a few direct top-level tile calls for good measure
+tile0(0, 0)
+tile8(80, 48)
+tile16(160, 96)
+tile24(240, 144)
+tile32(320, 192)
+tile40(400, 240)
+tile48(480, 288)
+tile56(560, 336)
+tile64(640, 384)
+tile72(720, 432)
+tile80(800, 480)
+tile88(880, 528)
+tile96(960, 576)
+tile104(1040, 624)
+tile112(1120, 672)
+tile120(1200, 720)
+tile128(1280, 768)
+tile136(1360, 816)
+tile144(1440, 864)
+tile152(1520, 912)
+tile160(1600, 960)
+tile168(1680, 1008)
+tile176(1760, 1056)
+tile184(1840, 1104)
+
