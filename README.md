@@ -5,14 +5,25 @@ Benchmark arbitrary language servers with scripted LSP actions.
 ```bash
 # bench a ts language server over stdio
 lsbench "typescript-language-server --stdio" \
-  # point to your workspace
-  --workspace ./my-project \
-  # set the benchmark script
-  --script ./bench-actions.ts \
-  # set iteration count
-  --iterations 50 \
-  # configure output
-  --output results.json
+  --workspace ./my-project \    # point to your workspace
+  --script ./bench-actions.ts \ # set the benchmark script
+  --iterations 50 \             # set iteration count
+  --output results.json         # configure output
+```
+
+## Installation
+
+lsbench is published to npm. Install it globally for the CLI:
+
+```bash
+npm install -g lsbench
+```
+
+Or add it as a dependency to import the `BenchContext` API in your action
+scripts:
+
+```bash
+npm install lsbench
 ```
 
 ## How it works
@@ -28,7 +39,9 @@ a JSON report with per-method statistics and per-run breakdowns.
 ## Writing an action script
 
 An action script is a file that default-exports an async function
-receiving a `BenchContext`:
+receiving a `BenchContext`. See [`examples/typescript-actions.ts`](examples/typescript-actions.ts)
+for a fuller starting point, and [`examples/cold-start.ts`](examples/cold-start.ts)
+for a minimal cold-start driver:
 
 ```typescript
 import { BenchContext } from "lsbench";
@@ -128,6 +141,9 @@ Or a JSON config file for more control:
 lsbench ./server-config.json -w ./project -s ./actions.ts
 ```
 
+See [`examples/init-options.json`](examples/init-options.json) for a sample
+config file.
+
 ## Output format
 
 The JSON report contains:
@@ -166,9 +182,9 @@ The JSON report contains:
 }
 ```
 
-## Primer
+## Prime
 
-The CLI also supports a `primer` command that will print helpful usage information work how to work with `lsbench`.
+The CLI also supports a `prime` command that will print helpful usage information work how to work with `lsbench`.
 This can be leveraged by humans as well as agents to use the tool to understand the tool, in a self-documenting fashion.
 
 ## Tips
@@ -178,6 +194,40 @@ This can be leveraged by humans as well as agents to use the tool to understand 
 - **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency.
 - **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this.
 - **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace.
+
+## Development
+
+lsbench requires Node `>=24` (see `.nvmrc` for the currently pinned version). To build from
+source:
+
+```bash
+git clone https://github.com/TypeFox/lsbench.git
+cd lsbench
+npm install
+npm run build
+```
+
+Quality checks (all run in CI):
+
+```bash
+npm test          # unit tests (vitest)
+npm run lint      # oxlint
+npm run format    # biome format check
+npm run knip      # unused dependency/export check
+```
+
+Use `npm run dev` for a watch build while iterating.
+
+## Testing
+
+There are two test tiers:
+
+- **Unit tests** — `npm test` runs the fast suite in `test/` via vitest.
+- **Integration tests** — `npm run test:integration` builds lsbench, then
+  clones, installs, and builds a Langium ([minilogo](https://github.com/TypeFox/langium-minilogo))
+  language server and interacts with it via stdio. The suite runs over the following benchmark checks: go-to-definition, references, document symbols, hover, and a full `runBenchmark` report.
+
+The integration run clones down & builds the minilogo server once on first use, so it's possible that it might be slow (timeouts are 120s per test / 600s per hook, per `vitest.integration.config.ts`). CI runs it as a separate `integration` job.
 
 ## License
 
