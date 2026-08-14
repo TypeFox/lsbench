@@ -281,50 +281,66 @@ function toLspRange(range: Range): {
     };
 }
 
+/**
+ * Registered Language extensions + their corresponding language
+ */
+const RegisteredLanguages: Record<string, string> = {
+    '.ts': 'typescript',
+    '.tsx': 'typescriptreact',
+    '.js': 'javascript',
+    '.jsx': 'javascriptreact',
+    '.json': 'json',
+    '.html': 'html',
+    '.css': 'css',
+    '.scss': 'scss',
+    '.less': 'less',
+    '.vue': 'vue',
+    '.svelte': 'svelte',
+    '.py': 'python',
+    '.rs': 'rust',
+    '.go': 'go',
+    '.java': 'java',
+    '.c': 'c',
+    '.cpp': 'cpp',
+    '.h': 'c',
+    '.hpp': 'cpp',
+    '.cs': 'csharp',
+    '.rb': 'ruby',
+    '.php': 'php',
+    '.swift': 'swift',
+    '.kt': 'kotlin',
+    '.md': 'markdown',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+    '.toml': 'toml',
+    '.xml': 'xml',
+    '.sql': 'sql',
+    '.sh': 'shellscript',
+    '.bash': 'shellscript',
+    '.zsh': 'shellscript',
+    '.lua': 'lua',
+    '.zig': 'zig',
+    '.ex': 'elixir',
+    '.exs': 'elixir',
+    '.ipl': 'ipl',
+    '.ipld': 'ipl',
+    '.langium': 'langium',
+};
+
+/**
+ * Adds a new registered language by name + extension
+ * @param languageName To correctly associate with the correct language server by language ID
+ * @param extension That should correlate with the given name (ex. `.ts`, or `.c`, or `.langium`)
+ */
+export function addRegisteredLanguage(languageName: string, extension: string) {
+    extension = extension.trim();
+    if (!extension.startsWith('.')) {
+        extension = '.' + extension;
+    }
+    RegisteredLanguages[languageName] = extension;
+}
+
 function detectLanguageId(filePath: string): string {
     const ext = path.extname(filePath).toLowerCase();
-    const map: Record<string, string> = {
-        '.ts': 'typescript',
-        '.tsx': 'typescriptreact',
-        '.js': 'javascript',
-        '.jsx': 'javascriptreact',
-        '.json': 'json',
-        '.html': 'html',
-        '.css': 'css',
-        '.scss': 'scss',
-        '.less': 'less',
-        '.vue': 'vue',
-        '.svelte': 'svelte',
-        '.py': 'python',
-        '.rs': 'rust',
-        '.go': 'go',
-        '.java': 'java',
-        '.c': 'c',
-        '.cpp': 'cpp',
-        '.h': 'c',
-        '.hpp': 'cpp',
-        '.cs': 'csharp',
-        '.rb': 'ruby',
-        '.php': 'php',
-        '.swift': 'swift',
-        '.kt': 'kotlin',
-        '.md': 'markdown',
-        '.yaml': 'yaml',
-        '.yml': 'yaml',
-        '.toml': 'toml',
-        '.xml': 'xml',
-        '.sql': 'sql',
-        '.sh': 'shellscript',
-        '.bash': 'shellscript',
-        '.zsh': 'shellscript',
-        '.lua': 'lua',
-        '.zig': 'zig',
-        '.ex': 'elixir',
-        '.exs': 'elixir',
-        '.ipl': 'ipl',
-        '.ipld': 'ipl',
-        '.logo': 'minilogo',
-        '.langium': 'langium',
-    };
-    return map[ext] ?? 'plaintext';
+    return RegisteredLanguages[ext] ?? 'plaintext';
 }
