@@ -1,6 +1,6 @@
 import * as cp from 'node:child_process';
 import * as path from 'node:path';
-import * as rpc from 'vscode-jsonrpc/node.js';
+import * as rpc from 'vscode-jsonrpc/node';
 import type { ServerConfig } from './types.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
@@ -62,25 +62,42 @@ export class LspHarness {
 
         this.log(`Spawning: ${command} ${args.join(' ')}`);
 
+        // spawn from the current working directory, not the workspace: the server
+        // command may be a path relative to cwd, while the workspace is communicated
+        // to the server via rootUri/workspaceFolders in the initialize params below
         this.process = cp.spawn(command, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
-            cwd: this.workspaceRoot,
             env: { ...process.env, ...env },
         });
 
-        // Capture stderr for debugging
+        // capture stderr, and retain the tail so we can report it if the server dies
+        let stderrTail = '';
         this.process.stderr?.on('data', (chunk: Buffer) => {
+            stderrTail = (stderrTail + chunk.toString()).slice(-4000);
             if (this.verbose) {
                 process.stderr.write(`[server stderr] ${chunk.toString()}`);
             }
         });
 
+        // reject the initialize handshake if the process dies or fails to spawn,
+        // otherwise sendRequest('initialize') hangs forever with no response
+        let onEarlyExit: (reason: Error) => void = () => {};
+        const earlyExit = new Promise<never>((_, reject) => {
+            onEarlyExit = reject;
+        });
+
         this.process.on('error', (err) => {
-            console.error(`[lsbench] Server process error: ${err.message}`);
+            onEarlyExit(new Error(`Server process failed to spawn: ${err.message}`));
         });
 
         this.process.on('exit', (code, signal) => {
             this.log(`Server exited: code=${code} signal=${signal}`);
+            onEarlyExit(
+                new Error(
+                    `Server exited before initialize (code=${code} signal=${signal}).` +
+                        (stderrTail ? `\nServer stderr:\n${stderrTail}` : ''),
+                ),
+            );
         });
 
         // Create JSON-RPC connection over stdio
@@ -137,7 +154,13 @@ export class LspHarness {
         };
 
         this.log('Sending initialize...');
-        const result = (await this.connection.sendRequest('initialize', initParams)) as InitializeResult;
+        // race the handshake against an early process exit so a server that dies
+        // (bad command, missing module, crash on startup) surfaces as a rejection
+        // instead of hanging on a response that will never come
+        const result = (await Promise.race([
+            this.connection.sendRequest('initialize', initParams),
+            earlyExit,
+        ])) as InitializeResult;
         this._capabilities = result.capabilities;
 
         // Send initialized notification

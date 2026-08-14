@@ -1,6 +1,6 @@
 {
   "name": "lsbench",
-  "version": "0.0.1",
+  "version": "0.0.2-next1",
   "description": "Benchmark arbitrary language servers with scripted LSP actions",
   "license": "MIT",
   "bin": {
@@ -37,7 +37,7 @@
   "dependencies": {
     "@types/node": "^24.13.3",
     "commander": "^14.0.3",
-    "vscode-jsonrpc": "^8.2.1"
+    "vscode-jsonrpc": "^9.0.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
