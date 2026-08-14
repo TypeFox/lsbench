@@ -324,7 +324,7 @@ function detectLanguageId(filePath: string): string {
         '.ipl': 'ipl',
         '.ipld': 'ipl',
         '.logo': 'minilogo',
-        '.langium': 'langium'
+        '.langium': 'langium',
     };
     return map[ext] ?? 'plaintext';
 }
