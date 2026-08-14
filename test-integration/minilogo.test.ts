@@ -1,9 +1,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { BenchContextImpl, LspHarness, type ServerConfig } from 'lsbench';
+import { addRegisteredLanguage, BenchContextImpl, LspHarness, type ServerConfig } from 'lsbench';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { addRegisteredLanguage } from '../dist/context.js';
 import { examplesDir, serverEntry } from './minilogo.js';
 
 // End-to-end test against a real, built Langium language server (minilogo).

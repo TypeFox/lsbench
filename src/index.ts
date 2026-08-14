@@ -3,9 +3,9 @@
 // drive a language server session directly, or get type information for
 // authoring action scripts.
 
-export { BenchContextImpl } from './context.js';
-export { LspHarness, pathToUri, uriToPath } from './harness.js';
+export { addRegisteredLanguage, BenchContextImpl } from './context.js';
 export type { Diagnostic } from './harness.js';
+export { LspHarness, pathToUri, uriToPath } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
 export { buildReport, computeMethodStats, printSummary } from './stats.js';
 
