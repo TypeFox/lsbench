@@ -41,9 +41,16 @@ a JSON report with per-method statistics and per-run breakdowns.
 ## Writing an action script
 
 An action script is a file that default-exports an async function
-receiving a `BenchContext`. See [`examples/typescript-actions.ts`](examples/typescript-actions.ts)
-for a fuller starting point, and [`examples/cold-start.ts`](examples/cold-start.ts)
-for a minimal cold-start driver (i.e. a benchmark that restarts the LS on each run):
+receiving a `BenchContext`. The [`examples/`](examples) directory has a few
+starting points:
+
+- [`examples/typescript-actions.ts`](examples/typescript-actions.ts): a fuller driver exercising hover, completion, definition, references, edits, and more.
+- [`examples/cold-start.ts`](examples/cold-start.ts): a minimal cold-start
+  driver (i.e. a benchmark that restarts the LS on each run).
+- [`examples/custom-language.ts`](examples/custom-language.ts): benchmarking a non-mainstream language server (a Langium DSL) via `addRegisteredLanguage`.
+- [`examples/compare-servers.ts`](examples/compare-servers.ts): importing `runBenchmark` to compare two servers programmatically and diff the reports.
+
+A typical script looks like:
 
 ```typescript
 import { BenchContext } from "lsbench";
