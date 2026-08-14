@@ -4,7 +4,7 @@
   "description": "Benchmark arbitrary language servers with scripted LSP actions",
   "license": "MIT",
   "bin": {
-    "lsbench": "./dist/cli.js"
+    "lsbench": "dist/cli.js"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map"
   ],
   "scripts": {
     "gen:version": "node scripts/gen-version.mjs",
@@ -35,12 +36,12 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@types/node": "^24.13.3",
     "commander": "^14.0.3",
     "vscode-jsonrpc": "^9.0.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
+    "@types/node": "^24.13.3",
     "knip": "^6.32.1",
     "oxlint": "^1.78.0",
     "typescript": "^5.5.0",
