@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 393 360" role="img" aria-labelledby="title desc">
+  <title id="title">LSBench bench icon</title>
+  <desc id="desc">A simple dark blue bench with LS on the backrest and ruler-like marks across the seat.</desc>
+
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2.2" flood-opacity=".12"/>
+    </filter>
+  </defs>
+
+  <!-- Backrest -->
+  <g fill="#1f3346" filter="url(#shadow)">
+    <path d="M60 106
+             H322 Q326 106 326 111
+             V128 Q326 133 321 133
+             H264 L258 138 H135 L129 133
+             H60 Q54 133 54 128
+             V112 Q54 106 60 106 Z"/>
+    <path d="M60 139
+             H129 L135 144 H258 L264 139
+             H321 Q326 139 326 144
+             V161 Q326 166 321 166
+             H60 Q54 166 54 161
+             V144 Q54 139 60 139 Z"/>
+  </g>
+
+  <!-- LS -->
+  <text x="196.5" y="148"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="42"
+        font-weight="700"
+        letter-spacing="-2"
+        fill="#fff">LS</text>
+
+  <!-- Backrest supports -->
+  <g fill="#1f3346">
+    <rect x="74" y="166" width="16" height="16"/>
+    <rect x="303" y="166" width="16" height="16"/>
+  </g>
+
+  <!-- Seat -->
+  <path d="M49 181
+           H344
+           Q350 181 353 187
+           L362 204
+           Q365 211 358 216
+           H36
+           Q29 211 32 204
+           L41 187
+           Q44 181 49 181 Z"
+        fill="#1f3346" filter="url(#shadow)"/>
+
+  <!-- Seat/ruler marks -->
+  <g stroke="#fff" stroke-width="3.2" stroke-linecap="round">
+    <path d="M61 197 l6 -7"/>
+    <path d="M85 198 l6 -8"/>
+    <path d="M109 198 l6 -8"/>
+    <path d="M133 199 l6 -9"/>
+    <path d="M157 199 l6 -9"/>
+    <path d="M181 199 l6 -9"/>
+    <path d="M205 199 l6 -9"/>
+    <path d="M229 199 l6 -9"/>
+    <path d="M253 199 l6 -9"/>
+    <path d="M277 198 l6 -8"/>
+    <path d="M301 198 l6 -8"/>
+    <path d="M325 197 l6 -7"/>
+  </g>
+
+  <!-- Legs -->
+  <g fill="#1f3346" filter="url(#shadow)">
+    <path d="M64 220 H86 V276 Q86 277 84 277 H64 Q63 277 63 275 V222 Q63 220 64 220 Z"/>
+    <path d="M307 220 H329 Q330 220 330 222 V275 Q330 277 328 277 H308 Q307 277 307 276 Z"/>
+  </g>
+</svg>
