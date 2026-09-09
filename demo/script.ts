@@ -1,32 +1,23 @@
 import type { BenchContext } from 'lsbench';
 
-// Drives the minilogo language server through a realistic editor session over
-// gallery.logo (~1.5k LoC): a feature-rich MiniLogo program with parameterized
+// Drives the minilogo language server through an editor session over
+// gallery.logo (~1.5k LoC): a MiniLogo program with parameterized
 // definitions, nested macro calls, parameter references, arithmetic, colors,
-// and for-loops. Every position below points at a real, resolvable symbol so
-// the requests return meaningful results — not just non-null round-trips.
-//
-// gallery.logo landmarks (0-indexed):
-//    29: def square(x, y, size)        <- a parameterized definition
-//    31:     move(x, y)                <- parameter reference `x` in the body
-//    64: def grid(ox, oy, cell, count) <- called once per tile (~190 call sites)
-//    67:         square(ox + i * cell, oy + j * cell, cell)  <- call to `square`
-//    99:     grid(x, y, 10, 2)         <- a call inside tile0
-//  1447: gallery(6, 6, 120)            <- top-level call to `gallery`
+// and for-loops. Every position below points at a symbol in the document.
 export default async function (ctx: BenchContext) {
     const program = 'gallery.logo';
 
-    // open the document and let the builder resolve cross-references before we query
+    // open the document, and let the builder resolve cross-references
     await ctx.openDocument(program);
     await ctx.waitForDiagnostics(program, 30_000);
 
-    // outline the whole document (~200 symbols)
+    // await outline
     await ctx.documentSymbol(program);
 
     // code completion partway through a tile body, where a macro call is expected
     await ctx.completion(program, 99, 4);
 
-    // hover the `square` definition name and a parameter reference in its body
+    // hover the `square` definition name and a param ref in its body
     await ctx.hover(program, 29, 4);
     await ctx.hover(program, 31, 9);
 
@@ -34,10 +25,10 @@ export default async function (ctx: BenchContext) {
     await ctx.definition(program, 67, 12); // square(...) call inside grid
     await ctx.definition(program, 1447, 0); // gallery(...) top-level call
 
-    // find every reference to a heavily-called helper (`grid`)
+    // find every reference to a the `grid` helper
     await ctx.references(program, 64, 4);
 
-    // rename that same helper — a workspace edit touching all ~190 call sites
+    // rename the same helper
     await ctx.rename(program, 64, 4, 'cluster');
 
     // ask for code actions and formatting across the document
@@ -47,8 +38,8 @@ export default async function (ctx: BenchContext) {
     });
     await ctx.formatting(program);
 
-    // simulate an edit — append a top-level call — then re-measure after the
-    // server republishes diagnostics
+    // simulate an edit, append a top-level call, then re-measure after the
+    // server updates diagnostics
     await ctx.edit(program, {
         range: {
             start: { line: 1474, character: 0 },
