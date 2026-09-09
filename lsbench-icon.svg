@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 393 360" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18.5 94 356 196" width="178" height="98" role="img" aria-labelledby="title desc">
   <title id="title">LSBench bench icon</title>
   <desc id="desc">A simple dark blue bench with LS on the backrest and ruler-like marks across the seat.</desc>
 
@@ -8,29 +8,22 @@
     </filter>
   </defs>
 
-  <!-- Backrest -->
-  <g fill="#1f3346" filter="url(#shadow)">
-    <path d="M60 106
-             H322 Q326 106 326 111
-             V128 Q326 133 321 133
-             H264 L258 138 H135 L129 133
-             H60 Q54 133 54 128
-             V112 Q54 106 60 106 Z"/>
-    <path d="M60 139
-             H129 L135 144 H258 L264 139
-             H321 Q326 139 326 144
-             V161 Q326 166 321 166
-             H60 Q54 166 54 161
-             V144 Q54 139 60 139 Z"/>
-  </g>
+  <!-- Backrest: one solid board, centered on 196.5, with thin wedge cuts at both edges -->
+  <path d="M67 106
+           H326 Q332 106 332 112
+           V133 L282 136 L332 139
+           V160 Q332 166 326 166
+           H67 Q61 166 61 160
+           V139 L111 136 L61 133
+           V112 Q61 106 67 106 Z"
+        fill="#1f3346" filter="url(#shadow)"/>
 
   <!-- LS -->
-  <text x="196.5" y="148"
+  <text x="196.5" y="151"
         text-anchor="middle"
-        font-family="Arial, Helvetica, sans-serif"
+        font-family="Arial, 'Liberation Sans', Helvetica, sans-serif"
         font-size="42"
         font-weight="700"
-        letter-spacing="-2"
         fill="#fff">LS</text>
 
   <!-- Backrest supports -->
@@ -42,9 +35,9 @@
   <!-- Seat -->
   <path d="M49 181
            H344
-           Q350 181 353 187
-           L362 204
-           Q365 211 358 216
+           Q349 181 352 187
+           L361 204
+           Q364 211 357 216
            H36
            Q29 211 32 204
            L41 187

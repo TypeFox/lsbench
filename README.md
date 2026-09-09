@@ -1,5 +1,7 @@
 # lsbench
 
+<img src="lsbench-icon.svg" alt="LSBench logo" width="178">
+
 Benchmark arbitrary language servers with scripted LSP actions.
 
 ![lsbench example with langium-minilogo](demo/lsbench.gif)
