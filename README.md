@@ -225,6 +225,13 @@ npm run knip      # unused dependency/export check
 
 Use `npm run dev` for a watch build while iterating.
 
+### Build variants
+
+- `npm run build` is the regular development build. This emits source maps and decl maps for debugging.
+- `npm run build:prod` is the production build. It skips maps entirely.
+
+Note that `prepublishOnly` cleans `dist/` and then runs `build:prod`.
+
 ## Testing
 
 There are two test tiers:
