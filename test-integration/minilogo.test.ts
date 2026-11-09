@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { addRegisteredLanguage, BenchContextImpl, LspHarness, type ServerConfig } from 'lsbench';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { addRegisteredLanguage, BenchContextImpl, LspHarness, type RequestTiming, type ServerConfig } from 'lsbench';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { examplesDir, serverEntry } from './minilogo.js';
 
 // End-to-end test against a real, built Langium language server (minilogo).
@@ -13,9 +13,33 @@ import { examplesDir, serverEntry } from './minilogo.js';
 //    9:  def square(x, y, scale) {   <- definition of `square`
 //   24:  square(100,100,300)         <- a reference/call to `square`
 //   33:          square(x * 30, ...) <- another reference/call to `square`
+//   29:  for x = 0 to 10 {           <- outer loop, folds to line 34
+//   30:      for y = 0 to 10 {       <- inner loop, folds to line 33
 
 // register minilogo up-front
 addRegisteredLanguage('minilogo', '.logo');
+
+/** a minimal LSP range shape for asserting on results */
+type LspRange = { start: { line: number; character: number }; end: { line: number; character: number } };
+
+/** drain recorded timings and return the single entry for `method` */
+function timingFor(ctx: BenchContextImpl, method: string): RequestTiming | undefined {
+    let found: RequestTiming | undefined;
+    for (const timing of ctx.collectTimings()) {
+        if (timing.method === method) {
+            found = timing;
+        }
+    }
+    return found;
+}
+
+/** assert the last request for `method` was timed and succeeded */
+function expectTimedSuccess(ctx: BenchContextImpl, method: string): void {
+    const timing = timingFor(ctx, method);
+    expect(timing, `no timing recorded for ${method}`).toBeTruthy();
+    expect(timing?.success, timing?.error).toBe(true);
+    expect(timing?.duration_ms).toBeGreaterThanOrEqual(0);
+}
 
 function serverConfig(): ServerConfig {
     return {
@@ -89,6 +113,156 @@ describe('minilogo language server (integration)', () => {
         // that the request round-trips successfully (null is an acceptable "no hover")
         expect(hover === null || typeof hover === 'object').toBe(true);
     });
+
+    // ── methods added on this branch ────────────────────────────────────
+
+    it('highlights `square` at its definition and both call sites', async () => {
+        ctx.collectTimings();
+        const highlights = (await ctx.documentHighlight('test.logo', 9, 6)) as Array<{ range: LspRange }> | null;
+        expectTimedSuccess(ctx, 'textDocument/documentHighlight');
+
+        expect(Array.isArray(highlights)).toBe(true);
+        const starts = (highlights ?? []).map((h) => `${h.range.start.line}:${h.range.start.character}`);
+        expect(starts).toEqual(expect.arrayContaining(['9:4', '24:0', '33:8']));
+        expect(starts).toHaveLength(3);
+    });
+
+    it('prepares a rename covering the `square` identifier', async () => {
+        ctx.collectTimings();
+        const result = (await ctx.prepareRename('test.logo', 9, 6)) as LspRange | { range: LspRange } | null;
+        expectTimedSuccess(ctx, 'textDocument/prepareRename');
+
+        expect(result).toBeTruthy();
+        // servers may return a bare Range or { range, placeholder }
+        const range = result && 'range' in result ? result.range : (result as LspRange);
+        expect(range.start).toEqual({ line: 9, character: 4 });
+        expect(range.end).toEqual({ line: 9, character: 10 });
+    });
+
+    it('returns folding ranges for the multi-line def, loops, and header comment', async () => {
+        ctx.collectTimings();
+        const ranges = (await ctx.foldingRange('test.logo')) as Array<{
+            startLine: number;
+            endLine: number;
+            kind?: string;
+        }> | null;
+        expectTimedSuccess(ctx, 'textDocument/foldingRange');
+
+        expect(Array.isArray(ranges)).toBe(true);
+        expect(ranges?.length).toBeGreaterThan(0);
+        const spans = (ranges ?? []).map((r) => `${r.startLine}-${r.endLine}`);
+        // `def square` body spans lines 9..22, folded up to the line before `}`
+        expect(spans).toContain('9-21');
+        expect(spans).toContain('29-34');
+        expect(spans).toContain('30-33');
+        let comment: { startLine: number; kind?: string } | undefined;
+        for (const r of ranges ?? []) {
+            if (r.kind === 'comment') {
+                comment = r;
+            }
+        }
+        expect(comment?.startLine).toBe(0);
+    });
+
+    it('finds `square` via workspace symbols across the examples', async () => {
+        ctx.collectTimings();
+        const symbols = (await ctx.workspaceSymbol('square')) as Array<{
+            name: string;
+            location: { uri: string; range: LspRange };
+        }> | null;
+        expectTimedSuccess(ctx, 'workspace/symbol');
+
+        expect(Array.isArray(symbols)).toBe(true);
+        let inTestLogo: { location: { range: LspRange } } | undefined;
+        for (const symbol of symbols ?? []) {
+            expect(symbol.name).toBe('square');
+            if (symbol.location.uri.endsWith('/test.logo')) {
+                inTestLogo = symbol;
+            }
+        }
+        expect(inTestLogo?.location.range.start).toEqual({ line: 9, character: 4 });
+    });
+
+    it('skips didSave and willSave since the server does not ask for them', async () => {
+        // minilogo advertises textDocumentSync save, willSave and willSaveWaitUntil as false
+        expect(harness.saveSyncOptions()).toEqual({
+            didSave: false,
+            includeText: false,
+            willSave: false,
+            willSaveWaitUntil: false,
+        });
+
+        ctx.collectTimings();
+        const sendNotification = vi.spyOn(harness, 'sendNotification');
+        try {
+            await ctx.saveDocument('test.logo');
+            await ctx.willSave('test.logo');
+            expect(sendNotification).not.toHaveBeenCalled();
+        } finally {
+            sendNotification.mockRestore();
+        }
+        expect(ctx.collectTimings()).toHaveLength(0);
+
+        await expect(ctx.saveDocument('not-open.logo')).rejects.toThrow(/not open/);
+        await expect(ctx.willSave('not-open.logo')).rejects.toThrow(/not open/);
+        await expect(ctx.willSaveWaitUntil('not-open.logo')).rejects.toThrow(/not open/);
+    });
+
+    it('times willSaveWaitUntil even though the server does not advertise it', async () => {
+        // Langium answers with no edits when it has no willSaveWaitUntil handler
+        const edits = await ctx.willSaveWaitUntil('test.logo');
+        expectTimedSuccess(ctx, 'textDocument/willSaveWaitUntil');
+        expect(edits).toEqual([]);
+
+        const highlights = (await ctx.documentHighlight('test.logo', 24, 2)) as unknown[] | null;
+        expect(highlights).toHaveLength(3);
+    });
+
+    // the following methods are not advertised by minilogo (Langium 4.3 minilogo only
+    // registers the providers listed in its initialize result), so they are skipped
+    // rather than asserting on "Unhandled method" errors
+    it('does not advertise the providers whose tests are skipped below', () => {
+        const caps = harness.capabilities as Record<string, unknown> | null;
+        // if any of these start being advertised, un-skip the matching test below
+        for (const key of [
+            'declarationProvider',
+            'documentRangeFormattingProvider',
+            'documentOnTypeFormattingProvider',
+            'selectionRangeProvider',
+            'documentLinkProvider',
+            'codeLensProvider',
+            'inlayHintProvider',
+            'semanticTokensProvider',
+            'callHierarchyProvider',
+            'typeHierarchyProvider',
+            'diagnosticProvider',
+        ]) {
+            expect(caps?.[key] ?? false, key).toBeFalsy();
+        }
+    });
+
+    // missing capability: declarationProvider is false
+    it.skip('declaration');
+    // missing capability: documentRangeFormattingProvider is false
+    it.skip('rangeFormatting');
+    // missing capability: no documentOnTypeFormattingProvider
+    it.skip('onTypeFormatting');
+    // missing capability: no selectionRangeProvider
+    it.skip('selectionRange');
+    // missing capability: no documentLinkProvider
+    it.skip('documentLink');
+    // missing capability: no codeLensProvider
+    it.skip('codeLens');
+    // missing capability: no inlayHintProvider
+    it.skip('inlayHint');
+    // missing capability: no semanticTokensProvider (covers full, range, and delta)
+    it.skip('semanticTokensFull / semanticTokensRange / semanticTokensDelta');
+    // missing capability: no callHierarchyProvider
+    it.skip('prepareCallHierarchy / callHierarchyIncomingCalls / callHierarchyOutgoingCalls');
+    // missing capability: no typeHierarchyProvider
+    it.skip('prepareTypeHierarchy / typeHierarchySupertypes / typeHierarchySubtypes');
+    // missing capability: no diagnosticProvider (minilogo only pushes diagnostics)
+    it.skip('documentDiagnostic / workspaceDiagnostic');
 });
 
 describe('runBenchmark against minilogo (integration)', () => {

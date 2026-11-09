@@ -7,24 +7,24 @@ Benchmark arbitrary language servers with scripted LSP actions.
 ![lsbench example with langium-minilogo](demo/lsbench.gif)
 
 ```bash
-# bench a ts language server over stdio
+# bench a ts language server over stdio, 50 iterations, report to results.json
 lsbench "typescript-language-server --stdio" \
-  --workspace ./my-project \    # point to your workspace
-  --script ./bench-actions.ts \ # set the benchmark script
-  --iterations 50 \             # set iteration count
-  --output results.json         # configure output
+  --workspace ./my-project \
+  --script ./bench-actions.ts \
+  --iterations 50 \
+  --output results.json
 ```
 
 ## Installation
 
-lsbench is published to npm. Install it globally for the CLI:
+lsbench is published on npm. You can install it globally to get the CLI:
 
 ```bash
 npm install -g lsbench
 ```
 
-Or add it as a dependency to import the `BenchContext` API in your action
-scripts:
+Or, you can add it as a dependency to import the `BenchContext` API in your action
+scripts directly:
 
 ```bash
 npm install lsbench
@@ -33,7 +33,7 @@ npm install lsbench
 ## How it works
 
 lsbench spawns a language server process, performs the LSP
-initialize/initialized handshake, then runs your action script, which is a
+initialize/initialized handshake, then runs your action script. That script is a
 TypeScript file that drives a sequence of LSP requests
 against a target workspace.
 
@@ -44,15 +44,15 @@ a JSON report with per-method statistics and per-run breakdowns.
 
 An action script is a file that default-exports an async function
 receiving a `BenchContext`. The [`examples/`](examples) directory has a few
-starting points:
+starting points you can checkout:
 
-- [`examples/typescript-actions.ts`](examples/typescript-actions.ts): a fuller driver exercising hover, completion, definition, references, edits, and more.
+- [`examples/typescript-actions.ts`](examples/typescript-actions.ts): a fuller driver exercising hover, completion (with resolve), navigation, formatting, document structure, semantic tokens, workspace symbols, call and type hierarchy, edits, and saves.
 - [`examples/cold-start.ts`](examples/cold-start.ts): a minimal cold-start
   driver (i.e. a benchmark that restarts the LS on each run).
 - [`examples/custom-language.ts`](examples/custom-language.ts): benchmarking a non-mainstream language server (a Langium DSL) via `addRegisteredLanguage`.
 - [`examples/compare-servers.ts`](examples/compare-servers.ts): importing `runBenchmark` to compare two servers programmatically and diff the reports.
 
-A typical script looks like:
+A typical script looks akin to this:
 
 ```typescript
 import { BenchContext } from "lsbench";
@@ -73,26 +73,126 @@ export default async function (ctx: BenchContext) {
 
 ### BenchContext API
 
+The following paths should be considered relative to your workspace root, and their positions are zero based. Methods marked as `timed` record a timing entry and return the raw LSP result, or `null` on a failure. `ctx.workspaceRoot` holds the absolute workspace root path for reference.
+
+**Document lifecycle** (all but `openDocument` and `closeDocument` require an open document)
+
 | Method | Description |
 | --- | --- |
 | `openDocument(path)` | Send `textDocument/didOpen` |
 | `closeDocument(path)` | Send `textDocument/didClose` |
-| `hover(path, line, char)` | `textDocument/hover` (timed) |
-| `completion(path, line, char)` | `textDocument/completion` (timed) |
-| `definition(path, line, char)` | `textDocument/definition` (timed) |
-| `references(path, line, char)` | `textDocument/references` (timed) |
-| `typeDefinition(path, line, char)` | `textDocument/typeDefinition` (timed) |
-| `implementation(path, line, char)` | `textDocument/implementation` (timed) |
-| `documentSymbol(path)` | `textDocument/documentSymbol` (timed) |
-| `formatting(path)` | `textDocument/formatting` (timed) |
-| `rename(path, line, char, newName)` | `textDocument/rename` (timed) |
-| `codeAction(path, range, codes?)` | `textDocument/codeAction` (timed) |
-| `signatureHelp(path, line, char)` | `textDocument/signatureHelp` (timed) |
-| `edit(path, edits)` | Send `textDocument/didChange` |
-| `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
+| `edit(path, edits)` | Send `textDocument/didChange` and apply the edits to the tracked text, in order |
+| `saveDocument(path)` | Send `textDocument/didSave` only if the server asks for it, with the tracked text when it wants `includeText` |
+| `willSave(path, reason?)` | Send `textDocument/willSave` only if the server asks for it. `reason` defaults to 1 (Manual) |
+| `willSaveWaitUntil(path, reason?)` | `textDocument/willSaveWaitUntil` (timed, always sent). `reason` defaults to 1 (Manual) |
+
+**Navigation and editing** (timed)
+
+| Method | Description |
+| --- | --- |
+| `hover(path, line, char)` | `textDocument/hover` |
+| `completion(path, line, char)` | `textDocument/completion` |
+| `signatureHelp(path, line, char)` | `textDocument/signatureHelp` |
+| `definition(path, line, char)` | `textDocument/definition` |
+| `declaration(path, line, char)` | `textDocument/declaration` |
+| `typeDefinition(path, line, char)` | `textDocument/typeDefinition` |
+| `implementation(path, line, char)` | `textDocument/implementation` |
+| `references(path, line, char)` | `textDocument/references` (includes the declaration) |
+| `documentHighlight(path, line, char)` | `textDocument/documentHighlight` |
+| `prepareRename(path, line, char)` | `textDocument/prepareRename` |
+| `rename(path, line, char, newName)` | `textDocument/rename` |
+| `codeAction(path, range, codes?)` | `textDocument/codeAction`. `codes` selects cached diagnostics by `code`, falling back to `data.code` (as used by Langium) |
+| `formatting(path)` | `textDocument/formatting` |
+| `rangeFormatting(path, range)` | `textDocument/rangeFormatting` |
+| `onTypeFormatting(path, line, char, ch)` | `textDocument/onTypeFormatting` |
+
+**Document structure** (timed)
+
+| Method | Description |
+| --- | --- |
+| `documentSymbol(path)` | `textDocument/documentSymbol` |
+| `foldingRange(path)` | `textDocument/foldingRange` |
+| `selectionRange(path, positions)` | `textDocument/selectionRange` |
+| `documentLink(path)` | `textDocument/documentLink` |
+| `codeLens(path)` | `textDocument/codeLens` |
+| `inlayHint(path, range)` | `textDocument/inlayHint` |
+| `semanticTokensFull(path)` | `textDocument/semanticTokens/full` |
+| `semanticTokensRange(path, range)` | `textDocument/semanticTokens/range` |
+| `semanticTokensDelta(path, previousResultId)` | `textDocument/semanticTokens/full/delta` |
+
+**Workspace, hierarchies, and pull diagnostics** (timed)
+
+| Method | Description |
+| --- | --- |
+| `workspaceSymbol(query)` | `workspace/symbol` |
+| `prepareCallHierarchy(path, line, char)` | `textDocument/prepareCallHierarchy` |
+| `callHierarchyIncomingCalls(item)` | `callHierarchy/incomingCalls` |
+| `callHierarchyOutgoingCalls(item)` | `callHierarchy/outgoingCalls` |
+| `prepareTypeHierarchy(path, line, char)` | `textDocument/prepareTypeHierarchy` |
+| `typeHierarchySupertypes(item)` | `typeHierarchy/supertypes` |
+| `typeHierarchySubtypes(item)` | `typeHierarchy/subtypes` |
+| `documentDiagnostic(path, previousResultId?)` | `textDocument/diagnostic` |
+| `workspaceDiagnostic(previousResultIds?)` | `workspace/diagnostic` |
+
+**Resolve** (timed, the item is sent back as is)
+
+| Method | Description |
+| --- | --- |
+| `completionItemResolve(item)` | `completionItem/resolve` |
+| `codeActionResolve(action)` | `codeAction/resolve` |
+| `codeLensResolve(codeLens)` | `codeLens/resolve` |
+| `inlayHintResolve(hint)` | `inlayHint/resolve` |
+| `documentLinkResolve(link)` | `documentLink/resolve` |
+| `workspaceSymbolResolve(symbol)` | `workspaceSymbol/resolve` |
+
+**Helpers**
+
+| Method | Description |
+| --- | --- |
+| `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` (default 30000 ms) |
 | `sleep(ms)` | Pause execution |
-| `request(method, params, label?)` | Arbitrary timed LSP request |
-| `notify(method, params)` | Send any LSP notification |
+| `request(method, params, label?)` | Arbitrary LSP request (timed) |
+| `notify(method, params)` | Arbitrary LSP notification |
+
+Call and type hierarchy requests expect an item returned by the matching prepare call:
+
+```ts
+const items = (await ctx.prepareCallHierarchy("src/index.ts", 10, 5)) as unknown[] | null;
+if (items && items.length > 0) {
+  await ctx.callHierarchyIncomingCalls(items[0]);
+  await ctx.callHierarchyOutgoingCalls(items[0]);
+}
+```
+
+Resolve requests take an item returned by the matching request. The server only answers when its provider advertises `resolveProvider: true`:
+
+```ts
+const list = (await ctx.completion("src/index.ts", 15, 10)) as { items: unknown[] } | unknown[] | null;
+const items = Array.isArray(list) ? list : (list?.items ?? []);
+if (items.length > 0) {
+  await ctx.completionItemResolve(items[0]);
+}
+```
+
+lsbench advertises `resolveSupport` for completion items, code actions, inlay hints, and workspace symbols, so some servers return partial items and defer that work to the resolve request.
+
+`documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability, since some servers would then stop pushing diagnostics and break `waitForDiagnostics`.
+
+### Save sync
+
+`saveDocument` and `willSave` follow the server's save options, read from the static `textDocumentSync` capability and from dynamic registrations of `textDocument/didSave`, `textDocument/willSave`, and `textDocument/willSaveWaitUntil`. A bare `TextDocumentSyncKind` number implies `didSave` without text, matching `vscode-languageclient`. When the server does not ask for a notification it is skipped and logged in verbose mode. `willSaveWaitUntil` is always sent so it can be timed.
+
+### Server to client requests
+
+lsbench answers requests from the server so it doesn't get stuck waiting on a client:
+
+- `workspace/configuration` returns an empty object per item
+- `client/registerCapability` and `client/unregisterCapability` are accepted (save related registrations are tracked)
+- `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) and `window/workDoneProgress/create` are acknowledged
+- `window/showMessageRequest` is dismissed with `null`
+- `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying thw workspace using server-initiated requests
+
+### Registering languages
 
 In some cases you may also need to register a language ID for a given extension.
 That's straightforward to do with `addRegisteredLanguage`, which will then impact all context related actions for documents with a matching extension.
@@ -109,50 +209,44 @@ This will ensure that opening a document with the extension `.dsl` will have an 
 ## CLI options
 
 ```
-Usage: lsbench [options] <server>
+Usage: lsbench [run] [options] <server>
 
 Arguments:
-  server                Server command or path to config file
+  server                      Server command, e.g. "typescript-language-server --stdio"
 
 Options:
-  -w, --workspace <path>    Workspace directory (required)
-  -s, --script <path>       Action driver script (required)
-  -n, --iterations <n>      Timed iterations (default: 10)
-  --warmup <n>              Warmup iterations (default: 2)
-  -o, --output <path>       JSON report output file
-  --restart                 Restart server between iterations
-  -v, --verbose             Verbose logging
-  -V, --version             Show version
-  -h, --help                Show help
+  -w, --workspace <path>      Workspace directory (required)
+  -s, --script <path>         Action driver script, .ts (required)
+  -n, --iterations <number>   Timed iterations (default: 10)
+  --warmup <number>           Warmup iterations, not recorded (default: 2)
+  -o, --output <path>         JSON report output file
+  --init-options-file <path>  JSON file with LSP initializationOptions
+  --restart                   Restart the server between iterations
+  -v, --verbose               Verbose logging
+  -V, --version               Show version
+  -h, --help                  Show help
+
+Commands:
+  run                         Run a benchmark (default command)
+  prime                       Print a primer on using lsbench
 ```
 
 ## Server configuration
 
-You can pass a simple command string:
+The server argument is a command string, split on whitespace. Anything after `--` is appended to the server's arguments:
 
 ```bash
-lsbench "typescript-language-server --stdio"
+lsbench "typescript-language-server --stdio" -w ./project -s ./actions.ts -- --log-level 4
 ```
 
-Or a JSON config file for a bit more control:
-
-```json
-{
-  "command": "typescript-language-server",
-  "args": ["--stdio", "--log-level", "warn"],
-  "env": { "TSS_LOG": "-level verbose" },
-  "initializationOptions": {
-    "preferences": { "includeInlayParameterNameHints": "none" }
-  }
-}
-```
+Pass LSP `initializationOptions` as a JSON file:
 
 ```bash
-lsbench ./server-config.json -w ./project -s ./actions.ts
+lsbench "typescript-language-server --stdio" -w ./project -s ./actions.ts \
+  --init-options-file ./init-options.json
 ```
 
-See [`examples/init-options.json`](examples/init-options.json) for a sample
-config file.
+See [`examples/init-options.json`](examples/init-options.json) for a sample. For full control over `command`, `args`, `env`, and `initializationOptions`, drive `LspHarness` programmatically with a `ServerConfig`.
 
 ## Output format
 
@@ -223,6 +317,7 @@ npm test          # unit tests (vitest)
 npm run lint      # oxlint
 npm run format    # biome format check
 npm run knip      # unused dependency/export check
+npm run test:integration  # minilogo + Langium grammar servers
 ```
 
 Use `npm run dev` for a watch build while iterating.
@@ -239,11 +334,13 @@ Note that `prepublishOnly` cleans `dist/` and then runs `build:prod`.
 There are two test tiers:
 
 - **Unit tests**: `npm test` runs the regular suite in `test/` via vitest.
-- **Integration tests**: `npm run test:integration` builds lsbench, then
-  clones, installs, and builds a Langium ([minilogo](https://github.com/TypeFox/langium-minilogo))
-  language server and interacts with it via stdio. The suite runs over some of the following benchmark checks: go-to-definition, references, document symbols, hover, and a full `runBenchmark` report.
+- **Integration tests**: `npm run test:integration` builds lsbench, then drives two real language servers over stdio:
+  - **minilogo**: clones, installs, and builds [langium-minilogo](https://github.com/TypeFox/langium-minilogo), then covers the methods it supports (symbols, definition, references, hover, highlight, prepareRename, folding, workspace symbols, save sync) plus a full `runBenchmark` report.
+  - **Langium grammar**: starts Langium's own grammar language server from devDependencies against a small fixture (`test-integration/langium-grammar/shapes.langium`). It covers the broader provider set: completion, rename, formatting, code actions via `data.code`, semantic tokens, call and type hierarchy, edits, and save sync.
 
-The integration run clones down & builds the minilogo server once on first use, so it's possible that it might be slow (timeouts are 120s per test / 600s per hook, per `vitest.integration.config.ts`). To account for this, the CI runs it as a separate `integration` job.
+  Methods a server does not advertise are listed as skipped tests, and each suite asserts that those providers are indeed absent.
+
+The minilogo server is cloned and built once on first use, so the first run can be slow (timeouts are 120s per test and 600s per hook, per `vitest.integration.config.ts`). CI runs both suites in a separate `integration` job.
 
 ## License
 

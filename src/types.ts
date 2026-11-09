@@ -112,12 +112,18 @@ export interface EditOperation {
  * All methods that send LSP requests are automatically timed.
  */
 export interface BenchContext {
-    /** The workspace root URI */
+    /** Absolute path of the workspace root */
     workspaceRoot: string;
 
     // ── Document lifecycle ──────────────────────────────────────────────
     openDocument(relativePath: string): Promise<void>;
     closeDocument(relativePath: string): Promise<void>;
+    /** Sends didSave only if the server asked for it, with the tracked text when it wants includeText */
+    saveDocument(relativePath: string): Promise<void>;
+    /** Sends willSave only if the server asked for it. `reason` is a TextDocumentSaveReason, default 1 (Manual) */
+    willSave(relativePath: string, reason?: number): Promise<void>;
+    /** Timed willSaveWaitUntil request, always sent. `reason` defaults to 1 (Manual) */
+    willSaveWaitUntil(relativePath: string, reason?: number): Promise<unknown | null>;
 
     // ── Timed LSP requests ──────────────────────────────────────────────
     hover(relativePath: string, line: number, character: number): Promise<unknown | null>;
@@ -126,11 +132,39 @@ export interface BenchContext {
     references(relativePath: string, line: number, character: number): Promise<unknown | null>;
     documentSymbol(relativePath: string): Promise<unknown | null>;
     formatting(relativePath: string): Promise<unknown | null>;
+    rangeFormatting(relativePath: string, range: Range): Promise<unknown | null>;
+    onTypeFormatting(relativePath: string, line: number, character: number, ch: string): Promise<unknown | null>;
     rename(relativePath: string, line: number, character: number, newName: string): Promise<unknown | null>;
     codeAction(relativePath: string, range: Range, diagnosticCodes?: (string | number)[]): Promise<unknown | null>;
     signatureHelp(relativePath: string, line: number, character: number): Promise<unknown | null>;
     typeDefinition(relativePath: string, line: number, character: number): Promise<unknown | null>;
     implementation(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    declaration(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    documentHighlight(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    prepareRename(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    foldingRange(relativePath: string): Promise<unknown | null>;
+    selectionRange(relativePath: string, positions: Position[]): Promise<unknown | null>;
+    documentLink(relativePath: string): Promise<unknown | null>;
+    codeLens(relativePath: string): Promise<unknown | null>;
+    inlayHint(relativePath: string, range: Range): Promise<unknown | null>;
+    semanticTokensFull(relativePath: string): Promise<unknown | null>;
+    semanticTokensRange(relativePath: string, range: Range): Promise<unknown | null>;
+    semanticTokensDelta(relativePath: string, previousResultId: string): Promise<unknown | null>;
+    workspaceSymbol(query: string): Promise<unknown | null>;
+    prepareCallHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    callHierarchyIncomingCalls(item: unknown): Promise<unknown | null>;
+    callHierarchyOutgoingCalls(item: unknown): Promise<unknown | null>;
+    prepareTypeHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    typeHierarchySupertypes(item: unknown): Promise<unknown | null>;
+    typeHierarchySubtypes(item: unknown): Promise<unknown | null>;
+    documentDiagnostic(relativePath: string, previousResultId?: string): Promise<unknown | null>;
+    workspaceDiagnostic(previousResultIds?: { uri: string; value: string }[]): Promise<unknown | null>;
+    completionItemResolve(item: unknown): Promise<unknown | null>;
+    codeLensResolve(codeLens: unknown): Promise<unknown | null>;
+    inlayHintResolve(hint: unknown): Promise<unknown | null>;
+    codeActionResolve(action: unknown): Promise<unknown | null>;
+    documentLinkResolve(link: unknown): Promise<unknown | null>;
+    workspaceSymbolResolve(symbol: unknown): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

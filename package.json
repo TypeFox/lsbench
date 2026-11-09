@@ -1,6 +1,6 @@
 {
   "name": "lsbench",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Benchmark arbitrary language servers with scripted LSP actions",
   "license": "MIT",
   "author": "montymxb",
@@ -57,9 +57,11 @@
     "@biomejs/biome": "^2.5.8",
     "@types/node": "^24.13.3",
     "knip": "^6.32.1",
+    "langium": "~4.3.0",
     "oxlint": "^1.78.0",
     "typescript": "^5.5.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "vscode-languageserver": "~10.0.1"
   },
   "engines": {
     "node": ">=24.0.0"

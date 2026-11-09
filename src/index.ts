@@ -4,7 +4,7 @@
 // authoring action scripts.
 
 export { addRegisteredLanguage, BenchContextImpl } from './context.js';
-export type { Diagnostic } from './harness.js';
+export type { Diagnostic, SaveSyncOptions } from './harness.js';
 export { LspHarness, pathToUri, uriToPath } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
 export { buildReport, computeMethodStats, printSummary } from './stats.js';
