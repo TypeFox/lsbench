@@ -141,9 +141,37 @@ export class LspHarness {
             return;
         });
 
+        // acknowledge refresh and progress requests, we hold no cached state to invalidate
+        const noOpRequests = [
+            'workspace/semanticTokens/refresh',
+            'workspace/inlayHint/refresh',
+            'workspace/codeLens/refresh',
+            'workspace/inlineValue/refresh',
+            'window/workDoneProgress/create',
+        ];
+        for (const method of noOpRequests) {
+            this.connection.onRequest(method, () => null);
+        }
+
         // Handle client/registerCapability (dynamic registration)
         this.connection.onRequest('client/registerCapability', () => {
             return; // Accept all registrations
+        });
+
+        this.connection.onRequest('client/unregisterCapability', () => {
+            return;
+        });
+
+        // no user is present to pick an action, so dismiss the prompt
+        this.connection.onRequest('window/showMessageRequest', (params: { type: number; message: string }) => {
+            this.log(`[server msg request] ${params.message}`);
+            return null;
+        });
+
+        // lsbench never mutates the workspace on the server's behalf
+        this.connection.onRequest('workspace/applyEdit', (params: { label?: string }) => {
+            this.log(`[server applyEdit] declined${params.label ? `: ${params.label}` : ''}`);
+            return { applied: false, failureReason: 'lsbench does not apply workspace edits' };
         });
 
         // Perform LSP initialize
