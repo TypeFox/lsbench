@@ -207,32 +207,45 @@ All file paths are relative to the workspace root. Positions are zero-based
 ## The context API (BenchContext)
 
 The object passed to your script. Import its type from 'lsbench'. Methods marked
-(timed) record a RequestTiming entry; others are notifications or helpers.
+(timed) record a RequestTiming entry and return the raw LSP result, or null on
+failure. Others are notifications or helpers.
 
-Document lifecycle
-  openDocument(path)                      textDocument/didOpen  — must be called before requests on a file
+Document lifecycle  (all but openDocument/closeDocument throw if the document is not open)
+  openDocument(path)                      textDocument/didOpen, call before requests on a file
   closeDocument(path)                     textDocument/didClose
-  saveDocument(path)                      textDocument/didSave, only if the server wants it (with text if it asks for includeText)
-  willSave(path, reason?)                 textDocument/willSave, only if the server wants it (reason defaults to 1, Manual)
-  saveDocument and willSave throw if the document is not open
+  edit(path, edits)                       textDocument/didChange. edits is an EditOperation or an array,
+                                          each { range: { start: {line,character}, end: {line,character} }, text }.
+                                          Array edits apply in order, each range refers to the text after
+                                          the previous edits. The tracked document text is updated to match.
+  saveDocument(path)                      textDocument/didSave, only if the server asks for it, with the
+                                          tracked text when it wants includeText
+  willSave(path, reason?)                 textDocument/willSave, only if the server asks for it (reason default 1, Manual)
+  willSaveWaitUntil(path, reason?)        textDocument/willSaveWaitUntil (timed, always sent, reason default 1)
 
-Timed LSP requests  (return the raw LSP result, or null on failure)
+  Save options come from the static textDocumentSync capability and from dynamic
+  didSave/willSave/willSaveWaitUntil registrations. A bare TextDocumentSyncKind
+  number implies didSave without text.
+
+Navigation and editing  (timed)
   hover(path, line, char)                 textDocument/hover
   completion(path, line, char)            textDocument/completion
+  signatureHelp(path, line, char)         textDocument/signatureHelp
   definition(path, line, char)            textDocument/definition
-  references(path, line, char)            textDocument/references (includeDeclaration: true)
+  declaration(path, line, char)           textDocument/declaration
   typeDefinition(path, line, char)        textDocument/typeDefinition
   implementation(path, line, char)        textDocument/implementation
-  declaration(path, line, char)           textDocument/declaration
+  references(path, line, char)            textDocument/references (includeDeclaration: true)
   documentHighlight(path, line, char)     textDocument/documentHighlight
-  documentSymbol(path)                    textDocument/documentSymbol
+  prepareRename(path, line, char)         textDocument/prepareRename
+  rename(path, line, char, newName)       textDocument/rename
+  codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics by code,
+                                          falling back to data.code as used by Langium)
   formatting(path)                        textDocument/formatting (tabSize 2, spaces)
   rangeFormatting(path, range)            textDocument/rangeFormatting (tabSize 2, spaces)
   onTypeFormatting(path, line, char, ch)  textDocument/onTypeFormatting (ch is the typed trigger character)
-  rename(path, line, char, newName)       textDocument/rename
-  prepareRename(path, line, char)         textDocument/prepareRename
-  codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics by code, falling back to data.code)
-  signatureHelp(path, line, char)         textDocument/signatureHelp
+
+Document structure  (timed)
+  documentSymbol(path)                    textDocument/documentSymbol
   foldingRange(path)                      textDocument/foldingRange
   selectionRange(path, positions)         textDocument/selectionRange (positions is an array of {line,character})
   documentLink(path)                      textDocument/documentLink
@@ -241,46 +254,58 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   semanticTokensFull(path)                textDocument/semanticTokens/full
   semanticTokensRange(path, range)        textDocument/semanticTokens/range
   semanticTokensDelta(path, prevResultId) textDocument/semanticTokens/full/delta (prevResultId from a prior result)
-  workspaceSymbol(query)                  workspace/symbol (workspace-wide, no document needed)
+
+Workspace, hierarchies, pull diagnostics  (timed)
+  workspaceSymbol(query)                  workspace/symbol (no document needed)
   prepareCallHierarchy(path, line, char)  textDocument/prepareCallHierarchy (returns CallHierarchyItem[])
   callHierarchyIncomingCalls(item)        callHierarchy/incomingCalls (item from prepareCallHierarchy)
   callHierarchyOutgoingCalls(item)        callHierarchy/outgoingCalls (item from prepareCallHierarchy)
   prepareTypeHierarchy(path, line, char)  textDocument/prepareTypeHierarchy (returns TypeHierarchyItem[])
   typeHierarchySupertypes(item)           typeHierarchy/supertypes (item from prepareTypeHierarchy)
   typeHierarchySubtypes(item)             typeHierarchy/subtypes (item from prepareTypeHierarchy)
-  documentDiagnostic(path, prevResultId?) textDocument/diagnostic (needs a server with diagnosticProvider)
+  documentDiagnostic(path, prevResultId?) textDocument/diagnostic
   workspaceDiagnostic(prevResultIds?)     workspace/diagnostic (prevResultIds is [{uri,value}], default [])
-  completionItemResolve(item)             completionItem/resolve (item from completion, sent as the params)
-  codeLensResolve(codeLens)               codeLens/resolve (codeLens from codeLens, sent as the params)
-  inlayHintResolve(hint)                  inlayHint/resolve (hint from inlayHint, sent as the params)
-  codeActionResolve(action)               codeAction/resolve (action from codeAction, sent as the params)
-  documentLinkResolve(link)               documentLink/resolve (link from documentLink, sent as the params)
-  workspaceSymbolResolve(symbol)          workspaceSymbol/resolve (symbol from workspaceSymbol, sent as the params)
-  willSaveWaitUntil(path, reason?)        textDocument/willSaveWaitUntil (always sent, reason defaults to 1, throws if not open)
 
-Mutations
-  edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.
-                                          The document must be open first. Each EditOperation is
-                                          { range: { start: {line,character}, end: {line,character} }, text }.
-                                          Edits in an array apply in order, each range refers to the text
-                                          after the previous edits. The tracked text (sent by didSave when the
-                                          server asks for includeText) is updated to match.
+  Pull diagnostics need a server with diagnosticProvider. lsbench does not
+  advertise the textDocument.diagnostic client capability, since some servers
+  would then stop pushing diagnostics and break waitForDiagnostics.
+
+Resolve  (timed, the item from the matching request is sent back as the params)
+  completionItemResolve(item)             completionItem/resolve
+  codeActionResolve(action)               codeAction/resolve
+  codeLensResolve(codeLens)               codeLens/resolve
+  inlayHintResolve(hint)                  inlayHint/resolve
+  documentLinkResolve(link)               documentLink/resolve
+  workspaceSymbolResolve(symbol)          workspaceSymbol/resolve
+
+  Only answered when the provider advertises resolveProvider: true. lsbench
+  advertises resolveSupport for completion items, code actions, inlay hints and
+  workspace symbols, so some servers defer work from the request to resolve.
 
 Synchronization
   waitForDiagnostics(path, timeoutMs?)    resolves with the diagnostics array once the server publishes
                                           them (default timeout 30_000ms). Call after open/edit before timing.
-  sleep(ms)                               pause execution — useful to let background indexing settle.
+  sleep(ms)                               pause execution, useful to let background indexing settle.
 
 Escape hatches (for methods without a convenience wrapper)
-  request<R>(method, params, label?)      send an arbitrary LSP request; it is timed. label appears in the report.
-  notify(method, params)                  send an arbitrary LSP notification (not timed — no response).
+  request<R>(method, params, label?)      send an arbitrary LSP request (timed). label appears in the report.
+  notify(method, params)                  send an arbitrary LSP notification (not timed, no response).
 
 Property
-  workspaceRoot                           the resolved workspace root URI.
+  workspaceRoot                           absolute path of the workspace root.
+
+## Server to client requests
+
+lsbench answers these so a server never stalls waiting on a client:
+  workspace/configuration                 an empty object per item
+  client/(un)registerCapability           accepted, save related registrations are tracked
+  workspace/*/refresh, workDoneProgress   acknowledged
+  window/showMessageRequest               dismissed with null
+  workspace/applyEdit                     declined, lsbench never modifies the workspace
 
 ## CLI reference
 
-    Usage: lsbench [options] <server>
+    Usage: lsbench [run] [options] <server>
 
     Arguments:
       server                       Server command, e.g. "typescript-language-server --stdio"

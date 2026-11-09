@@ -112,7 +112,7 @@ export interface EditOperation {
  * All methods that send LSP requests are automatically timed.
  */
 export interface BenchContext {
-    /** The workspace root URI */
+    /** Absolute path of the workspace root */
     workspaceRoot: string;
 
     // ── Document lifecycle ──────────────────────────────────────────────
