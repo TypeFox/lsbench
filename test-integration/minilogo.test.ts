@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { addRegisteredLanguage, BenchContextImpl, LspHarness, type RequestTiming, type ServerConfig } from 'lsbench';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { examplesDir, serverEntry } from './minilogo.js';
 
 // End-to-end test against a real, built Langium language server (minilogo).
@@ -183,17 +183,39 @@ describe('minilogo language server (integration)', () => {
         expect(inTestLogo?.location.range.start).toEqual({ line: 9, character: 4 });
     });
 
-    it('sends didSave as an untimed notification and the server stays responsive', async () => {
+    it('skips didSave and willSave since the server does not ask for them', async () => {
+        // minilogo advertises textDocumentSync save, willSave and willSaveWaitUntil as false
+        expect(harness.saveSyncOptions()).toEqual({
+            didSave: false,
+            includeText: false,
+            willSave: false,
+            willSaveWaitUntil: false,
+        });
+
         ctx.collectTimings();
-        // minilogo advertises textDocumentSync.save = false, so it ignores didSave;
-        // this checks the client side: no throw, no timing, and the server still answers
-        await ctx.saveDocument('test.logo');
+        const sendNotification = vi.spyOn(harness, 'sendNotification');
+        try {
+            await ctx.saveDocument('test.logo');
+            await ctx.willSave('test.logo');
+            expect(sendNotification).not.toHaveBeenCalled();
+        } finally {
+            sendNotification.mockRestore();
+        }
         expect(ctx.collectTimings()).toHaveLength(0);
+
+        await expect(ctx.saveDocument('not-open.logo')).rejects.toThrow(/not open/);
+        await expect(ctx.willSave('not-open.logo')).rejects.toThrow(/not open/);
+        await expect(ctx.willSaveWaitUntil('not-open.logo')).rejects.toThrow(/not open/);
+    });
+
+    it('times willSaveWaitUntil even though the server does not advertise it', async () => {
+        // Langium answers with no edits when it has no willSaveWaitUntil handler
+        const edits = await ctx.willSaveWaitUntil('test.logo');
+        expectTimedSuccess(ctx, 'textDocument/willSaveWaitUntil');
+        expect(edits).toEqual([]);
 
         const highlights = (await ctx.documentHighlight('test.logo', 24, 2)) as unknown[] | null;
         expect(highlights).toHaveLength(3);
-
-        await expect(ctx.saveDocument('not-open.logo')).rejects.toThrow(/not open/);
     });
 
     // the following methods are not advertised by minilogo (Langium 4.3 minilogo only

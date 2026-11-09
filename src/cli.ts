@@ -212,7 +212,9 @@ The object passed to your script. Import its type from 'lsbench'. Methods marked
 Document lifecycle
   openDocument(path)                      textDocument/didOpen  — must be called before requests on a file
   closeDocument(path)                     textDocument/didClose
-  saveDocument(path)                      textDocument/didSave (throws if the document is not open)
+  saveDocument(path)                      textDocument/didSave, only if the server wants it (with text if it asks for includeText)
+  willSave(path, reason?)                 textDocument/willSave, only if the server wants it (reason defaults to 1, Manual)
+  saveDocument and willSave throw if the document is not open
 
 Timed LSP requests  (return the raw LSP result, or null on failure)
   hover(path, line, char)                 textDocument/hover
@@ -254,11 +256,15 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   codeActionResolve(action)               codeAction/resolve (action from codeAction, sent as the params)
   documentLinkResolve(link)               documentLink/resolve (link from documentLink, sent as the params)
   workspaceSymbolResolve(symbol)          workspaceSymbol/resolve (symbol from workspaceSymbol, sent as the params)
+  willSaveWaitUntil(path, reason?)        textDocument/willSaveWaitUntil (always sent, reason defaults to 1, throws if not open)
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.
                                           The document must be open first. Each EditOperation is
                                           { range: { start: {line,character}, end: {line,character} }, text }.
+                                          Edits in an array apply in order, each range refers to the text
+                                          after the previous edits. The tracked text (sent by didSave when the
+                                          server asks for includeText) is updated to match.
 
 Synchronization
   waitForDiagnostics(path, timeoutMs?)    resolves with the diagnostics array once the server publishes

@@ -77,7 +77,9 @@ export default async function (ctx: BenchContext) {
 | --- | --- |
 | `openDocument(path)` | Send `textDocument/didOpen` |
 | `closeDocument(path)` | Send `textDocument/didClose` |
-| `saveDocument(path)` | Send `textDocument/didSave` (document must be open) |
+| `saveDocument(path)` | Send `textDocument/didSave` if the server wants it, including the current text when it asks for `includeText` (document must be open) |
+| `willSave(path, reason?)` | Send `textDocument/willSave` if the server wants it. `reason` defaults to 1 (Manual) (document must be open) |
+| `willSaveWaitUntil(path, reason?)` | `textDocument/willSaveWaitUntil` (timed, always sent). `reason` defaults to 1 (Manual) (document must be open) |
 | `hover(path, line, char)` | `textDocument/hover` (timed) |
 | `completion(path, line, char)` | `textDocument/completion` (timed) |
 | `definition(path, line, char)` | `textDocument/definition` (timed) |
@@ -117,7 +119,7 @@ export default async function (ctx: BenchContext) {
 | `codeActionResolve(action)` | `codeAction/resolve` (timed) |
 | `documentLinkResolve(link)` | `documentLink/resolve` (timed) |
 | `workspaceSymbolResolve(symbol)` | `workspaceSymbol/resolve` (timed) |
-| `edit(path, edits)` | Send `textDocument/didChange` |
+| `edit(path, edits)` | Send `textDocument/didChange` and apply the edits to the tracked text, in order |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary timed LSP request |

@@ -85,16 +85,41 @@ export class BenchContextImpl implements BenchContext {
     }
 
     async saveDocument(relativePath: string): Promise<void> {
-        const doc = this.openDocuments.get(relativePath);
-        if (!doc) {
-            throw new Error(`Document ${relativePath} is not open. Call openDocument() first.`);
+        const doc = this.getOpenDocument(relativePath);
+        const { didSave, includeText } = this.harness.saveSyncOptions();
+        if (!didSave) {
+            this.log(`Skipped didSave for ${relativePath}: server did not ask for it`);
+            return;
         }
 
         this.harness.sendNotification('textDocument/didSave', {
             textDocument: { uri: doc.uri },
+            ...(includeText ? { text: doc.text } : {}),
         });
 
         this.log(`Saved ${relativePath}`);
+    }
+
+    async willSave(relativePath: string, reason = 1): Promise<void> {
+        const doc = this.getOpenDocument(relativePath);
+        if (!this.harness.saveSyncOptions().willSave) {
+            this.log(`Skipped willSave for ${relativePath}: server did not ask for it`);
+            return;
+        }
+
+        this.harness.sendNotification('textDocument/willSave', {
+            textDocument: { uri: doc.uri },
+            reason,
+        });
+    }
+
+    // always sent, since the caller explicitly asked for it to be timed
+    async willSaveWaitUntil(relativePath: string, reason = 1): Promise<unknown | null> {
+        const doc = this.getOpenDocument(relativePath);
+        return this.timedRequest('textDocument/willSaveWaitUntil', {
+            textDocument: { uri: doc.uri },
+            reason,
+        });
     }
 
     // ── Timed LSP requests ──────────────────────────────────────────────
@@ -350,10 +375,7 @@ export class BenchContextImpl implements BenchContext {
     // ── Document mutations ──────────────────────────────────────────────
 
     async edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void> {
-        const doc = this.openDocuments.get(relativePath);
-        if (!doc) {
-            throw new Error(`Document ${relativePath} is not open. Call openDocument() first.`);
-        }
+        const doc = this.getOpenDocument(relativePath);
 
         const editArray = Array.isArray(edits) ? edits : [edits];
         doc.version++;
@@ -363,8 +385,11 @@ export class BenchContextImpl implements BenchContext {
             text: e.text,
         }));
 
-        // Apply edits to our local copy of the text (simplified: just for version tracking)
-        // A more precise implementation would apply the actual text edits
+        // mirror the change locally, each edit applies to the result of the previous one
+        for (const e of editArray) {
+            doc.text = applyEdit(doc.text, e);
+        }
+
         this.harness.sendNotification('textDocument/didChange', {
             textDocument: { uri: doc.uri, version: doc.version },
             contentChanges,
@@ -393,6 +418,14 @@ export class BenchContextImpl implements BenchContext {
     }
 
     // ── Internal helpers ────────────────────────────────────────────────
+
+    private getOpenDocument(relativePath: string): { uri: string; version: number; text: string } {
+        const doc = this.openDocuments.get(relativePath);
+        if (!doc) {
+            throw new Error(`Document ${relativePath} is not open. Call openDocument() first.`);
+        }
+        return doc;
+    }
 
     private getUri(relativePath: string): string {
         const doc = this.openDocuments.get(relativePath);
@@ -455,6 +488,58 @@ function toLspRange(range: Range): {
         start: { line: range.start.line, character: range.start.character },
         end: { line: range.end.line, character: range.end.character },
     };
+}
+
+/** Replace the text covered by `edit.range` with `edit.text` */
+function applyEdit(text: string, edit: EditOperation): string {
+    const lineStarts = computeLineStarts(text);
+    let start = positionToOffset(text, lineStarts, edit.range.start);
+    let end = positionToOffset(text, lineStarts, edit.range.end);
+    if (start > end) {
+        [start, end] = [end, start];
+    }
+    return text.slice(0, start) + edit.text + text.slice(end);
+}
+
+/** Offsets at which each line begins, treating \n, \r\n and \r as line breaks like LSP does */
+function computeLineStarts(text: string): number[] {
+    const starts = [0];
+    for (let i = 0; i < text.length; i++) {
+        const ch = text.charCodeAt(i);
+        if (ch === 13 /* \r */) {
+            if (text.charCodeAt(i + 1) === 10 /* \n */) {
+                i++;
+            }
+            starts.push(i + 1);
+        } else if (ch === 10 /* \n */) {
+            starts.push(i + 1);
+        }
+    }
+    return starts;
+}
+
+/**
+ * Convert an LSP position to a string offset. Characters are UTF-16 code units, which is
+ * what JS string indices count. Out of range positions are clamped as the LSP spec requires:
+ * a character past the line end maps to the line end, a line past the last maps to the end.
+ */
+function positionToOffset(text: string, lineStarts: number[], pos: Position): number {
+    if (pos.line < 0) {
+        return 0;
+    }
+    if (pos.line >= lineStarts.length) {
+        return text.length;
+    }
+    const lineStart = lineStarts[pos.line];
+    let lineEnd = pos.line + 1 < lineStarts.length ? lineStarts[pos.line + 1] : text.length;
+    // exclude the line break itself, so a position can never land inside \r\n
+    if (lineEnd > lineStart && text.charCodeAt(lineEnd - 1) === 10) {
+        lineEnd--;
+    }
+    if (lineEnd > lineStart && text.charCodeAt(lineEnd - 1) === 13) {
+        lineEnd--;
+    }
+    return Math.min(lineStart + Math.max(pos.character, 0), lineEnd);
 }
 
 /**

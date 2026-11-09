@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Diagnostic, LspHarness } from 'lsbench';
+import type { Diagnostic, EditOperation, LspHarness, SaveSyncOptions } from 'lsbench';
 import { addRegisteredLanguage, BenchContextImpl } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -27,6 +27,8 @@ class FakeHarness {
     /** methods that should reject when requested */
     failMethods = new Set<string>();
     response: unknown = { ok: true };
+    /** what the fake server asks for around saves */
+    saveOptions: SaveSyncOptions = { didSave: true, includeText: false, willSave: true, willSaveWaitUntil: true };
 
     async sendRequest<R>(method: string, params: unknown): Promise<R> {
         this.requests.push({ method, params });
@@ -51,6 +53,15 @@ class FakeHarness {
     onDiagnostics(uri: string, _timeoutMs: number): Promise<Diagnostic[]> {
         return Promise.resolve(this.diagnostics.get(uri) ?? []);
     }
+
+    saveSyncOptions(): SaveSyncOptions {
+        return { ...this.saveOptions };
+    }
+}
+
+/** shorthand for an edit replacing the range from (sl, sc) to (el, ec) */
+function op(sl: number, sc: number, el: number, ec: number, text: string): EditOperation {
+    return { range: { start: { line: sl, character: sc }, end: { line: el, character: ec } }, text };
 }
 
 describe('BenchContextImpl', () => {
@@ -128,6 +139,77 @@ describe('BenchContextImpl', () => {
             });
             expect(harness.requests).toHaveLength(0);
             expect(ctx.collectTimings()).toHaveLength(0);
+        });
+
+        it('saveDocument includes the current text when the server asks for includeText', async () => {
+            harness.saveOptions.includeText = true;
+            await ctx.openDocument('sample.ts');
+            await ctx.saveDocument('sample.ts');
+
+            expect(harness.notifications[1]).toEqual({
+                method: 'textDocument/didSave',
+                params: { textDocument: { uri: expect.stringMatching(/sample\.ts$/) }, text: 'const x: number = 1;\n' },
+            });
+        });
+
+        it('saveDocument skips didSave when the server does not want it', async () => {
+            harness.saveOptions.didSave = false;
+            await ctx.openDocument('sample.ts');
+            await ctx.saveDocument('sample.ts');
+
+            expect(harness.notifications.map((n) => n.method)).toEqual(['textDocument/didOpen']);
+        });
+
+        it('willSave sends an untimed willSave with the reason, defaulting to Manual', async () => {
+            await ctx.openDocument('sample.ts');
+            await ctx.willSave('sample.ts');
+            await ctx.willSave('sample.ts', 2);
+
+            expect(harness.notifications.slice(1)).toEqual([
+                {
+                    method: 'textDocument/willSave',
+                    params: { textDocument: { uri: expect.stringMatching(/sample\.ts$/) }, reason: 1 },
+                },
+                {
+                    method: 'textDocument/willSave',
+                    params: { textDocument: { uri: expect.stringMatching(/sample\.ts$/) }, reason: 2 },
+                },
+            ]);
+            expect(harness.requests).toHaveLength(0);
+            expect(ctx.collectTimings()).toHaveLength(0);
+        });
+
+        it('willSave skips the notification when the server does not want it', async () => {
+            harness.saveOptions.willSave = false;
+            await ctx.openDocument('sample.ts');
+            await ctx.willSave('sample.ts');
+
+            expect(harness.notifications.map((n) => n.method)).toEqual(['textDocument/didOpen']);
+        });
+
+        it('willSave and willSaveWaitUntil throw when the document is not open', async () => {
+            await expect(ctx.willSave('sample.ts')).rejects.toThrow(/is not open/);
+            await expect(ctx.willSaveWaitUntil('sample.ts')).rejects.toThrow(/is not open/);
+            expect(harness.notifications).toHaveLength(0);
+            expect(harness.requests).toHaveLength(0);
+        });
+
+        it('willSaveWaitUntil issues a timed request even when the server does not advertise it', async () => {
+            harness.saveOptions.willSaveWaitUntil = false;
+            await ctx.openDocument('sample.ts');
+            const res = await ctx.willSaveWaitUntil('sample.ts', 3);
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toEqual([
+                {
+                    method: 'textDocument/willSaveWaitUntil',
+                    params: { textDocument: { uri: expect.stringMatching(/sample\.ts$/) }, reason: 3 },
+                },
+            ]);
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/willSaveWaitUntil');
+            expect(timings[0].success).toBe(true);
         });
 
         it('resetDocuments closes every open document and clears state', async () => {
@@ -628,6 +710,80 @@ describe('BenchContextImpl', () => {
             const params = change?.params as { textDocument: { version: number }; contentChanges: unknown[] };
             expect(params.textDocument.version).toBe(2);
             expect(params.contentChanges).toHaveLength(1);
+        });
+
+        describe('tracked text', () => {
+            /** open `content` as a fresh document, apply `edits`, and read the tracked text back via didSave */
+            async function textAfter(content: string, edits: EditOperation | EditOperation[]): Promise<string> {
+                fs.writeFileSync(path.join(tmpDir, 'edit.txt'), content, 'utf-8');
+                harness.saveOptions.includeText = true;
+                await ctx.openDocument('edit.txt');
+                await ctx.edit('edit.txt', edits);
+                await ctx.saveDocument('edit.txt');
+                const save = harness.notifications[harness.notifications.length - 1];
+                expect(save.method).toBe('textDocument/didSave');
+                await ctx.closeDocument('edit.txt');
+                return (save.params as { text: string }).text;
+            }
+
+            it('replaces text within a single line', async () => {
+                expect(await textAfter('const x = 1;\nlet y;\n', op(0, 6, 0, 7, 'foo'))).toBe(
+                    'const foo = 1;\nlet y;\n',
+                );
+            });
+
+            it('replaces text spanning multiple lines', async () => {
+                expect(await textAfter('aaa\nbbb\nccc\n', op(0, 1, 2, 2, 'X'))).toBe('aXc\n');
+            });
+
+            it('inserts at an empty range, including at the end of the document', async () => {
+                expect(await textAfter('ab\ncd', op(1, 1, 1, 1, '-'))).toBe('ab\nc-d');
+                expect(await textAfter('ab\ncd', op(1, 2, 1, 2, '\nef'))).toBe('ab\ncd\nef');
+            });
+
+            it('deletes text, including a whole line break', async () => {
+                expect(await textAfter('one\ntwo\nthree\n', op(1, 0, 2, 0, ''))).toBe('one\nthree\n');
+                expect(await textAfter('one two', op(0, 3, 0, 7, ''))).toBe('one');
+            });
+
+            it('applies a batch in order, each range relative to the previous result', async () => {
+                const edits = [
+                    // insert a new first line, shifting everything down
+                    op(0, 0, 0, 0, 'first\n'),
+                    // line 1 is now the original line 0
+                    op(1, 0, 1, 3, 'ONE'),
+                    // join the old lines 1 and 2, now at lines 2 and 3
+                    op(2, 3, 3, 0, ' '),
+                ];
+                expect(await textAfter('one\ntwo\nthree\n', edits)).toBe('first\nONE\ntwo three\n');
+            });
+
+            it('accumulates text across separate edit calls', async () => {
+                fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abc', 'utf-8');
+                harness.saveOptions.includeText = true;
+                await ctx.openDocument('edit.txt');
+                await ctx.edit('edit.txt', op(0, 3, 0, 3, 'd'));
+                await ctx.edit('edit.txt', op(0, 0, 0, 1, ''));
+                await ctx.saveDocument('edit.txt');
+                const save = harness.notifications[harness.notifications.length - 1];
+                expect((save.params as { text: string }).text).toBe('bcd');
+            });
+
+            it('handles \\r\\n line endings without splitting them', async () => {
+                expect(await textAfter('ab\r\ncd\r\n', op(1, 0, 1, 2, 'XY'))).toBe('ab\r\nXY\r\n');
+                // a character past the line end clamps to before the \r\n
+                expect(await textAfter('ab\r\ncd\r\n', op(0, 99, 0, 99, '!'))).toBe('ab!\r\ncd\r\n');
+                expect(await textAfter('ab\r\ncd', op(0, 2, 1, 0, ''))).toBe('abcd');
+            });
+
+            it('counts characters in UTF-16 code units', async () => {
+                // the emoji is a surrogate pair, two code units wide
+                expect(await textAfter('a😀b\n', op(0, 3, 0, 4, 'c'))).toBe('a😀c\n');
+            });
+
+            it('clamps a line past the end of the document to the end', async () => {
+                expect(await textAfter('ab\n', op(5, 0, 5, 0, 'z'))).toBe('ab\nz');
+            });
         });
     });
 

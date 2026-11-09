@@ -129,3 +129,96 @@ describe('LspHarness.stop', () => {
         expect(alive).toBe(false);
     });
 });
+
+/**
+ * A fake server advertising the textDocumentSync capability given in argv, which on
+ * request forwards client/registerCapability or client/unregisterCapability to the client.
+ */
+const syncServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const sync = JSON.parse(process.argv[1]);
+conn.onRequest('initialize', () => ({ capabilities: sync === null ? {} : { textDocumentSync: sync } }));
+conn.onRequest('test/forward', ([method, params]) => conn.sendRequest(method, params));
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('LspHarness.saveSyncOptions', () => {
+    async function withSyncServer(sync: unknown, body: (harness: LspHarness) => Promise<void>): Promise<void> {
+        const harness = new LspHarness(
+            {
+                command: process.execPath,
+                args: ['--input-type=module', '-e', syncServer, JSON.stringify(sync)],
+            },
+            process.cwd(),
+        );
+        try {
+            await harness.start();
+            await body(harness);
+        } finally {
+            await harness.stop();
+        }
+    }
+
+    const none = { didSave: false, includeText: false, willSave: false, willSaveWaitUntil: false };
+
+    const staticCases: Array<[string, unknown, typeof none]> = [
+        ['no textDocumentSync', null, none],
+        ['a bare TextDocumentSyncKind wants didSave without text', 2, { ...none, didSave: true }],
+        ['save: false', { change: 2, save: false }, none],
+        ['save: true', { save: true }, { ...none, didSave: true }],
+        ['save: {} without includeText', { save: {} }, { ...none, didSave: true }],
+        ['save: { includeText: true }', { save: { includeText: true } }, { ...none, didSave: true, includeText: true }],
+        [
+            'willSave and willSaveWaitUntil',
+            { willSave: true, willSaveWaitUntil: true },
+            { ...none, willSave: true, willSaveWaitUntil: true },
+        ],
+    ];
+
+    for (const [name, sync, expected] of staticCases) {
+        it(`reads the static capability: ${name}`, async () => {
+            await withSyncServer(sync, async (harness) => {
+                expect(harness.saveSyncOptions()).toEqual(expected);
+            });
+        });
+    }
+
+    it('merges dynamic registrations and drops them on unregister', async () => {
+        await withSyncServer({ change: 2, save: false }, async (harness) => {
+            await harness.sendRequest('test/forward', [
+                'client/registerCapability',
+                {
+                    registrations: [
+                        { id: 'save', method: 'textDocument/didSave', registerOptions: { includeText: true } },
+                        { id: 'will', method: 'textDocument/willSave', registerOptions: {} },
+                        { id: 'until', method: 'textDocument/willSaveWaitUntil' },
+                        { id: 'hover', method: 'textDocument/hover' },
+                    ],
+                },
+            ]);
+            expect(harness.saveSyncOptions()).toEqual({
+                didSave: true,
+                includeText: true,
+                willSave: true,
+                willSaveWaitUntil: true,
+            });
+
+            await harness.sendRequest('test/forward', [
+                'client/unregisterCapability',
+                {
+                    unregisterations: [
+                        { id: 'save', method: 'textDocument/didSave' },
+                        { id: 'until', method: 'textDocument/willSaveWaitUntil' },
+                    ],
+                },
+            ]);
+            expect(harness.saveSyncOptions()).toEqual({ ...none, willSave: true });
+        });
+    });
+});

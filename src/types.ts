@@ -118,7 +118,12 @@ export interface BenchContext {
     // ── Document lifecycle ──────────────────────────────────────────────
     openDocument(relativePath: string): Promise<void>;
     closeDocument(relativePath: string): Promise<void>;
+    /** Sends didSave only if the server asked for it, with the tracked text when it wants includeText */
     saveDocument(relativePath: string): Promise<void>;
+    /** Sends willSave only if the server asked for it. `reason` is a TextDocumentSaveReason, default 1 (Manual) */
+    willSave(relativePath: string, reason?: number): Promise<void>;
+    /** Timed willSaveWaitUntil request, always sent. `reason` defaults to 1 (Manual) */
+    willSaveWaitUntil(relativePath: string, reason?: number): Promise<unknown | null>;
 
     // ── Timed LSP requests ──────────────────────────────────────────────
     hover(relativePath: string, line: number, character: number): Promise<unknown | null>;

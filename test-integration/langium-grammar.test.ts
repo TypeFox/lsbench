@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { addRegisteredLanguage, BenchContextImpl, LspHarness, type RequestTiming } from 'lsbench';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // End-to-end test against Langium's own grammar language server, which registers
 // far more providers than minilogo (formatter, semantic tokens, call and type
@@ -425,12 +425,32 @@ describe('langium grammar language server (integration)', () => {
         }
     });
 
-    it('sends didSave as an untimed notification and the server stays responsive', async () => {
+    it('skips didSave and willSave since the server does not ask for them', async () => {
+        // the grammar server advertises textDocumentSync save, willSave and willSaveWaitUntil as false
+        expect(harness.saveSyncOptions()).toEqual({
+            didSave: false,
+            includeText: false,
+            willSave: false,
+            willSaveWaitUntil: false,
+        });
+
         ctx.collectTimings();
-        // the grammar server advertises textDocumentSync.save = false, so it ignores didSave;
-        // this checks the client side: no throw, no timing, and the server still answers
-        await ctx.saveDocument(FILE);
+        const sendNotification = vi.spyOn(harness, 'sendNotification');
+        try {
+            await ctx.saveDocument(FILE);
+            await ctx.willSave(FILE);
+            expect(sendNotification).not.toHaveBeenCalled();
+        } finally {
+            sendNotification.mockRestore();
+        }
         expect(ctx.collectTimings()).toHaveLength(0);
+    });
+
+    it('times willSaveWaitUntil even though the server does not advertise it', async () => {
+        // Langium answers with no edits when it has no willSaveWaitUntil handler
+        const edits = await ctx.willSaveWaitUntil(FILE);
+        expectTimedSuccess(ctx, 'textDocument/willSaveWaitUntil');
+        expect(edits).toEqual([]);
 
         const highlights = (await ctx.documentHighlight(FILE, 11, 12)) as unknown[] | null;
         expect(highlights).toHaveLength(5);

@@ -26,6 +26,27 @@ export interface Diagnostic {
     [key: string]: unknown;
 }
 
+/** Which save related notifications the server wants, from static and dynamic registration */
+export interface SaveSyncOptions {
+    /** server wants textDocument/didSave */
+    didSave: boolean;
+    /** didSave should carry the full document text */
+    includeText: boolean;
+    /** server wants textDocument/willSave */
+    willSave: boolean;
+    /** server wants textDocument/willSaveWaitUntil */
+    willSaveWaitUntil: boolean;
+}
+
+interface Registration {
+    id: string;
+    method: string;
+    registerOptions?: unknown;
+}
+
+/** save related methods whose dynamic registrations we track */
+const SAVE_METHODS = new Set(['textDocument/didSave', 'textDocument/willSave', 'textDocument/willSaveWaitUntil']);
+
 /**
  * Manages a language server process and its JSON-RPC connection.
  */
@@ -35,6 +56,8 @@ export class LspHarness {
     private diagnosticsMap = new Map<string, Diagnostic[]>();
     private diagnosticsListeners = new Map<string, Array<(diags: Diagnostic[]) => void>>();
     private _capabilities: ServerCapabilities | null = null;
+    /** dynamic save registrations by registration id */
+    private saveRegistrations = new Map<string, Registration>();
     private verbose: boolean;
 
     constructor(
@@ -47,6 +70,24 @@ export class LspHarness {
 
     get capabilities(): ServerCapabilities | null {
         return this._capabilities;
+    }
+
+    /** Save related sync options, merging the static textDocumentSync capability with dynamic registrations */
+    saveSyncOptions(): SaveSyncOptions {
+        const options = staticSaveSyncOptions(this._capabilities?.textDocumentSync);
+        for (const reg of this.saveRegistrations.values()) {
+            if (reg.method === 'textDocument/didSave') {
+                options.didSave = true;
+                if (hasIncludeText(reg.registerOptions)) {
+                    options.includeText = true;
+                }
+            } else if (reg.method === 'textDocument/willSave') {
+                options.willSave = true;
+            } else if (reg.method === 'textDocument/willSaveWaitUntil') {
+                options.willSaveWaitUntil = true;
+            }
+        }
+        return options;
     }
 
     get conn(): rpc.MessageConnection {
@@ -153,13 +194,20 @@ export class LspHarness {
             this.connection.onRequest(method, () => null);
         }
 
-        // Handle client/registerCapability (dynamic registration)
-        this.connection.onRequest('client/registerCapability', () => {
-            return; // Accept all registrations
+        // accept all dynamic registrations, remembering save related ones
+        this.connection.onRequest('client/registerCapability', (params: { registrations?: Registration[] }) => {
+            for (const reg of params.registrations ?? []) {
+                if (SAVE_METHODS.has(reg.method)) {
+                    this.saveRegistrations.set(reg.id, reg);
+                }
+            }
         });
 
-        this.connection.onRequest('client/unregisterCapability', () => {
-            return;
+        // the LSP spec really does spell this field 'unregisterations'
+        this.connection.onRequest('client/unregisterCapability', (params: { unregisterations?: Registration[] }) => {
+            for (const reg of params.unregisterations ?? []) {
+                this.saveRegistrations.delete(reg.id);
+            }
         });
 
         // no user is present to pick an action, so dismiss the prompt
@@ -239,6 +287,7 @@ export class LspHarness {
         this.process = null;
         this.diagnosticsMap.clear();
         this.diagnosticsListeners.clear();
+        this.saveRegistrations.clear();
     }
 
     /** Get cached diagnostics for a URI */
@@ -428,6 +477,38 @@ export class LspHarness {
             },
         };
     }
+}
+
+/**
+ * Reads save options from a static textDocumentSync capability. A bare TextDocumentSyncKind
+ * number implies didSave without text, matching vscode-languageclient.
+ */
+function staticSaveSyncOptions(sync: unknown): SaveSyncOptions {
+    const options: SaveSyncOptions = { didSave: false, includeText: false, willSave: false, willSaveWaitUntil: false };
+    if (typeof sync === 'number') {
+        options.didSave = true;
+    } else if (typeof sync === 'object' && sync !== null) {
+        const { save, willSave, willSaveWaitUntil } = sync as {
+            save?: unknown;
+            willSave?: unknown;
+            willSaveWaitUntil?: unknown;
+        };
+        if (save === true) {
+            options.didSave = true;
+        } else if (typeof save === 'object' && save !== null) {
+            options.didSave = true;
+            options.includeText = hasIncludeText(save);
+        }
+        options.willSave = willSave === true;
+        options.willSaveWaitUntil = willSaveWaitUntil === true;
+    }
+    return options;
+}
+
+function hasIncludeText(options: unknown): boolean {
+    return (
+        typeof options === 'object' && options !== null && (options as { includeText?: unknown }).includeText === true
+    );
 }
 
 /** Convert an absolute file path to a file:// URI */
