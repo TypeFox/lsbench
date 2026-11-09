@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Diagnostic, LspHarness } from 'lsbench';
-import { BenchContextImpl } from 'lsbench';
+import { addRegisteredLanguage, BenchContextImpl } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 interface SentRequest {
@@ -83,6 +83,18 @@ describe('BenchContextImpl', () => {
             expect(params.textDocument.languageId).toBe('typescript');
             expect(params.textDocument.version).toBe(1);
             expect(params.textDocument.text).toContain('const x');
+        });
+
+        it('sends didOpen with the languageId of a registered custom extension', async () => {
+            // register with mixed case and no leading dot to exercise normalization
+            addRegisteredLanguage('minilogo', 'LoGo');
+            fs.writeFileSync(path.join(tmpDir, 'sample.LOGO'), 'pen down\n', 'utf-8');
+
+            await ctx.openDocument('sample.LOGO');
+
+            expect(harness.notifications).toHaveLength(1);
+            const params = harness.notifications[0].params as { textDocument: { languageId: string } };
+            expect(params.textDocument.languageId).toBe('minilogo');
         });
 
         it('is idempotent — opening the same document twice sends one didOpen', async () => {

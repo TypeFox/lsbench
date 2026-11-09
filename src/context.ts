@@ -484,11 +484,12 @@ const RegisteredLanguages: Record<string, string> = {
  * @param extension That should correlate with the given id (ex. `.ts`, or `.c`, or `.langium`)
  */
 export function addRegisteredLanguage(languageId: string, extension: string) {
-    extension = extension.trim();
+    // normalize to match detectLanguageId, which looks up lowercased extensions
+    extension = extension.trim().toLowerCase();
     if (!extension.startsWith('.')) {
         extension = '.' + extension;
     }
-    RegisteredLanguages[languageId] = extension;
+    RegisteredLanguages[extension] = languageId;
 }
 
 /**
