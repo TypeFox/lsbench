@@ -230,6 +230,11 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   prepareRename(path, line, char)         textDocument/prepareRename
   codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics)
   signatureHelp(path, line, char)         textDocument/signatureHelp
+  foldingRange(path)                      textDocument/foldingRange
+  selectionRange(path, positions)         textDocument/selectionRange (positions is an array of {line,character})
+  documentLink(path)                      textDocument/documentLink
+  codeLens(path)                          textDocument/codeLens
+  inlayHint(path, range)                  textDocument/inlayHint
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.

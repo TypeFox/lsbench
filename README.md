@@ -93,6 +93,11 @@ export default async function (ctx: BenchContext) {
 | `prepareRename(path, line, char)` | `textDocument/prepareRename` (timed) |
 | `codeAction(path, range, codes?)` | `textDocument/codeAction` (timed) |
 | `signatureHelp(path, line, char)` | `textDocument/signatureHelp` (timed) |
+| `foldingRange(path)` | `textDocument/foldingRange` (timed) |
+| `selectionRange(path, positions)` | `textDocument/selectionRange` (timed) |
+| `documentLink(path)` | `textDocument/documentLink` (timed) |
+| `codeLens(path)` | `textDocument/codeLens` (timed) |
+| `inlayHint(path, range)` | `textDocument/inlayHint` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |

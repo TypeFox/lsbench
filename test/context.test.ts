@@ -159,6 +159,79 @@ describe('BenchContextImpl', () => {
             });
         }
 
+        // document scoped requests that only take a text document identifier
+        const documentRequests = [
+            { name: 'foldingRange', method: 'textDocument/foldingRange' },
+            { name: 'documentLink', method: 'textDocument/documentLink' },
+            { name: 'codeLens', method: 'textDocument/codeLens' },
+        ] as const;
+
+        for (const { name, method } of documentRequests) {
+            it(`${name} issues ${method} with the document uri and records a timing`, async () => {
+                await ctx.openDocument('sample.ts');
+                const res = await ctx[name]('sample.ts');
+
+                expect(res).toEqual({ ok: true });
+                expect(harness.requests).toHaveLength(1);
+                const [req] = harness.requests;
+                expect(req.method).toBe(method);
+                expect(req.params).toEqual({
+                    textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                });
+
+                const timings = ctx.collectTimings();
+                expect(timings).toHaveLength(1);
+                expect(timings[0].method).toBe(method);
+                expect(timings[0].success).toBe(true);
+                expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+            });
+        }
+
+        it('selectionRange issues textDocument/selectionRange with the positions and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const positions = [
+                { line: 0, character: 6 },
+                { line: 0, character: 18 },
+            ];
+            const res = await ctx.selectionRange('sample.ts', positions);
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/selectionRange');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                positions,
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/selectionRange');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
+        it('inlayHint issues textDocument/inlayHint with the range and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const range = { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } };
+            const res = await ctx.inlayHint('sample.ts', range);
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/inlayHint');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                range,
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/inlayHint');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
         it('rangeFormatting issues textDocument/rangeFormatting with the range and options and records a timing', async () => {
             await ctx.openDocument('sample.ts');
             const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 20 } };

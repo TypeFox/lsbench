@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { type Diagnostic, type LspHarness, pathToUri } from './harness.js';
-import type { BenchContext, EditOperation, Range, RequestTiming } from './types.js';
+import type { BenchContext, EditOperation, Position, Range, RequestTiming } from './types.js';
 
 /**
  * Concrete implementation of BenchContext.
@@ -209,6 +209,38 @@ export class BenchContextImpl implements BenchContext {
         return this.timedRequest('textDocument/prepareRename', {
             textDocument: { uri: this.getUri(relativePath) },
             position: { line, character },
+        });
+    }
+
+    async foldingRange(relativePath: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/foldingRange', {
+            textDocument: { uri: this.getUri(relativePath) },
+        });
+    }
+
+    async selectionRange(relativePath: string, positions: Position[]): Promise<unknown | null> {
+        return this.timedRequest('textDocument/selectionRange', {
+            textDocument: { uri: this.getUri(relativePath) },
+            positions: positions.map((p) => ({ line: p.line, character: p.character })),
+        });
+    }
+
+    async documentLink(relativePath: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/documentLink', {
+            textDocument: { uri: this.getUri(relativePath) },
+        });
+    }
+
+    async codeLens(relativePath: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/codeLens', {
+            textDocument: { uri: this.getUri(relativePath) },
+        });
+    }
+
+    async inlayHint(relativePath: string, range: Range): Promise<unknown | null> {
+        return this.timedRequest('textDocument/inlayHint', {
+            textDocument: { uri: this.getUri(relativePath) },
+            range: toLspRange(range),
         });
     }
 

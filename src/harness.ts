@@ -321,6 +321,11 @@ export class LspHarness {
                         parameterInformation: { labelOffsetSupport: true },
                     },
                 },
+                foldingRange: { dynamicRegistration: true, lineFoldingOnly: false },
+                selectionRange: { dynamicRegistration: true },
+                documentLink: { dynamicRegistration: true, tooltipSupport: true },
+                codeLens: { dynamicRegistration: true },
+                inlayHint: { dynamicRegistration: true },
                 publishDiagnostics: {
                     relatedInformation: true,
                     tagSupport: { valueSet: [1, 2] },

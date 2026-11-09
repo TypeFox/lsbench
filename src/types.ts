@@ -136,6 +136,11 @@ export interface BenchContext {
     declaration(relativePath: string, line: number, character: number): Promise<unknown | null>;
     documentHighlight(relativePath: string, line: number, character: number): Promise<unknown | null>;
     prepareRename(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    foldingRange(relativePath: string): Promise<unknown | null>;
+    selectionRange(relativePath: string, positions: Position[]): Promise<unknown | null>;
+    documentLink(relativePath: string): Promise<unknown | null>;
+    codeLens(relativePath: string): Promise<unknown | null>;
+    inlayHint(relativePath: string, range: Range): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;
