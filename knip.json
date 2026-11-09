@@ -1,5 +1,6 @@
 {
     "$schema": "https://unpkg.com/knip@5/schema.json",
+    "entry": ["test-integration/langium-grammar-server.ts"],
     "ignore": ["examples/**", "demo/script.ts"],
     "ignoreBinaries": [],
     "vitest": {

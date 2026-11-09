@@ -91,3 +91,41 @@ describe('LspHarness server-to-client requests', () => {
         }
     });
 });
+
+/** a fake server that ignores SIGTERM and never exits on its own */
+const stubbornServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+process.on('SIGTERM', () => {});
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { pid: process.pid } }));
+conn.onRequest('shutdown', () => null);
+conn.listen();
+setInterval(() => {}, 1000);
+`;
+
+describe('LspHarness.stop', () => {
+    it('force kills a server that ignores SIGTERM', async () => {
+        const harness = new LspHarness(
+            { command: process.execPath, args: ['--input-type=module', '-e', stubbornServer] },
+            process.cwd(),
+        );
+        await harness.start();
+        const pid = harness.capabilities?.pid as number;
+        await harness.stop();
+
+        // signal 0 only probes for existence, and throws once the process is gone
+        let alive = true;
+        try {
+            process.kill(pid, 0);
+        } catch {
+            alive = false;
+        }
+        if (alive) {
+            process.kill(pid, 'SIGKILL');
+        }
+        expect(alive).toBe(false);
+    });
+});

@@ -217,20 +217,23 @@ export class LspHarness {
         this.connection.dispose();
         this.connection = null;
 
-        if (this.process && !this.process.killed) {
-            this.process.kill('SIGTERM');
-            // Give it a moment, then force kill
+        // `killed` only reports that a signal was sent, so check whether the process
+        // actually exited; otherwise a server ignoring SIGTERM is never force killed
+        const child = this.process;
+        const hasExited = () => child !== null && (child.exitCode !== null || child.signalCode !== null);
+        if (child && !hasExited()) {
             await new Promise<void>((resolve) => {
+                // give it a moment after SIGTERM, then force kill and wait for the exit
                 const timer = setTimeout(() => {
-                    if (this.process && !this.process.killed) {
-                        this.process.kill('SIGKILL');
+                    if (!hasExited()) {
+                        child.kill('SIGKILL');
                     }
-                    resolve();
                 }, 3000);
-                this.process?.on('exit', () => {
+                child.once('exit', () => {
                     clearTimeout(timer);
                     resolve();
                 });
+                child.kill('SIGTERM');
             });
         }
         this.process = null;
