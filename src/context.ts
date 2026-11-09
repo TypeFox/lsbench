@@ -174,6 +174,27 @@ export class BenchContextImpl implements BenchContext {
         });
     }
 
+    async declaration(relativePath: string, line: number, character: number): Promise<unknown | null> {
+        return this.timedRequest('textDocument/declaration', {
+            textDocument: { uri: this.getUri(relativePath) },
+            position: { line, character },
+        });
+    }
+
+    async documentHighlight(relativePath: string, line: number, character: number): Promise<unknown | null> {
+        return this.timedRequest('textDocument/documentHighlight', {
+            textDocument: { uri: this.getUri(relativePath) },
+            position: { line, character },
+        });
+    }
+
+    async prepareRename(relativePath: string, line: number, character: number): Promise<unknown | null> {
+        return this.timedRequest('textDocument/prepareRename', {
+            textDocument: { uri: this.getUri(relativePath) },
+            position: { line, character },
+        });
+    }
+
     // ── Document mutations ──────────────────────────────────────────────
 
     async edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void> {

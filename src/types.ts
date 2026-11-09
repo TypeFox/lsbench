@@ -131,6 +131,9 @@ export interface BenchContext {
     signatureHelp(relativePath: string, line: number, character: number): Promise<unknown | null>;
     typeDefinition(relativePath: string, line: number, character: number): Promise<unknown | null>;
     implementation(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    declaration(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    documentHighlight(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    prepareRename(relativePath: string, line: number, character: number): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

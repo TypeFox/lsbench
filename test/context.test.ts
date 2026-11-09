@@ -130,6 +130,35 @@ describe('BenchContextImpl', () => {
             expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
         });
 
+        // position based requests that share the same params shape
+        const positionRequests = [
+            { name: 'declaration', method: 'textDocument/declaration' },
+            { name: 'documentHighlight', method: 'textDocument/documentHighlight' },
+            { name: 'prepareRename', method: 'textDocument/prepareRename' },
+        ] as const;
+
+        for (const { name, method } of positionRequests) {
+            it(`${name} issues ${method} with the document uri and position and records a timing`, async () => {
+                await ctx.openDocument('sample.ts');
+                const res = await ctx[name]('sample.ts', 0, 6);
+
+                expect(res).toEqual({ ok: true });
+                expect(harness.requests).toHaveLength(1);
+                const [req] = harness.requests;
+                expect(req.method).toBe(method);
+                expect(req.params).toEqual({
+                    textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                    position: { line: 0, character: 6 },
+                });
+
+                const timings = ctx.collectTimings();
+                expect(timings).toHaveLength(1);
+                expect(timings[0].method).toBe(method);
+                expect(timings[0].success).toBe(true);
+                expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+            });
+        }
+
         it('references includes the declaration in its context', async () => {
             await ctx.references('sample.ts', 0, 6);
             const req = harness.requests.find((r) => r.method === 'textDocument/references');

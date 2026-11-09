@@ -281,9 +281,11 @@ export class LspHarness {
                     contextSupport: true,
                 },
                 definition: { dynamicRegistration: true, linkSupport: true },
+                declaration: { dynamicRegistration: true, linkSupport: true },
                 typeDefinition: { dynamicRegistration: true, linkSupport: true },
                 implementation: { dynamicRegistration: true, linkSupport: true },
                 references: { dynamicRegistration: true },
+                documentHighlight: { dynamicRegistration: true },
                 documentSymbol: {
                     dynamicRegistration: true,
                     hierarchicalDocumentSymbolSupport: true,

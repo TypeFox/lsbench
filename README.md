@@ -83,9 +83,12 @@ export default async function (ctx: BenchContext) {
 | `references(path, line, char)` | `textDocument/references` (timed) |
 | `typeDefinition(path, line, char)` | `textDocument/typeDefinition` (timed) |
 | `implementation(path, line, char)` | `textDocument/implementation` (timed) |
+| `declaration(path, line, char)` | `textDocument/declaration` (timed) |
+| `documentHighlight(path, line, char)` | `textDocument/documentHighlight` (timed) |
 | `documentSymbol(path)` | `textDocument/documentSymbol` (timed) |
 | `formatting(path)` | `textDocument/formatting` (timed) |
 | `rename(path, line, char, newName)` | `textDocument/rename` (timed) |
+| `prepareRename(path, line, char)` | `textDocument/prepareRename` (timed) |
 | `codeAction(path, range, codes?)` | `textDocument/codeAction` (timed) |
 | `signatureHelp(path, line, char)` | `textDocument/signatureHelp` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |

@@ -220,9 +220,12 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   references(path, line, char)            textDocument/references (includeDeclaration: true)
   typeDefinition(path, line, char)        textDocument/typeDefinition
   implementation(path, line, char)        textDocument/implementation
+  declaration(path, line, char)           textDocument/declaration
+  documentHighlight(path, line, char)     textDocument/documentHighlight
   documentSymbol(path)                    textDocument/documentSymbol
   formatting(path)                        textDocument/formatting (tabSize 2, spaces)
   rename(path, line, char, newName)       textDocument/rename
+  prepareRename(path, line, char)         textDocument/prepareRename
   codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics)
   signatureHelp(path, line, char)         textDocument/signatureHelp
 
