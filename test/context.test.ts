@@ -159,6 +159,50 @@ describe('BenchContextImpl', () => {
             });
         }
 
+        it('rangeFormatting issues textDocument/rangeFormatting with the range and options and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 20 } };
+            const res = await ctx.rangeFormatting('sample.ts', range);
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/rangeFormatting');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                range,
+                options: { tabSize: 2, insertSpaces: true },
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/rangeFormatting');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
+        it('onTypeFormatting issues textDocument/onTypeFormatting with the trigger character and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const res = await ctx.onTypeFormatting('sample.ts', 0, 20, ';');
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/onTypeFormatting');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                position: { line: 0, character: 20 },
+                ch: ';',
+                options: { tabSize: 2, insertSpaces: true },
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/onTypeFormatting');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
         it('references includes the declaration in its context', async () => {
             await ctx.references('sample.ts', 0, 6);
             const req = harness.requests.find((r) => r.method === 'textDocument/references');

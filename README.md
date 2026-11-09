@@ -87,6 +87,8 @@ export default async function (ctx: BenchContext) {
 | `documentHighlight(path, line, char)` | `textDocument/documentHighlight` (timed) |
 | `documentSymbol(path)` | `textDocument/documentSymbol` (timed) |
 | `formatting(path)` | `textDocument/formatting` (timed) |
+| `rangeFormatting(path, range)` | `textDocument/rangeFormatting` (timed) |
+| `onTypeFormatting(path, line, char, ch)` | `textDocument/onTypeFormatting` (timed) |
 | `rename(path, line, char, newName)` | `textDocument/rename` (timed) |
 | `prepareRename(path, line, char)` | `textDocument/prepareRename` (timed) |
 | `codeAction(path, range, codes?)` | `textDocument/codeAction` (timed) |

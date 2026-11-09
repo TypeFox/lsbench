@@ -294,6 +294,8 @@ export class LspHarness {
                     },
                 },
                 formatting: { dynamicRegistration: true },
+                rangeFormatting: { dynamicRegistration: true },
+                onTypeFormatting: { dynamicRegistration: true },
                 rename: { dynamicRegistration: true, prepareSupport: true },
                 codeAction: {
                     dynamicRegistration: true,

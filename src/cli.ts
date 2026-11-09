@@ -224,6 +224,8 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   documentHighlight(path, line, char)     textDocument/documentHighlight
   documentSymbol(path)                    textDocument/documentSymbol
   formatting(path)                        textDocument/formatting (tabSize 2, spaces)
+  rangeFormatting(path, range)            textDocument/rangeFormatting (tabSize 2, spaces)
+  onTypeFormatting(path, line, char, ch)  textDocument/onTypeFormatting (ch is the typed trigger character)
   rename(path, line, char, newName)       textDocument/rename
   prepareRename(path, line, char)         textDocument/prepareRename
   codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics)

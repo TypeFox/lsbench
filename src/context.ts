@@ -124,7 +124,24 @@ export class BenchContextImpl implements BenchContext {
     async formatting(relativePath: string): Promise<unknown | null> {
         return this.timedRequest('textDocument/formatting', {
             textDocument: { uri: this.getUri(relativePath) },
-            options: { tabSize: 2, insertSpaces: true },
+            options: FORMATTING_OPTIONS,
+        });
+    }
+
+    async rangeFormatting(relativePath: string, range: Range): Promise<unknown | null> {
+        return this.timedRequest('textDocument/rangeFormatting', {
+            textDocument: { uri: this.getUri(relativePath) },
+            range: toLspRange(range),
+            options: FORMATTING_OPTIONS,
+        });
+    }
+
+    async onTypeFormatting(relativePath: string, line: number, character: number, ch: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/onTypeFormatting', {
+            textDocument: { uri: this.getUri(relativePath) },
+            position: { line, character },
+            ch,
+            options: FORMATTING_OPTIONS,
         });
     }
 
@@ -291,6 +308,9 @@ export class BenchContextImpl implements BenchContext {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────
+
+/** formatting options shared by all formatting requests */
+const FORMATTING_OPTIONS = { tabSize: 2, insertSpaces: true };
 
 function toLspRange(range: Range): {
     start: { line: number; character: number };
