@@ -235,6 +235,9 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   documentLink(path)                      textDocument/documentLink
   codeLens(path)                          textDocument/codeLens
   inlayHint(path, range)                  textDocument/inlayHint
+  semanticTokensFull(path)                textDocument/semanticTokens/full
+  semanticTokensRange(path, range)        textDocument/semanticTokens/range
+  semanticTokensDelta(path, prevResultId) textDocument/semanticTokens/full/delta (prevResultId from a prior result)
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.

@@ -232,6 +232,66 @@ describe('BenchContextImpl', () => {
             expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
         });
 
+        it('semanticTokensFull issues textDocument/semanticTokens/full for the document and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const res = await ctx.semanticTokensFull('sample.ts');
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/semanticTokens/full');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/semanticTokens/full');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
+        it('semanticTokensRange issues textDocument/semanticTokens/range with the range and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const range = { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } };
+            const res = await ctx.semanticTokensRange('sample.ts', range);
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/semanticTokens/range');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                range,
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/semanticTokens/range');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
+        it('semanticTokensDelta issues textDocument/semanticTokens/full/delta with the previous result id and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const res = await ctx.semanticTokensDelta('sample.ts', 'result-1');
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/semanticTokens/full/delta');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                previousResultId: 'result-1',
+            });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/semanticTokens/full/delta');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
         it('rangeFormatting issues textDocument/rangeFormatting with the range and options and records a timing', async () => {
             await ctx.openDocument('sample.ts');
             const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 20 } };

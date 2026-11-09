@@ -141,6 +141,9 @@ export interface BenchContext {
     documentLink(relativePath: string): Promise<unknown | null>;
     codeLens(relativePath: string): Promise<unknown | null>;
     inlayHint(relativePath: string, range: Range): Promise<unknown | null>;
+    semanticTokensFull(relativePath: string): Promise<unknown | null>;
+    semanticTokensRange(relativePath: string, range: Range): Promise<unknown | null>;
+    semanticTokensDelta(relativePath: string, previousResultId: string): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

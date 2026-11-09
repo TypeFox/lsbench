@@ -98,6 +98,9 @@ export default async function (ctx: BenchContext) {
 | `documentLink(path)` | `textDocument/documentLink` (timed) |
 | `codeLens(path)` | `textDocument/codeLens` (timed) |
 | `inlayHint(path, range)` | `textDocument/inlayHint` (timed) |
+| `semanticTokensFull(path)` | `textDocument/semanticTokens/full` (timed) |
+| `semanticTokensRange(path, range)` | `textDocument/semanticTokens/range` (timed) |
+| `semanticTokensDelta(path, previousResultId)` | `textDocument/semanticTokens/full/delta` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |

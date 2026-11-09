@@ -244,6 +244,26 @@ export class BenchContextImpl implements BenchContext {
         });
     }
 
+    async semanticTokensFull(relativePath: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/semanticTokens/full', {
+            textDocument: { uri: this.getUri(relativePath) },
+        });
+    }
+
+    async semanticTokensRange(relativePath: string, range: Range): Promise<unknown | null> {
+        return this.timedRequest('textDocument/semanticTokens/range', {
+            textDocument: { uri: this.getUri(relativePath) },
+            range: toLspRange(range),
+        });
+    }
+
+    async semanticTokensDelta(relativePath: string, previousResultId: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/semanticTokens/full/delta', {
+            textDocument: { uri: this.getUri(relativePath) },
+            previousResultId,
+        });
+    }
+
     // ── Document mutations ──────────────────────────────────────────────
 
     async edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void> {
