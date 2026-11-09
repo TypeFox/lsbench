@@ -17,14 +17,14 @@ lsbench "typescript-language-server --stdio" \
 
 ## Installation
 
-lsbench is published to npm. Install it globally for the CLI:
+lsbench is published on npm. You can install it globally to get the CLI:
 
 ```bash
 npm install -g lsbench
 ```
 
-Or add it as a dependency to import the `BenchContext` API in your action
-scripts:
+Or, you can add it as a dependency to import the `BenchContext` API in your action
+scripts directly:
 
 ```bash
 npm install lsbench
@@ -33,7 +33,7 @@ npm install lsbench
 ## How it works
 
 lsbench spawns a language server process, performs the LSP
-initialize/initialized handshake, then runs your action script, which is a
+initialize/initialized handshake, then runs your action script. That script is a
 TypeScript file that drives a sequence of LSP requests
 against a target workspace.
 
@@ -44,7 +44,7 @@ a JSON report with per-method statistics and per-run breakdowns.
 
 An action script is a file that default-exports an async function
 receiving a `BenchContext`. The [`examples/`](examples) directory has a few
-starting points:
+starting points you can checkout:
 
 - [`examples/typescript-actions.ts`](examples/typescript-actions.ts): a fuller driver exercising hover, completion (with resolve), navigation, formatting, document structure, semantic tokens, workspace symbols, call and type hierarchy, edits, and saves.
 - [`examples/cold-start.ts`](examples/cold-start.ts): a minimal cold-start
@@ -52,7 +52,7 @@ starting points:
 - [`examples/custom-language.ts`](examples/custom-language.ts): benchmarking a non-mainstream language server (a Langium DSL) via `addRegisteredLanguage`.
 - [`examples/compare-servers.ts`](examples/compare-servers.ts): importing `runBenchmark` to compare two servers programmatically and diff the reports.
 
-A typical script looks like:
+A typical script looks akin to this:
 
 ```typescript
 import { BenchContext } from "lsbench";
@@ -73,7 +73,7 @@ export default async function (ctx: BenchContext) {
 
 ### BenchContext API
 
-Paths are relative to the workspace root, positions are zero based. Methods marked (timed) record a timing entry and return the raw LSP result, or `null` on failure. `ctx.workspaceRoot` holds the absolute workspace root path.
+The following paths should be considered relative to your workspace root, and their positions are zero based. Methods marked as `timed` record a timing entry and return the raw LSP result, or `null` on a failure. `ctx.workspaceRoot` holds the absolute workspace root path for reference.
 
 **Document lifecycle** (all but `openDocument` and `closeDocument` require an open document)
 
@@ -154,7 +154,7 @@ Paths are relative to the workspace root, positions are zero based. Methods mark
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
 | `notify(method, params)` | Arbitrary LSP notification |
 
-Call and type hierarchy requests take an item returned by the matching prepare call:
+Call and type hierarchy requests expect an item returned by the matching prepare call:
 
 ```ts
 const items = (await ctx.prepareCallHierarchy("src/index.ts", 10, 5)) as unknown[] | null;
@@ -164,7 +164,7 @@ if (items && items.length > 0) {
 }
 ```
 
-Resolve requests take an item returned by the matching request. The server only answers them when its provider advertises `resolveProvider: true`:
+Resolve requests take an item returned by the matching request. The server only answers when its provider advertises `resolveProvider: true`:
 
 ```ts
 const list = (await ctx.completion("src/index.ts", 15, 10)) as { items: unknown[] } | unknown[] | null;
@@ -184,13 +184,13 @@ lsbench advertises `resolveSupport` for completion items, code actions, inlay hi
 
 ### Server to client requests
 
-lsbench answers requests from the server so it never stalls waiting on a client:
+lsbench answers requests from the server so it doesn't get stuck waiting on a client:
 
 - `workspace/configuration` returns an empty object per item
 - `client/registerCapability` and `client/unregisterCapability` are accepted (save related registrations are tracked)
 - `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) and `window/workDoneProgress/create` are acknowledged
 - `window/showMessageRequest` is dismissed with `null`
-- `workspace/applyEdit` is declined with `applied: false`, lsbench never modifies the workspace
+- `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying thw workspace using server-initiated requests
 
 ### Registering languages
 
