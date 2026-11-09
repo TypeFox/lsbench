@@ -144,6 +144,7 @@ export interface BenchContext {
     semanticTokensFull(relativePath: string): Promise<unknown | null>;
     semanticTokensRange(relativePath: string, range: Range): Promise<unknown | null>;
     semanticTokensDelta(relativePath: string, previousResultId: string): Promise<unknown | null>;
+    workspaceSymbol(query: string): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

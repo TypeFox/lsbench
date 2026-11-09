@@ -238,6 +238,7 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   semanticTokensFull(path)                textDocument/semanticTokens/full
   semanticTokensRange(path, range)        textDocument/semanticTokens/range
   semanticTokensDelta(path, prevResultId) textDocument/semanticTokens/full/delta (prevResultId from a prior result)
+  workspaceSymbol(query)                  workspace/symbol (workspace-wide, no document needed)
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.

@@ -101,6 +101,7 @@ export default async function (ctx: BenchContext) {
 | `semanticTokensFull(path)` | `textDocument/semanticTokens/full` (timed) |
 | `semanticTokensRange(path, range)` | `textDocument/semanticTokens/range` (timed) |
 | `semanticTokensDelta(path, previousResultId)` | `textDocument/semanticTokens/full/delta` (timed) |
+| `workspaceSymbol(query)` | `workspace/symbol` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |

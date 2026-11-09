@@ -264,6 +264,10 @@ export class BenchContextImpl implements BenchContext {
         });
     }
 
+    async workspaceSymbol(query: string): Promise<unknown | null> {
+        return this.timedRequest('workspace/symbol', { query });
+    }
+
     // ── Document mutations ──────────────────────────────────────────────
 
     async edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void> {

@@ -292,6 +292,22 @@ describe('BenchContextImpl', () => {
             expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
         });
 
+        it('workspaceSymbol issues workspace/symbol with the query and records a timing', async () => {
+            const res = await ctx.workspaceSymbol('Foo');
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('workspace/symbol');
+            expect(req.params).toEqual({ query: 'Foo' });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('workspace/symbol');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
         it('rangeFormatting issues textDocument/rangeFormatting with the range and options and records a timing', async () => {
             await ctx.openDocument('sample.ts');
             const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 20 } };

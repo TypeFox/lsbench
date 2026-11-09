@@ -255,6 +255,7 @@ export class LspHarness {
                     symbolKind: {
                         valueSet: Array.from({ length: 26 }, (_, i) => i + 1),
                     },
+                    resolveSupport: { properties: ['location.range'] },
                 },
             },
             textDocument: {
