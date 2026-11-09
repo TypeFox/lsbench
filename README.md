@@ -1,5 +1,7 @@
 # lsbench
 
+[![npm version](https://img.shields.io/npm/v/lsbench.svg)](https://www.npmjs.com/package/lsbench)
+
 <img src="lsbench-icon.svg" alt="LSBench logo" width="178">
 
 Benchmark arbitrary language servers with scripted LSP actions.
