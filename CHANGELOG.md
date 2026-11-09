@@ -27,7 +27,7 @@ Adds most remaining LSP requests to `BenchContext`, server-aware save handling, 
 - `window/showMessageRequest` is dismissed with `null`, and `workspace/applyEdit` is declined with `applied: false`.
 - `client/unregisterCapability` is now handled.
 
-Previously these went unanswered, which could stall servers that wait on the response.
+Previously these were rejected with a JSON-RPC `MethodNotFound` error, which some servers log noisily or handle poorly.
 
 ### Client capabilities
 
