@@ -135,6 +135,8 @@ describe('BenchContextImpl', () => {
             { name: 'declaration', method: 'textDocument/declaration' },
             { name: 'documentHighlight', method: 'textDocument/documentHighlight' },
             { name: 'prepareRename', method: 'textDocument/prepareRename' },
+            { name: 'prepareCallHierarchy', method: 'textDocument/prepareCallHierarchy' },
+            { name: 'prepareTypeHierarchy', method: 'textDocument/prepareTypeHierarchy' },
         ] as const;
 
         for (const { name, method } of positionRequests) {
@@ -291,6 +293,39 @@ describe('BenchContextImpl', () => {
             expect(timings[0].success).toBe(true);
             expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
         });
+
+        // hierarchy requests that take a raw item from a prior prepare call
+        const hierarchyItemRequests = [
+            { name: 'callHierarchyIncomingCalls', method: 'callHierarchy/incomingCalls' },
+            { name: 'callHierarchyOutgoingCalls', method: 'callHierarchy/outgoingCalls' },
+            { name: 'typeHierarchySupertypes', method: 'typeHierarchy/supertypes' },
+            { name: 'typeHierarchySubtypes', method: 'typeHierarchy/subtypes' },
+        ] as const;
+
+        for (const { name, method } of hierarchyItemRequests) {
+            it(`${name} issues ${method} with the item and records a timing`, async () => {
+                const item = {
+                    name: 'x',
+                    kind: 13,
+                    uri: 'file:///sample.ts',
+                    range: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } },
+                    selectionRange: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } },
+                };
+                const res = await ctx[name](item);
+
+                expect(res).toEqual({ ok: true });
+                expect(harness.requests).toHaveLength(1);
+                const [req] = harness.requests;
+                expect(req.method).toBe(method);
+                expect(req.params).toEqual({ item });
+
+                const timings = ctx.collectTimings();
+                expect(timings).toHaveLength(1);
+                expect(timings[0].method).toBe(method);
+                expect(timings[0].success).toBe(true);
+                expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+            });
+        }
 
         it('workspaceSymbol issues workspace/symbol with the query and records a timing', async () => {
             const res = await ctx.workspaceSymbol('Foo');

@@ -327,6 +327,8 @@ export class LspHarness {
                 documentLink: { dynamicRegistration: true, tooltipSupport: true },
                 codeLens: { dynamicRegistration: true },
                 inlayHint: { dynamicRegistration: true },
+                callHierarchy: { dynamicRegistration: true },
+                typeHierarchy: { dynamicRegistration: true },
                 semanticTokens: {
                     dynamicRegistration: true,
                     requests: {

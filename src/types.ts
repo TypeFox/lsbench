@@ -145,6 +145,12 @@ export interface BenchContext {
     semanticTokensRange(relativePath: string, range: Range): Promise<unknown | null>;
     semanticTokensDelta(relativePath: string, previousResultId: string): Promise<unknown | null>;
     workspaceSymbol(query: string): Promise<unknown | null>;
+    prepareCallHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    callHierarchyIncomingCalls(item: unknown): Promise<unknown | null>;
+    callHierarchyOutgoingCalls(item: unknown): Promise<unknown | null>;
+    prepareTypeHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null>;
+    typeHierarchySupertypes(item: unknown): Promise<unknown | null>;
+    typeHierarchySubtypes(item: unknown): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

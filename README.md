@@ -102,11 +102,27 @@ export default async function (ctx: BenchContext) {
 | `semanticTokensRange(path, range)` | `textDocument/semanticTokens/range` (timed) |
 | `semanticTokensDelta(path, previousResultId)` | `textDocument/semanticTokens/full/delta` (timed) |
 | `workspaceSymbol(query)` | `workspace/symbol` (timed) |
+| `prepareCallHierarchy(path, line, char)` | `textDocument/prepareCallHierarchy` (timed) |
+| `callHierarchyIncomingCalls(item)` | `callHierarchy/incomingCalls` (timed) |
+| `callHierarchyOutgoingCalls(item)` | `callHierarchy/outgoingCalls` (timed) |
+| `prepareTypeHierarchy(path, line, char)` | `textDocument/prepareTypeHierarchy` (timed) |
+| `typeHierarchySupertypes(item)` | `typeHierarchy/supertypes` (timed) |
+| `typeHierarchySubtypes(item)` | `typeHierarchy/subtypes` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary timed LSP request |
 | `notify(method, params)` | Send any LSP notification |
+
+Call and type hierarchy requests take an item returned by the matching prepare call:
+
+```ts
+const items = (await ctx.prepareCallHierarchy("src/index.ts", 10, 5)) as unknown[] | null;
+if (items && items.length > 0) {
+  await ctx.callHierarchyIncomingCalls(items[0]);
+  await ctx.callHierarchyOutgoingCalls(items[0]);
+}
+```
 
 In some cases you may also need to register a language ID for a given extension.
 That's straightforward to do with `addRegisteredLanguage`, which will then impact all context related actions for documents with a matching extension.

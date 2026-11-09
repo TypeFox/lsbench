@@ -239,6 +239,12 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   semanticTokensRange(path, range)        textDocument/semanticTokens/range
   semanticTokensDelta(path, prevResultId) textDocument/semanticTokens/full/delta (prevResultId from a prior result)
   workspaceSymbol(query)                  workspace/symbol (workspace-wide, no document needed)
+  prepareCallHierarchy(path, line, char)  textDocument/prepareCallHierarchy (returns CallHierarchyItem[])
+  callHierarchyIncomingCalls(item)        callHierarchy/incomingCalls (item from prepareCallHierarchy)
+  callHierarchyOutgoingCalls(item)        callHierarchy/outgoingCalls (item from prepareCallHierarchy)
+  prepareTypeHierarchy(path, line, char)  textDocument/prepareTypeHierarchy (returns TypeHierarchyItem[])
+  typeHierarchySupertypes(item)           typeHierarchy/supertypes (item from prepareTypeHierarchy)
+  typeHierarchySubtypes(item)             typeHierarchy/subtypes (item from prepareTypeHierarchy)
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.

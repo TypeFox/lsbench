@@ -268,6 +268,36 @@ export class BenchContextImpl implements BenchContext {
         return this.timedRequest('workspace/symbol', { query });
     }
 
+    async prepareCallHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null> {
+        return this.timedRequest('textDocument/prepareCallHierarchy', {
+            textDocument: { uri: this.getUri(relativePath) },
+            position: { line, character },
+        });
+    }
+
+    async callHierarchyIncomingCalls(item: unknown): Promise<unknown | null> {
+        return this.timedRequest('callHierarchy/incomingCalls', { item });
+    }
+
+    async callHierarchyOutgoingCalls(item: unknown): Promise<unknown | null> {
+        return this.timedRequest('callHierarchy/outgoingCalls', { item });
+    }
+
+    async prepareTypeHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null> {
+        return this.timedRequest('textDocument/prepareTypeHierarchy', {
+            textDocument: { uri: this.getUri(relativePath) },
+            position: { line, character },
+        });
+    }
+
+    async typeHierarchySupertypes(item: unknown): Promise<unknown | null> {
+        return this.timedRequest('typeHierarchy/supertypes', { item });
+    }
+
+    async typeHierarchySubtypes(item: unknown): Promise<unknown | null> {
+        return this.timedRequest('typeHierarchy/subtypes', { item });
+    }
+
     // ── Document mutations ──────────────────────────────────────────────
 
     async edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void> {
