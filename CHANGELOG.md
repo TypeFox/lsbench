@@ -17,6 +17,7 @@ Adds many more LSP requests to `BenchContext`, plus a fix for `addRegisteredLang
 
 ### Fixes
 
+- `codeAction` diagnostic code filtering now also matches `data.code`, so quick fixes from servers like Langium that store their issue code in `data` can be triggered.
 - `addRegisteredLanguage` stored the extension mapping backwards (language id to extension instead of extension to language id). Extensions are now also lowercased to match `detectLanguageId`.
 
 ## v0.1.0

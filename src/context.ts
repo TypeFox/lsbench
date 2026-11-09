@@ -173,7 +173,7 @@ export class BenchContextImpl implements BenchContext {
     ): Promise<unknown | null> {
         const uri = this.getUri(relativePath);
         const diagnostics = diagnosticCodes
-            ? this.harness.getDiagnostics(uri).filter((d) => diagnosticCodes.includes(d.code as string | number))
+            ? filterDiagnosticsByCode(this.harness.getDiagnostics(uri), diagnosticCodes)
             : [];
 
         return this.timedRequest('textDocument/codeAction', {
@@ -430,6 +430,28 @@ function toLspRange(range: Range): {
         start: { line: range.start.line, character: range.start.character },
         end: { line: range.end.line, character: range.end.character },
     };
+}
+
+/**
+ * Keeps diagnostics whose `code` is in `codes`, falling back to `data.code`
+ * for servers (such as Langium) that carry their issue code in the opaque `data` payload.
+ */
+function filterDiagnosticsByCode(diagnostics: Diagnostic[], codes: (string | number)[]): Diagnostic[] {
+    const matched: Diagnostic[] = [];
+    for (const d of diagnostics) {
+        if (d.code !== undefined && codes.includes(d.code)) {
+            matched.push(d);
+            continue;
+        }
+        const data = d.data;
+        if (typeof data === 'object' && data !== null && 'code' in data) {
+            const dataCode = (data as { code: unknown }).code;
+            if ((typeof dataCode === 'string' || typeof dataCode === 'number') && codes.includes(dataCode)) {
+                matched.push(d);
+            }
+        }
+    }
+    return matched;
 }
 
 /**

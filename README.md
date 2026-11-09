@@ -92,7 +92,7 @@ export default async function (ctx: BenchContext) {
 | `onTypeFormatting(path, line, char, ch)` | `textDocument/onTypeFormatting` (timed) |
 | `rename(path, line, char, newName)` | `textDocument/rename` (timed) |
 | `prepareRename(path, line, char)` | `textDocument/prepareRename` (timed) |
-| `codeAction(path, range, codes?)` | `textDocument/codeAction` (timed) |
+| `codeAction(path, range, codes?)` | `textDocument/codeAction` (timed). `codes` selects cached diagnostics by `code`, falling back to `data.code` (as used by Langium) |
 | `signatureHelp(path, line, char)` | `textDocument/signatureHelp` (timed) |
 | `foldingRange(path)` | `textDocument/foldingRange` (timed) |
 | `selectionRange(path, positions)` | `textDocument/selectionRange` (timed) |

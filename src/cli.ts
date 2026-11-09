@@ -229,7 +229,7 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   onTypeFormatting(path, line, char, ch)  textDocument/onTypeFormatting (ch is the typed trigger character)
   rename(path, line, char, newName)       textDocument/rename
   prepareRename(path, line, char)         textDocument/prepareRename
-  codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics)
+  codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics by code, falling back to data.code)
   signatureHelp(path, line, char)         textDocument/signatureHelp
   foldingRange(path)                      textDocument/foldingRange
   selectionRange(path, positions)         textDocument/selectionRange (positions is an array of {line,character})

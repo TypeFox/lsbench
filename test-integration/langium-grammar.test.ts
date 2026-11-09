@@ -243,34 +243,18 @@ describe('langium grammar language server (integration)', () => {
         });
     });
 
-    it('answers code actions, and offers a quickfix when given the raw diagnostic', async () => {
+    it('offers the uppercase quickfix when filtering by the data.code issue code', async () => {
         const range = initialDiagnostics[0].range;
         ctx.collectTimings();
-        // Langium carries its issue code in `data.code` rather than `code`, so this
-        // filter matches nothing and no diagnostics are forwarded to the server
-        const filtered = await ctx.codeAction(FILE, range, ['rule-name-uppercase']);
-        expectTimedSuccess(ctx, 'textDocument/codeAction');
-        expect(filtered).toEqual([]);
-
-        // sending the published diagnostic through `request` yields the quickfix
-        const actions = await ctx.request<Array<{
+        const actions = (await ctx.codeAction(FILE, range, ['rule-name-uppercase'])) as Array<{
             title: string;
             kind: string;
             edit: { changes: Record<string, TextEdit[]> };
-        }> | null>(
-            'textDocument/codeAction',
-            {
-                textDocument: { uri: `file://${path.join(workspaceDir, FILE)}` },
-                range,
-                context: { diagnostics: initialDiagnostics },
-            },
-            'quickfix',
-        );
-        const timing = timingFor(ctx, 'textDocument/codeAction');
-        expect(timing?.label).toBe('quickfix');
-        expect(timing?.success, timing?.error).toBe(true);
+        }> | null;
+        expectTimedSuccess(ctx, 'textDocument/codeAction');
 
         expect(actions).toHaveLength(1);
+        expect(actions?.[0].title).toBe('First letter to upper case');
         expect(actions?.[0].kind).toBe('quickfix');
         const edits = Object.values(actions?.[0].edit.changes ?? {})[0];
         expect(edits).toEqual([

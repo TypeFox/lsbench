@@ -497,6 +497,41 @@ describe('BenchContextImpl', () => {
             expect(params.context.diagnostics.map((d) => d.code)).toEqual([2322, 'no-unused']);
         });
 
+        describe('codeAction diagnostic matching', () => {
+            const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
+
+            async function sentDiagnostics(diagnostics: Diagnostic[], codes: (string | number)[]): Promise<string[]> {
+                harness.setDiagnostics(`file://${path.resolve(tmpDir, 'sample.ts')}`, diagnostics);
+                await ctx.codeAction('sample.ts', range, codes);
+                const req = harness.requests.find((r) => r.method === 'textDocument/codeAction');
+                const params = req?.params as { context: { diagnostics: Diagnostic[] } };
+                return params.context.diagnostics.map((d) => d.message);
+            }
+
+            it('matches via code', async () => {
+                expect(await sentDiagnostics([{ range: {}, message: 'a', code: 'x' }], ['x'])).toEqual(['a']);
+            });
+
+            it('matches via data.code', async () => {
+                const diagnostics = [{ range: {}, message: 'a', data: { code: 'rule-name-uppercase' } }];
+                expect(await sentDiagnostics(diagnostics, ['rule-name-uppercase'])).toEqual(['a']);
+            });
+
+            it('matches nothing when neither code nor data.code is requested', async () => {
+                const diagnostics = [{ range: {}, message: 'a', code: 'x', data: { code: 'y' } }];
+                expect(await sentDiagnostics(diagnostics, ['z'])).toEqual([]);
+            });
+
+            it('ignores data that is not an object', async () => {
+                const diagnostics = [
+                    { range: {}, message: 'a', data: 'rule-name-uppercase' },
+                    { range: {}, message: 'b', data: null },
+                    { range: {}, message: 'c', data: 42 },
+                ];
+                expect(await sentDiagnostics(diagnostics, ['rule-name-uppercase', 42])).toEqual([]);
+            });
+        });
+
         it('records a failed timing when the request rejects', async () => {
             harness.failMethods.add('textDocument/definition');
             const res = await ctx.definition('sample.ts', 0, 6);
