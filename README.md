@@ -111,6 +111,12 @@ export default async function (ctx: BenchContext) {
 | `typeHierarchySubtypes(item)` | `typeHierarchy/subtypes` (timed) |
 | `documentDiagnostic(path, previousResultId?)` | `textDocument/diagnostic` (timed) |
 | `workspaceDiagnostic(previousResultIds?)` | `workspace/diagnostic` (timed) |
+| `completionItemResolve(item)` | `completionItem/resolve` (timed) |
+| `codeLensResolve(codeLens)` | `codeLens/resolve` (timed) |
+| `inlayHintResolve(hint)` | `inlayHint/resolve` (timed) |
+| `codeActionResolve(action)` | `codeAction/resolve` (timed) |
+| `documentLinkResolve(link)` | `documentLink/resolve` (timed) |
+| `workspaceSymbolResolve(symbol)` | `workspaceSymbol/resolve` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |
@@ -126,6 +132,18 @@ if (items && items.length > 0) {
   await ctx.callHierarchyOutgoingCalls(items[0]);
 }
 ```
+
+Resolve requests take an item returned by the matching request and send it back as is:
+
+```ts
+const list = (await ctx.completion("src/index.ts", 15, 10)) as { items: unknown[] } | unknown[] | null;
+const items = Array.isArray(list) ? list : (list?.items ?? []);
+if (items.length > 0) {
+  await ctx.completionItemResolve(items[0]);
+}
+```
+
+The server only answers these when its provider advertises `resolveProvider: true`.
 
 `documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider` in their capabilities. lsbench does not advertise the `textDocument.diagnostic` client capability, since some servers would then stop pushing diagnostics and break `waitForDiagnostics`.
 

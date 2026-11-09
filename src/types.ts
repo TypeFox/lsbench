@@ -154,6 +154,12 @@ export interface BenchContext {
     typeHierarchySubtypes(item: unknown): Promise<unknown | null>;
     documentDiagnostic(relativePath: string, previousResultId?: string): Promise<unknown | null>;
     workspaceDiagnostic(previousResultIds?: { uri: string; value: string }[]): Promise<unknown | null>;
+    completionItemResolve(item: unknown): Promise<unknown | null>;
+    codeLensResolve(codeLens: unknown): Promise<unknown | null>;
+    inlayHintResolve(hint: unknown): Promise<unknown | null>;
+    codeActionResolve(action: unknown): Promise<unknown | null>;
+    documentLinkResolve(link: unknown): Promise<unknown | null>;
+    workspaceSymbolResolve(symbol: unknown): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

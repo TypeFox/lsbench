@@ -322,6 +322,31 @@ export class BenchContextImpl implements BenchContext {
         return this.timedRequest('workspace/diagnostic', { previousResultIds });
     }
 
+    // resolve requests send the raw item from a prior request as the params, unwrapped
+    async completionItemResolve(item: unknown): Promise<unknown | null> {
+        return this.timedRequest('completionItem/resolve', item);
+    }
+
+    async codeLensResolve(codeLens: unknown): Promise<unknown | null> {
+        return this.timedRequest('codeLens/resolve', codeLens);
+    }
+
+    async inlayHintResolve(hint: unknown): Promise<unknown | null> {
+        return this.timedRequest('inlayHint/resolve', hint);
+    }
+
+    async codeActionResolve(action: unknown): Promise<unknown | null> {
+        return this.timedRequest('codeAction/resolve', action);
+    }
+
+    async documentLinkResolve(link: unknown): Promise<unknown | null> {
+        return this.timedRequest('documentLink/resolve', link);
+    }
+
+    async workspaceSymbolResolve(symbol: unknown): Promise<unknown | null> {
+        return this.timedRequest('workspaceSymbol/resolve', symbol);
+    }
+
     // ── Document mutations ──────────────────────────────────────────────
 
     async edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void> {

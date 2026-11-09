@@ -350,6 +350,8 @@ export class LspHarness {
                             ],
                         },
                     },
+                    dataSupport: true,
+                    resolveSupport: { properties: ['edit'] },
                 },
                 signatureHelp: {
                     dynamicRegistration: true,
@@ -362,7 +364,12 @@ export class LspHarness {
                 selectionRange: { dynamicRegistration: true },
                 documentLink: { dynamicRegistration: true, tooltipSupport: true },
                 codeLens: { dynamicRegistration: true },
-                inlayHint: { dynamicRegistration: true },
+                inlayHint: {
+                    dynamicRegistration: true,
+                    resolveSupport: {
+                        properties: ['tooltip', 'textEdits', 'label.tooltip', 'label.location', 'label.command'],
+                    },
+                },
                 callHierarchy: { dynamicRegistration: true },
                 typeHierarchy: { dynamicRegistration: true },
                 semanticTokens: {

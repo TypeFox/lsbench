@@ -471,6 +471,11 @@ describe('langium grammar language server (integration)', () => {
         }
         const semantic = caps?.semanticTokensProvider as { full?: { delta?: boolean } };
         expect(semantic.full?.delta).toBeFalsy();
+        // advertised providers without resolve support (codeActionProvider is a bare `true`)
+        for (const key of ['completionProvider', 'codeActionProvider', 'workspaceSymbolProvider']) {
+            const provider = caps?.[key] as { resolveProvider?: boolean } | boolean | undefined;
+            expect(typeof provider === 'object' && provider.resolveProvider, `${key}.resolveProvider`).toBeFalsy();
+        }
     });
 
     // missing capability: declarationProvider is false
@@ -493,4 +498,16 @@ describe('langium grammar language server (integration)', () => {
     it.skip('inlayHint');
     // missing capability: no diagnosticProvider (the grammar server only pushes diagnostics)
     it.skip('documentDiagnostic / workspaceDiagnostic');
+    // missing capability: completionProvider has no resolveProvider
+    it.skip('completionItemResolve');
+    // missing capability: codeActionProvider is `true`, without resolveProvider
+    it.skip('codeActionResolve');
+    // missing capability: workspaceSymbolProvider.resolveProvider is false
+    it.skip('workspaceSymbolResolve');
+    // missing capability: no codeLensProvider
+    it.skip('codeLensResolve');
+    // missing capability: no documentLinkProvider
+    it.skip('documentLinkResolve');
+    // missing capability: no inlayHintProvider
+    it.skip('inlayHintResolve');
 });

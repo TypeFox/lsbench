@@ -357,6 +357,54 @@ describe('BenchContextImpl', () => {
             });
         }
 
+        // resolve requests that send the raw item from a prior request as the params
+        const resolveRequests = [
+            { name: 'completionItemResolve', method: 'completionItem/resolve', item: { label: 'x', data: { id: 1 } } },
+            {
+                name: 'codeLensResolve',
+                method: 'codeLens/resolve',
+                item: { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, data: 1 },
+            },
+            {
+                name: 'inlayHintResolve',
+                method: 'inlayHint/resolve',
+                item: { position: { line: 0, character: 7 }, label: ': number', data: 1 },
+            },
+            {
+                name: 'codeActionResolve',
+                method: 'codeAction/resolve',
+                item: { title: 'Fix it', kind: 'quickfix', data: 1 },
+            },
+            {
+                name: 'documentLinkResolve',
+                method: 'documentLink/resolve',
+                item: { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, data: 1 },
+            },
+            {
+                name: 'workspaceSymbolResolve',
+                method: 'workspaceSymbol/resolve',
+                item: { name: 'x', kind: 13, location: { uri: 'file:///sample.ts' } },
+            },
+        ] as const;
+
+        for (const { name, method, item } of resolveRequests) {
+            it(`${name} issues ${method} with the item as the params and records a timing`, async () => {
+                const res = await ctx[name](item);
+
+                expect(res).toEqual({ ok: true });
+                expect(harness.requests).toHaveLength(1);
+                const [req] = harness.requests;
+                expect(req.method).toBe(method);
+                expect(req.params).toEqual(item);
+
+                const timings = ctx.collectTimings();
+                expect(timings).toHaveLength(1);
+                expect(timings[0].method).toBe(method);
+                expect(timings[0].success).toBe(true);
+                expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+            });
+        }
+
         it('documentDiagnostic issues textDocument/diagnostic without previousResultId when omitted and records a timing', async () => {
             await ctx.openDocument('sample.ts');
             const res = await ctx.documentDiagnostic('sample.ts');

@@ -248,6 +248,12 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   typeHierarchySubtypes(item)             typeHierarchy/subtypes (item from prepareTypeHierarchy)
   documentDiagnostic(path, prevResultId?) textDocument/diagnostic (needs a server with diagnosticProvider)
   workspaceDiagnostic(prevResultIds?)     workspace/diagnostic (prevResultIds is [{uri,value}], default [])
+  completionItemResolve(item)             completionItem/resolve (item from completion, sent as the params)
+  codeLensResolve(codeLens)               codeLens/resolve (codeLens from codeLens, sent as the params)
+  inlayHintResolve(hint)                  inlayHint/resolve (hint from inlayHint, sent as the params)
+  codeActionResolve(action)               codeAction/resolve (action from codeAction, sent as the params)
+  documentLinkResolve(link)               documentLink/resolve (link from documentLink, sent as the params)
+  workspaceSymbolResolve(symbol)          workspaceSymbol/resolve (symbol from workspaceSymbol, sent as the params)
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.
