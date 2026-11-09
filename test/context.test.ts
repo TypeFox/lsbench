@@ -100,6 +100,24 @@ describe('BenchContextImpl', () => {
             expect(harness.notifications.some((n) => n.method === 'textDocument/didClose')).toBe(true);
         });
 
+        it('saveDocument throws when the document is not open', async () => {
+            await expect(ctx.saveDocument('sample.ts')).rejects.toThrow(/is not open/);
+            expect(harness.notifications).toHaveLength(0);
+        });
+
+        it('saveDocument sends an untimed didSave for an open document', async () => {
+            await ctx.openDocument('sample.ts');
+            await ctx.saveDocument('sample.ts');
+
+            expect(harness.notifications).toHaveLength(2);
+            expect(harness.notifications[1]).toEqual({
+                method: 'textDocument/didSave',
+                params: { textDocument: { uri: expect.stringMatching(/sample\.ts$/) } },
+            });
+            expect(harness.requests).toHaveLength(0);
+            expect(ctx.collectTimings()).toHaveLength(0);
+        });
+
         it('resetDocuments closes every open document and clears state', async () => {
             await ctx.openDocument('sample.ts');
             await ctx.resetDocuments();
@@ -326,6 +344,61 @@ describe('BenchContextImpl', () => {
                 expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
             });
         }
+
+        it('documentDiagnostic issues textDocument/diagnostic without previousResultId when omitted and records a timing', async () => {
+            await ctx.openDocument('sample.ts');
+            const res = await ctx.documentDiagnostic('sample.ts');
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('textDocument/diagnostic');
+            expect(req.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+            });
+            expect(req.params).not.toHaveProperty('previousResultId');
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('textDocument/diagnostic');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
+        it('documentDiagnostic passes the previous result id when given', async () => {
+            await ctx.openDocument('sample.ts');
+            await ctx.documentDiagnostic('sample.ts', 'result-1');
+
+            expect(harness.requests).toHaveLength(1);
+            expect(harness.requests[0].params).toEqual({
+                textDocument: { uri: expect.stringMatching(/sample\.ts$/) },
+                previousResultId: 'result-1',
+            });
+        });
+
+        it('workspaceDiagnostic issues workspace/diagnostic with empty previousResultIds by default and records a timing', async () => {
+            const res = await ctx.workspaceDiagnostic();
+
+            expect(res).toEqual({ ok: true });
+            expect(harness.requests).toHaveLength(1);
+            const [req] = harness.requests;
+            expect(req.method).toBe('workspace/diagnostic');
+            expect(req.params).toEqual({ previousResultIds: [] });
+
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0].method).toBe('workspace/diagnostic');
+            expect(timings[0].success).toBe(true);
+            expect(timings[0].duration_ms).toBeGreaterThanOrEqual(0);
+        });
+
+        it('workspaceDiagnostic passes the given previousResultIds', async () => {
+            const previousResultIds = [{ uri: 'file:///sample.ts', value: 'result-1' }];
+            await ctx.workspaceDiagnostic(previousResultIds);
+
+            expect(harness.requests).toHaveLength(1);
+            expect(harness.requests[0].params).toEqual({ previousResultIds });
+        });
 
         it('workspaceSymbol issues workspace/symbol with the query and records a timing', async () => {
             const res = await ctx.workspaceSymbol('Foo');

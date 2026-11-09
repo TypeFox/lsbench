@@ -136,6 +136,11 @@ export class LspHarness {
             return params.items.map(() => ({}));
         });
 
+        // acknowledge pull diagnostic refresh requests, we never cache pulled results
+        this.connection.onRequest('workspace/diagnostic/refresh', () => {
+            return;
+        });
+
         // Handle client/registerCapability (dynamic registration)
         this.connection.onRequest('client/registerCapability', () => {
             return; // Accept all registrations
@@ -376,6 +381,8 @@ export class LspHarness {
                     overlappingTokenSupport: false,
                     multilineTokenSupport: false,
                 },
+                // textDocument.diagnostic is intentionally not advertised: some servers switch
+                // from push to pull diagnostics when it is present, which breaks waitForDiagnostics
                 publishDiagnostics: {
                     relatedInformation: true,
                     tagSupport: { valueSet: [1, 2] },

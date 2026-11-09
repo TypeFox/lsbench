@@ -118,6 +118,7 @@ export interface BenchContext {
     // ── Document lifecycle ──────────────────────────────────────────────
     openDocument(relativePath: string): Promise<void>;
     closeDocument(relativePath: string): Promise<void>;
+    saveDocument(relativePath: string): Promise<void>;
 
     // ── Timed LSP requests ──────────────────────────────────────────────
     hover(relativePath: string, line: number, character: number): Promise<unknown | null>;
@@ -151,6 +152,8 @@ export interface BenchContext {
     prepareTypeHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null>;
     typeHierarchySupertypes(item: unknown): Promise<unknown | null>;
     typeHierarchySubtypes(item: unknown): Promise<unknown | null>;
+    documentDiagnostic(relativePath: string, previousResultId?: string): Promise<unknown | null>;
+    workspaceDiagnostic(previousResultIds?: { uri: string; value: string }[]): Promise<unknown | null>;
 
     // ── Document mutations ──────────────────────────────────────────────
     edit(relativePath: string, edits: EditOperation | EditOperation[]): Promise<void>;

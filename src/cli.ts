@@ -212,6 +212,7 @@ The object passed to your script. Import its type from 'lsbench'. Methods marked
 Document lifecycle
   openDocument(path)                      textDocument/didOpen  — must be called before requests on a file
   closeDocument(path)                     textDocument/didClose
+  saveDocument(path)                      textDocument/didSave (throws if the document is not open)
 
 Timed LSP requests  (return the raw LSP result, or null on failure)
   hover(path, line, char)                 textDocument/hover
@@ -245,6 +246,8 @@ Timed LSP requests  (return the raw LSP result, or null on failure)
   prepareTypeHierarchy(path, line, char)  textDocument/prepareTypeHierarchy (returns TypeHierarchyItem[])
   typeHierarchySupertypes(item)           typeHierarchy/supertypes (item from prepareTypeHierarchy)
   typeHierarchySubtypes(item)             typeHierarchy/subtypes (item from prepareTypeHierarchy)
+  documentDiagnostic(path, prevResultId?) textDocument/diagnostic (needs a server with diagnosticProvider)
+  workspaceDiagnostic(prevResultIds?)     workspace/diagnostic (prevResultIds is [{uri,value}], default [])
 
 Mutations
   edit(path, edits)                       textDocument/didChange — edits is an EditOperation or array of them.

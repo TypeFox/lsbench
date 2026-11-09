@@ -84,6 +84,19 @@ export class BenchContextImpl implements BenchContext {
         this.log(`Closed ${relativePath}`);
     }
 
+    async saveDocument(relativePath: string): Promise<void> {
+        const doc = this.openDocuments.get(relativePath);
+        if (!doc) {
+            throw new Error(`Document ${relativePath} is not open. Call openDocument() first.`);
+        }
+
+        this.harness.sendNotification('textDocument/didSave', {
+            textDocument: { uri: doc.uri },
+        });
+
+        this.log(`Saved ${relativePath}`);
+    }
+
     // ── Timed LSP requests ──────────────────────────────────────────────
 
     async hover(relativePath: string, line: number, character: number): Promise<unknown | null> {
@@ -296,6 +309,17 @@ export class BenchContextImpl implements BenchContext {
 
     async typeHierarchySubtypes(item: unknown): Promise<unknown | null> {
         return this.timedRequest('typeHierarchy/subtypes', { item });
+    }
+
+    async documentDiagnostic(relativePath: string, previousResultId?: string): Promise<unknown | null> {
+        return this.timedRequest('textDocument/diagnostic', {
+            textDocument: { uri: this.getUri(relativePath) },
+            ...(previousResultId !== undefined ? { previousResultId } : {}),
+        });
+    }
+
+    async workspaceDiagnostic(previousResultIds: { uri: string; value: string }[] = []): Promise<unknown | null> {
+        return this.timedRequest('workspace/diagnostic', { previousResultIds });
     }
 
     // ── Document mutations ──────────────────────────────────────────────

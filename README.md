@@ -77,6 +77,7 @@ export default async function (ctx: BenchContext) {
 | --- | --- |
 | `openDocument(path)` | Send `textDocument/didOpen` |
 | `closeDocument(path)` | Send `textDocument/didClose` |
+| `saveDocument(path)` | Send `textDocument/didSave` (document must be open) |
 | `hover(path, line, char)` | `textDocument/hover` (timed) |
 | `completion(path, line, char)` | `textDocument/completion` (timed) |
 | `definition(path, line, char)` | `textDocument/definition` (timed) |
@@ -108,6 +109,8 @@ export default async function (ctx: BenchContext) {
 | `prepareTypeHierarchy(path, line, char)` | `textDocument/prepareTypeHierarchy` (timed) |
 | `typeHierarchySupertypes(item)` | `typeHierarchy/supertypes` (timed) |
 | `typeHierarchySubtypes(item)` | `typeHierarchy/subtypes` (timed) |
+| `documentDiagnostic(path, previousResultId?)` | `textDocument/diagnostic` (timed) |
+| `workspaceDiagnostic(previousResultIds?)` | `workspace/diagnostic` (timed) |
 | `edit(path, edits)` | Send `textDocument/didChange` |
 | `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` |
 | `sleep(ms)` | Pause execution |
@@ -123,6 +126,8 @@ if (items && items.length > 0) {
   await ctx.callHierarchyOutgoingCalls(items[0]);
 }
 ```
+
+`documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider` in their capabilities. lsbench does not advertise the `textDocument.diagnostic` client capability, since some servers would then stop pushing diagnostics and break `waitForDiagnostics`.
 
 In some cases you may also need to register a language ID for a given extension.
 That's straightforward to do with `addRegisteredLanguage`, which will then impact all context related actions for documents with a matching extension.
