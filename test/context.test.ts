@@ -1,8 +1,17 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Diagnostic, EditOperation, LspHarness, Registration, SaveSyncOptions, ServerCapabilities } from 'lsbench';
-import { addRegisteredLanguage, BenchContextImpl, classifyResult } from 'lsbench';
+import type {
+    Diagnostic,
+    DiagnosticsPublish,
+    DocumentSyncState,
+    EditOperation,
+    LspHarness,
+    Registration,
+    SaveSyncOptions,
+    ServerCapabilities,
+} from 'lsbench';
+import { addRegisteredLanguage, BenchContextImpl, classifyResult, DiagnosticsTracker } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 interface SentRequest {
@@ -23,7 +32,9 @@ interface SentNotification {
 class FakeHarness {
     requests: SentRequest[] = [];
     notifications: SentNotification[] = [];
-    private diagnostics = new Map<string, Diagnostic[]>();
+    /** the real tracker, fed by sent notifications and simulated publishes */
+    tracker = new DiagnosticsTracker((msg) => this.logs.push(msg));
+    logs: string[] = [];
     /** methods that should reject when requested */
     failMethods = new Set<string>();
     response: unknown = { ok: true };
@@ -49,18 +60,32 @@ class FakeHarness {
 
     sendNotification(method: string, params: unknown): void {
         this.notifications.push({ method, params });
+        this.tracker.noteNotification(method, params);
     }
 
     getDiagnostics(uri: string): Diagnostic[] {
-        return this.diagnostics.get(uri) ?? [];
+        return this.tracker.latestPublish(uri)?.diagnostics ?? [];
     }
 
-    setDiagnostics(uri: string, diags: Diagnostic[]): void {
-        this.diagnostics.set(uri, diags);
+    /** simulate the server publishing diagnostics */
+    setDiagnostics(uri: string, diags: Diagnostic[], version?: number): void {
+        this.tracker.receive({ uri, diagnostics: diags, ...(version !== undefined ? { version } : {}) });
     }
 
-    onDiagnostics(uri: string, _timeoutMs: number): Promise<Diagnostic[]> {
-        return Promise.resolve(this.diagnostics.get(uri) ?? []);
+    documentState(uri: string): DocumentSyncState | undefined {
+        return this.tracker.document(uri);
+    }
+
+    currentPublishSeq(): number {
+        return this.tracker.currentSeq();
+    }
+
+    waitForPublish(
+        uri: string,
+        accept: (publish: DiagnosticsPublish) => boolean,
+        timeoutMs: number,
+    ): Promise<DiagnosticsPublish | undefined> {
+        return this.tracker.waitFor(uri, accept, timeoutMs);
     }
 
     saveSyncOptions(): SaveSyncOptions {
@@ -994,12 +1019,108 @@ describe('BenchContextImpl', () => {
             expect(harness.notifications).toContainEqual({ method: '$/setTrace', params: { value: 'verbose' } });
         });
 
-        it('waitForDiagnostics returns cached diagnostics for the document uri', async () => {
-            const uri = `file://${path.resolve(tmpDir, 'sample.ts')}`;
-            harness.setDiagnostics(uri, [{ range: {}, message: 'oops' }]);
-            const diags = await ctx.waitForDiagnostics('sample.ts');
-            expect(diags).toHaveLength(1);
-            expect(diags[0].message).toBe('oops');
+        describe('version aware waits', () => {
+            let uri: string;
+            const diag = (message: string): Diagnostic => ({ range: {}, message });
+
+            beforeEach(() => {
+                uri = `file://${path.resolve(tmpDir, 'sample.ts')}`;
+            });
+
+            /** resolves with the wait's diagnostics, or 'pending' if it has not settled within a tick */
+            async function settledWithin(wait: Promise<Diagnostic[]>, ms = 20): Promise<Diagnostic[] | 'pending'> {
+                return Promise.race([wait, new Promise<'pending'>((r) => setTimeout(() => r('pending'), ms))]);
+            }
+
+            it('resolves at once when the publish arrived before the wait was registered', async () => {
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, [diag('early')]);
+                const start = Date.now();
+                const diags = await ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(diags.map((d) => d.message)).toEqual(['early']);
+                expect(Date.now() - start).toBeLessThan(100);
+            });
+
+            it('does not resolve with a stale empty publish landing after close and reopen', async () => {
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, [diag('first')]);
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                // the server clearing the closed document, received after the reopen
+                harness.setDiagnostics(uri, []);
+                const wait = ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(await settledWithin(wait)).toBe('pending');
+                expect(harness.logs.some((l) => l.includes('credited to closed generation 1'))).toBe(true);
+                harness.setDiagnostics(uri, [diag('fresh')]);
+                expect((await wait).map((d) => d.message)).toEqual(['fresh']);
+            });
+
+            it('ignores a publish received while the document was closed', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.closeDocument('sample.ts');
+                harness.setDiagnostics(uri, [diag('closed')]);
+                await ctx.openDocument('sample.ts');
+                const wait = ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(await settledWithin(wait)).toBe('pending');
+                harness.setDiagnostics(uri, [diag('reopened')]);
+                expect((await wait).map((d) => d.message)).toEqual(['reopened']);
+            });
+
+            it('credits only the first empty publish after a close to the closed generation', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, []);
+                harness.setDiagnostics(uri, []);
+                expect(await settledWithin(ctx.waitForDiagnostics('sample.ts', 5000))).toEqual([]);
+            });
+
+            it('accepts an empty publish after reopen once the close window has passed', async () => {
+                harness.tracker = new DiagnosticsTracker(() => {}, 0);
+                await ctx.openDocument('sample.ts');
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                await new Promise((r) => setTimeout(r, 5));
+                // a clean file from a server that never publishes on close
+                harness.setDiagnostics(uri, []);
+                expect(await settledWithin(ctx.waitForDiagnostics('sample.ts', 5000))).toEqual([]);
+            });
+
+            it('does not resolve a wait for a newer version with an old version publish', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                harness.setDiagnostics(uri, [diag('v1')], 1);
+                const wait = ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(await settledWithin(wait)).toBe('pending');
+                harness.setDiagnostics(uri, [diag('v2')], 2);
+                expect((await wait).map((d) => d.message)).toEqual(['v2']);
+            });
+
+            it('treats a cached unversioned publish from before the latest edit as stale', async () => {
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, [diag('before edit')]);
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const wait = ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(await settledWithin(wait)).toBe('pending');
+                harness.setDiagnostics(uri, [diag('after edit')]);
+                expect((await wait).map((d) => d.message)).toEqual(['after edit']);
+            });
+
+            it('falls back to the cached diagnostics on timeout', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                harness.setDiagnostics(uri, [diag('v1')], 1);
+                const diags = await ctx.waitForDiagnostics('sample.ts', 10);
+                expect(diags.map((d) => d.message)).toEqual(['v1']);
+            });
+
+            it('waits for the next publish on a document that is not open', async () => {
+                harness.setDiagnostics(uri, [diag('cached')]);
+                const wait = ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(await settledWithin(wait)).toBe('pending');
+                harness.setDiagnostics(uri, [diag('next')]);
+                expect((await wait).map((d) => d.message)).toEqual(['next']);
+            });
         });
     });
 });

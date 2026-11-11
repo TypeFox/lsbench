@@ -340,6 +340,10 @@ Resolve  (timed, the item from the matching request is sent back as the params)
 Synchronization
   waitForDiagnostics(path, timeoutMs?)    resolves with the diagnostics array once the server publishes
                                           them (default timeout 30_000ms). Call after open/edit before timing.
+                                          Only publishes for the current version and open generation count,
+                                          and one already received resolves at once. The first empty,
+                                          unversioned publish within 1000ms of a close is treated as stale.
+                                          On timeout, returns the cached diagnostics.
   sleep(ms)                               pause execution, useful to let background indexing settle.
 
 Escape hatches (for methods without a convenience wrapper)

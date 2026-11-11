@@ -10,6 +10,7 @@ interface InitializeResult {
 
 interface PublishDiagnosticsParams {
     uri: string;
+    version?: number;
     diagnostics: Diagnostic[];
 }
 
@@ -34,6 +35,198 @@ export interface SaveSyncOptions {
     willSaveWaitUntil: boolean;
 }
 
+/**
+ * How long after a didClose an empty, unversioned publish is still credited to the closed
+ * generation when it arrives after the document was reopened (a later patch may expose this)
+ */
+export const CLOSE_PUBLISH_WINDOW_MS = 1000;
+
+/** A textDocument/publishDiagnostics notification as received, stamped with the document state */
+export interface DiagnosticsPublish {
+    uri: string;
+    diagnostics: Diagnostic[];
+    /** the document version the server computed these for, when it sent one */
+    version?: number;
+    /** process.hrtime.bigint() at receipt */
+    receivedAt: bigint;
+    /** open generation the publish belongs to, normally the generation current at receipt */
+    generation: number;
+    /** position in the order of sync notifications and publishes for all documents */
+    seq: number;
+}
+
+/** What the client last told the server about a document */
+export interface DocumentSyncState {
+    /** bumps on each didOpen, 0 before the first */
+    generation: number;
+    open: boolean;
+    /** version from the latest didOpen or didChange */
+    version?: number;
+    /** process.hrtime.bigint() of the latest didOpen or didChange */
+    syncedAt: bigint;
+    /** seq of the latest didOpen or didChange, comparable with DiagnosticsPublish.seq */
+    syncSeq: number;
+}
+
+interface TrackedDocument extends DocumentSyncState {
+    /** receipt time of the latest didClose, while its clearing publish may still arrive */
+    closedAt?: bigint;
+}
+
+/**
+ * Tracks document sync notifications and diagnostics publishes per URI, so waits can tell
+ * a publish for the current document state from a stale one. Publishes received while a
+ * document is closed keep the closed generation and never match a later open.
+ */
+export class DiagnosticsTracker {
+    private documents = new Map<string, TrackedDocument>();
+    private latest = new Map<string, DiagnosticsPublish>();
+    private listeners = new Map<string, Set<(publish: DiagnosticsPublish) => void>>();
+    private seq = 0;
+
+    constructor(
+        private log: (msg: string) => void = () => {},
+        private closeWindowMs = CLOSE_PUBLISH_WINDOW_MS,
+    ) {}
+
+    /** Update document state from an outgoing notification, other methods are ignored */
+    noteNotification(method: string, params: unknown): void {
+        const textDocument = (params as { textDocument?: { uri?: unknown; version?: unknown } } | null)
+            ?.textDocument;
+        if (typeof textDocument?.uri !== 'string') {
+            return;
+        }
+        const uri = textDocument.uri;
+        const version = typeof textDocument.version === 'number' ? textDocument.version : undefined;
+        const doc = this.documents.get(uri) ?? { generation: 0, open: false, syncedAt: 0n, syncSeq: 0 };
+        if (method === 'textDocument/didOpen') {
+            doc.generation++;
+            doc.open = true;
+            doc.version = version;
+            this.markSynced(doc);
+        } else if (method === 'textDocument/didChange') {
+            doc.version = version ?? doc.version;
+            this.markSynced(doc);
+        } else if (method === 'textDocument/didClose') {
+            doc.open = false;
+            doc.closedAt = process.hrtime.bigint();
+        } else {
+            return;
+        }
+        this.documents.set(uri, doc);
+    }
+
+    /** Record a publish and hand it to the listeners of its URI */
+    receive(params: PublishDiagnosticsParams): DiagnosticsPublish {
+        const receivedAt = process.hrtime.bigint();
+        const doc = this.documents.get(params.uri);
+        let generation = doc?.generation ?? 0;
+        if (doc?.closedAt !== undefined) {
+            // the first publish after a close may be the server clearing the closed document,
+            // landing after the reopen; credit it to the closed generation if it looks like one
+            const sinceCloseMs = Number(receivedAt - doc.closedAt) / 1_000_000;
+            if (
+                doc.open &&
+                params.diagnostics.length === 0 &&
+                params.version === undefined &&
+                sinceCloseMs <= this.closeWindowMs
+            ) {
+                generation--;
+                this.log(
+                    `Empty publish for ${params.uri} ${sinceCloseMs.toFixed(1)}ms after didClose, ` +
+                        `credited to closed generation ${generation}`,
+                );
+            }
+            doc.closedAt = undefined;
+        }
+        const publish: DiagnosticsPublish = {
+            uri: params.uri,
+            diagnostics: params.diagnostics,
+            receivedAt,
+            generation,
+            seq: ++this.seq,
+        };
+        if (params.version !== undefined) {
+            publish.version = params.version;
+        }
+        this.latest.set(params.uri, publish);
+        for (const cb of this.listeners.get(params.uri) ?? []) {
+            cb(publish);
+        }
+        return publish;
+    }
+
+    /** The state of a document, from the notifications sent for it */
+    document(uri: string): DocumentSyncState | undefined {
+        const doc = this.documents.get(uri);
+        if (!doc) {
+            return undefined;
+        }
+        const { generation, open, version, syncedAt, syncSeq } = doc;
+        return { generation, open, version, syncedAt, syncSeq };
+    }
+
+    /** The latest publish received for a URI */
+    latestPublish(uri: string): DiagnosticsPublish | undefined {
+        return this.latest.get(uri);
+    }
+
+    /** The current sequence number, a publish received after now has a larger seq */
+    currentSeq(): number {
+        return this.seq;
+    }
+
+    /**
+     * Resolve with the first publish for uri that `accept` takes, checking the cached latest
+     * publish first so a wait registered after the notification still sees it. Resolves
+     * undefined after timeoutMs
+     */
+    waitFor(
+        uri: string,
+        accept: (publish: DiagnosticsPublish) => boolean,
+        timeoutMs: number,
+    ): Promise<DiagnosticsPublish | undefined> {
+        const cached = this.latest.get(uri);
+        if (cached && accept(cached)) {
+            return Promise.resolve(cached);
+        }
+        return new Promise((resolve) => {
+            let listeners = this.listeners.get(uri);
+            if (!listeners) {
+                listeners = new Set();
+                this.listeners.set(uri, listeners);
+            }
+            const done = (publish: DiagnosticsPublish | undefined) => {
+                clearTimeout(timer);
+                listeners.delete(listener);
+                if (listeners.size === 0 && this.listeners.get(uri) === listeners) {
+                    this.listeners.delete(uri);
+                }
+                resolve(publish);
+            };
+            const listener = (publish: DiagnosticsPublish) => {
+                if (accept(publish)) {
+                    done(publish);
+                }
+            };
+            const timer = setTimeout(() => done(undefined), timeoutMs);
+            listeners.add(listener);
+        });
+    }
+
+    /** Forget all documents and publishes, pending waits run into their timeout */
+    clear(): void {
+        this.documents.clear();
+        this.latest.clear();
+        this.listeners.clear();
+    }
+
+    private markSynced(doc: TrackedDocument): void {
+        doc.syncedAt = process.hrtime.bigint();
+        doc.syncSeq = ++this.seq;
+    }
+}
+
 /** default time to wait for a shutdown reply before giving up on the server */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 
@@ -53,8 +246,7 @@ export interface ServerExit {
 export class LspHarness {
     private process: cp.ChildProcess | null = null;
     private connection: rpc.MessageConnection | null = null;
-    private diagnosticsMap = new Map<string, Diagnostic[]>();
-    private diagnosticsListeners = new Map<string, Array<(diags: Diagnostic[]) => void>>();
+    private diagnostics: DiagnosticsTracker;
     private _capabilities: ServerCapabilities | null = null;
     /** dynamic registrations by registration id */
     private _registrations = new Map<string, Registration>();
@@ -75,6 +267,7 @@ export class LspHarness {
         verbose = false,
     ) {
         this.verbose = verbose;
+        this.diagnostics = new DiagnosticsTracker((msg) => this.log(msg));
     }
 
     /** How the server process ended, or null while it is still running */
@@ -198,14 +391,7 @@ export class LspHarness {
 
         // Subscribe to diagnostics notifications
         this.connection.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
-            this.diagnosticsMap.set(params.uri, params.diagnostics);
-            const listeners = this.diagnosticsListeners.get(params.uri);
-            if (listeners) {
-                for (const cb of listeners) {
-                    cb(params.diagnostics);
-                }
-                this.diagnosticsListeners.delete(params.uri);
-            }
+            this.diagnostics.receive(params);
         });
 
         // Log window messages from the server
@@ -367,8 +553,7 @@ export class LspHarness {
             }
         }
         this.process = null;
-        this.diagnosticsMap.clear();
-        this.diagnosticsListeners.clear();
+        this.diagnostics.clear();
         this._registrations.clear();
         return this._exit;
     }
@@ -406,24 +591,41 @@ export class LspHarness {
 
     /** Get cached diagnostics for a URI */
     getDiagnostics(uri: string): Diagnostic[] {
-        return this.diagnosticsMap.get(uri) ?? [];
+        return this.diagnostics.latestPublish(uri)?.diagnostics ?? [];
     }
 
-    /** Wait for the next diagnostics publication for a URI */
-    onDiagnostics(uri: string, timeoutMs: number): Promise<Diagnostic[]> {
-        return new Promise((resolve) => {
-            const timer = setTimeout(() => {
-                const existing = this.diagnosticsMap.get(uri);
-                resolve(existing ?? []);
-            }, timeoutMs);
+    /** The latest publish received for a URI, with its version, receipt time and generation */
+    latestPublish(uri: string): DiagnosticsPublish | undefined {
+        return this.diagnostics.latestPublish(uri);
+    }
 
-            const listeners = this.diagnosticsListeners.get(uri) ?? [];
-            listeners.push((diags) => {
-                clearTimeout(timer);
-                resolve(diags);
-            });
-            this.diagnosticsListeners.set(uri, listeners);
-        });
+    /** What lsbench last told the server about a document through didOpen, didChange and didClose */
+    documentState(uri: string): DocumentSyncState | undefined {
+        return this.diagnostics.document(uri);
+    }
+
+    /** The current publish sequence number, a publish received after now has a larger seq */
+    currentPublishSeq(): number {
+        return this.diagnostics.currentSeq();
+    }
+
+    /**
+     * Wait for a publish on uri that `accept` takes, the cached latest one included.
+     * Resolves undefined on timeout
+     */
+    waitForPublish(
+        uri: string,
+        accept: (publish: DiagnosticsPublish) => boolean,
+        timeoutMs: number,
+    ): Promise<DiagnosticsPublish | undefined> {
+        return this.diagnostics.waitFor(uri, accept, timeoutMs);
+    }
+
+    /** Wait for the next diagnostics publication for a URI, falling back to the cached ones on timeout */
+    async onDiagnostics(uri: string, timeoutMs: number): Promise<Diagnostic[]> {
+        const after = this.diagnostics.currentSeq();
+        const publish = await this.diagnostics.waitFor(uri, (p) => p.seq > after, timeoutMs);
+        return publish?.diagnostics ?? this.getDiagnostics(uri);
     }
 
     /** Send a typed LSP request */
@@ -434,6 +636,7 @@ export class LspHarness {
     /** Send an LSP notification */
     sendNotification(method: string, params: unknown): void {
         this.conn.sendNotification(method, params);
+        this.diagnostics.noteNotification(method, params);
     }
 
     private log(msg: string): void {

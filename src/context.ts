@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { supportsMethod } from './capabilities.js';
-import { type Diagnostic, type LspHarness, pathToUri } from './harness.js';
+import { type Diagnostic, type DiagnosticsPublish, type DocumentSyncState, type LspHarness, pathToUri } from './harness.js';
 import type {
     BenchContext,
     EditOperation,
@@ -444,9 +444,23 @@ export class BenchContextImpl implements BenchContext {
 
     // ── Synchronization helpers ─────────────────────────────────────────
 
+    /**
+     * Wait for diagnostics matching the current state of the document. An open document
+     * resolves at once when such a publish is already cached; a document that is not open
+     * waits for the next publish. On timeout the cached diagnostics are returned
+     */
     async waitForDiagnostics(relativePath: string, timeoutMs = 30000): Promise<Diagnostic[]> {
         const uri = this.getUri(relativePath);
-        return this.harness.onDiagnostics(uri, timeoutMs);
+        const after = this.harness.currentPublishSeq();
+        const publish = await this.harness.waitForPublish(
+            uri,
+            (p) => {
+                const doc = this.harness.documentState(uri);
+                return doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
+            },
+            timeoutMs,
+        );
+        return publish?.diagnostics ?? this.harness.getDiagnostics(uri);
     }
 
     async sleep(ms: number): Promise<void> {
@@ -546,6 +560,22 @@ export class BenchContextImpl implements BenchContext {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────
+
+/**
+ * Whether a publish describes the current state of an open document: it must belong to the
+ * current open generation, and carry the current version. A publish without a version only
+ * counts when it arrived after the latest didOpen or didChange. Versions newer than the
+ * current one cannot belong to this generation, so they are treated as stale too
+ */
+export function isCurrentPublish(publish: DiagnosticsPublish, doc: DocumentSyncState): boolean {
+    if (!doc.open || publish.generation !== doc.generation) {
+        return false;
+    }
+    if (publish.version !== undefined && doc.version !== undefined) {
+        return publish.version === doc.version;
+    }
+    return publish.seq > doc.syncSeq;
+}
 
 /** Turn a rejection into a RequestError, keeping the JSON-RPC code of a ResponseError */
 function toRequestError(method: string, err: unknown): RequestError {

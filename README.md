@@ -168,7 +168,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 
 | Method | Description |
 | --- | --- |
-| `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` (default 30000 ms) |
+| `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` matching the current document version (default 30000 ms), see [Waiting for diagnostics](#waiting-for-diagnostics) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
 | `notify(method, params)` | Arbitrary LSP notification |
@@ -196,6 +196,15 @@ if (items.length > 0) {
 lsbench advertises `resolveSupport` for completion items, code actions, inlay hints, and workspace symbols, so some servers return partial items and defer that work to the resolve request.
 
 `documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability, since some servers would then stop pushing diagnostics and break `waitForDiagnostics`.
+
+### Waiting for diagnostics
+
+`waitForDiagnostics` resolves with the first publish that matches the current state of an open document, and resolves at once when such a publish already arrived, so awaiting other work between `openDocument` or `edit` and the wait does not miss it. Each `didOpen` starts a new open generation. A publish counts when it belongs to the current generation and:
+
+- carries the current document version, or
+- carries no version and arrived after the latest `didOpen` or `didChange`.
+
+Publishes received while the document was closed, and publishes for other versions, are ignored. Servers often clear a closed document with an empty publish that can land after the next `didOpen`; the first empty, unversioned publish within 1000 ms of a `didClose` is therefore credited to the closed generation (logged in verbose mode). For a document that is not open, the wait resolves on the next publish. On timeout the cached diagnostics are returned.
 
 ### Unsupported requests
 

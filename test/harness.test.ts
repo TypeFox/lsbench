@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { defaultClientCapabilities, LspHarness, mergeCapabilities, pathToUri, uriToPath } from 'lsbench';
+import { DiagnosticsTracker, defaultClientCapabilities, LspHarness, mergeCapabilities, pathToUri, uriToPath } from 'lsbench';
 import { describe, expect, it } from 'vitest';
 
 describe('pathToUri', () => {
@@ -497,5 +497,47 @@ describe('LspHarness client capabilities', () => {
         } finally {
             await harness.stop();
         }
+    });
+});
+
+describe('DiagnosticsTracker', () => {
+    const uri = 'file:///w/a.ts';
+    const open = (version = 1) => ({ textDocument: { uri, languageId: 'typescript', version, text: '' } });
+
+    it('bumps the generation on each didOpen and stamps publishes with it', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.noteNotification('textDocument/didOpen', open());
+        expect(tracker.receive({ uri, diagnostics: [{ range: {}, message: 'a' }] }).generation).toBe(1);
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        expect(tracker.document(uri)).toMatchObject({ generation: 2, open: true, version: 1 });
+    });
+
+    it('tracks versions from didChange and keeps publish versions', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didChange', { textDocument: { uri, version: 4 }, contentChanges: [] });
+        expect(tracker.document(uri)?.version).toBe(4);
+        const publish = tracker.receive({ uri, version: 4, diagnostics: [] });
+        expect(publish.version).toBe(4);
+        expect(publish.seq).toBeGreaterThan(tracker.document(uri)?.syncSeq ?? Infinity);
+        expect(typeof publish.receivedAt).toBe('bigint');
+    });
+
+    it('does not credit a versioned or non empty publish after reopen to the closed generation', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        expect(tracker.receive({ uri, version: 1, diagnostics: [] }).generation).toBe(2);
+    });
+
+    it('resolves from the cache, and unregisters a wait once it settles', async () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.receive({ uri, diagnostics: [] });
+        expect(await tracker.waitFor(uri, () => true, 1000)).toBeDefined();
+        expect(await tracker.waitFor(uri, () => false, 5)).toBeUndefined();
+        const listeners = (tracker as unknown as { listeners: Map<string, unknown> }).listeners;
+        expect(listeners.size).toBe(0);
     });
 });
