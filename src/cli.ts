@@ -49,6 +49,7 @@ program
         '--wait-idle [ms]',
         `Wait up to ms (default ${DEFAULT_WAIT_IDLE_MS}) for the server to finish background work after initialized`,
     )
+    .option('--server-log <file>', 'Append server stderr and log messages to this file instead of the console')
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
@@ -70,6 +71,7 @@ program
             output: rawOpts.output as string,
             restart: rawOpts.restart as boolean,
             verbose: rawOpts.verbose as boolean,
+            serverLog: rawOpts.serverLog as string | undefined,
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
             skipUnsupported: rawOpts.skipUnsupported as boolean,
@@ -116,6 +118,17 @@ program
         if (Number.isNaN(opts.contentModifiedRetries) || (opts.contentModifiedRetries ?? 0) < 0) {
             console.error('Error: --content-modified-retries must be a non-negative integer');
             process.exit(1);
+        }
+
+        // fail early on a server log that cannot be appended to
+        if (opts.serverLog) {
+            try {
+                fs.appendFileSync(opts.serverLog, '');
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`Error: Cannot write server log ${opts.serverLog}: ${msg}`);
+                process.exit(1);
+            }
         }
 
         try {
@@ -476,7 +489,10 @@ experimental/serverStatus (verbose mode logs progress titles).
           --no-skip-unsupported    Send requests the server does not advertise
           --wait-idle [ms]         After initialized (and each restart), wait up to ms
                                    for the server to become idle before the script  (default: 30000)
-      -v, --verbose                Verbose logging                                  (default: false)
+          --server-log <file>      Append server stderr, window/logMessage, showMessage
+                                   and $/logTrace to file, a header line per server
+                                   start, instead of the console (even without -v)
+      -v, --verbose                Verbose logging: requests, publishes, progress   (default: false)
       -V, --version                Print version
       -h, --help                   Print help
 
@@ -554,5 +570,11 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
     (lifecycle/spawn, lifecycle/initialize).
   - Compare servers: run the same script/workspace against different servers
     (e.g. typescript-language-server vs vtsls).
+  - Debugging: -v prefixes lsbench lines [lsbench] (request timings [lsbench:ctx])
+    and logs each publish as
+      [lsbench] Publish src/a.ts v=3 n=2 current: <first message, max 100 chars>
+    with status current, stale, closed, close candidate or unopened. Server
+    stderr and log messages are prefixed [server]; --server-log <file> moves
+    them to a file (appended, a header per server start) instead.
 `;
 }

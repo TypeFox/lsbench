@@ -6,6 +6,7 @@
 
 - `waitForDiagnostics` now resolves with `{ diagnostics, timedOut, publishes, ms }` instead of the diagnostics array. Scripts that used the array need `(await ctx.waitForDiagnostics(path)).diagnostics`. Its second argument may be an options object `{ timeout }`, and a bare timeout number still works.
 - A timed out wait is now reported (`timedOut: true`, result `timeout`) instead of silently resolving with the cached diagnostics. The timeout comes from the timer itself, never from elapsed time.
+- Verbose request timings are now prefixed `[lsbench:ctx]` instead of `  [ctx]`, so all of lsbench's own lines start with `[lsbench`. Server output is prefixed `[server]` (previously `[server stderr]`, `[server]` and `[server msg]`).
 
 ### Wait predicates and settle windows
 
@@ -23,6 +24,11 @@
 ### Close publishes
 
 - An empty, unversioned publish after a quick reopen is no longer dropped outright as the clearing publish of the close. It is held for the rest of a 1000 ms window after the `didClose`, superseded by any later publish, and otherwise accepted with its own receipt time. lsbench learns per server whether it publishes on close and then decides at once, so servers that never clear closed documents (such as Langium) no longer time out on every reopen of a clean file.
+
+### Verbose output
+
+- `-v` logs each `textDocument/publishDiagnostics` as one line with the workspace relative path, version, count, tracker status (`current`, `stale`, `closed`, `close candidate`, `unopened`) and the first message.
+- `--server-log <file>` appends server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` to a file, with a header line per server start, instead of the console.
 
 ### Time to diagnostics
 

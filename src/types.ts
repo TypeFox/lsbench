@@ -48,6 +48,11 @@ export interface BenchOptions {
     settings?: Record<string, unknown>;
     /** Verbose logging */
     verbose: boolean;
+    /**
+     * Append server stderr, window/logMessage, window/showMessage and $/logTrace to this file,
+     * with a header line per server start, instead of forwarding them in verbose mode
+     */
+    serverLog?: string;
     /** Milliseconds to wait for a shutdown reply before killing the server (default 5000) */
     shutdownTimeout?: number;
     /** How often a request rejected with ContentModified (-32801) is retried (default 3) */

@@ -827,7 +827,7 @@ export class BenchContextImpl implements BenchContext {
 
     private log(msg: string): void {
         if (this.verbose) {
-            console.error(`  [ctx] ${msg}`);
+            console.error(`[lsbench:ctx] ${msg}`);
         }
     }
 }

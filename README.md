@@ -338,6 +338,8 @@ Options:
   --no-skip-unsupported       Send requests even when the server does not advertise their provider
   --wait-idle [ms]            Wait up to ms for the server to become idle after initialized,
                               and after each restart (default: 30000)
+  --server-log <file>         Append server stderr, window/logMessage, window/showMessage and
+                              $/logTrace to file instead of the console, even without -v
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -346,6 +348,24 @@ Commands:
   run                         Run a benchmark (default command)
   prime                       Print a primer on using lsbench
 ```
+
+### Verbose output
+
+With `-v`, lsbench's own lines start with `[lsbench]`, request timings with `[lsbench:ctx]`. Each `textDocument/publishDiagnostics` is logged as one line: the workspace relative path (the URI outside the workspace), the version or `-`, the diagnostic count, how the diagnostics tracker classified it, and the first message truncated to 100 characters:
+
+```text
+[lsbench] Publish src/config.yaml v=1 n=2 current: Incorrect type. Expected "string".
+```
+
+The status is `current` for the open document state, `stale` for an older version or a publish credited to a closed document, `closed` while the document is closed, `close candidate` when held as the possible clearing publish of a close (see [Waiting for diagnostics](#waiting-for-diagnostics)), and `unopened` for a document never opened.
+
+Server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` are forwarded in verbose mode with each line prefixed `[server]`, so `grep -v '^\[server\]'` leaves lsbench's lines. `--server-log <file>` writes them to a file instead, with or without `-v`. The file is appended to, with a header line per server start holding the timestamp and command:
+
+```text
+===== 2026-11-11T10:15:02.123Z server start: yaml-language-server --stdio
+```
+
+When a server crashes, the tail of its stderr is still included in the error message either way.
 
 ## Server configuration
 

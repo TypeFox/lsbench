@@ -15,7 +15,9 @@ export type {
     DocumentSyncState,
     IdleWaitOptions,
     IdleWaitResult,
+    LspHarnessOptions,
     ProgressToken,
+    PublishStatus,
     PublishWaitOptions,
     PublishWaitResult,
     SaveSyncOptions,
@@ -28,11 +30,13 @@ export {
     DiagnosticsTracker,
     defaultClientCapabilities,
     expandSettings,
+    formatPublishLine,
     LspHarness,
     mergeCapabilities,
     pathToUri,
     ProgressTracker,
     resolveConfigurationSection,
+    ServerOutput,
     uriToPath,
 } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';

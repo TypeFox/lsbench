@@ -1,4 +1,5 @@
 import * as cp from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as rpc from 'vscode-jsonrpc/node';
 import type { Registration, RequestTiming, ServerCapabilities, ServerConfig } from './types.js';
@@ -67,6 +68,14 @@ export interface DiagnosticsPublish {
     /** position in the order of sync notifications and publishes for all documents */
     seq: number;
 }
+
+/**
+ * How the tracker classified a publish on receipt: `current` for the open document state,
+ * `stale` for an older version or a publish credited to the closed generation, `closed` while
+ * the document is closed, `close candidate` when held as the possible clearing publish of a
+ * close, `unopened` for a document never opened
+ */
+export type PublishStatus = 'current' | 'stale' | 'closed' | 'close candidate' | 'unopened';
 
 /** Options of DiagnosticsTracker.waitForPublishes */
 export interface PublishWaitOptions {
@@ -144,6 +153,8 @@ export class DiagnosticsTracker {
     constructor(
         private log: (msg: string) => void = () => {},
         private closeWindowMs = CLOSE_PUBLISH_WINDOW_MS,
+        /** called for each received publish with its classification, before any wait sees it */
+        private onPublish: (publish: DiagnosticsPublish, status: PublishStatus) => void = () => {},
     ) {}
 
     /** Update document state from an outgoing notification, other methods are ignored */
@@ -182,7 +193,9 @@ export class DiagnosticsTracker {
         const doc = this.documents.get(params.uri);
         let generation = doc?.generation ?? 0;
         let tentative = false;
+        let status: PublishStatus = !doc || doc.generation === 0 ? 'unopened' : 'current';
         if (doc && doc.generation > 0 && !doc.open) {
+            status = 'closed';
             this.learn('publishes', `publish for ${params.uri} while it is closed`);
         } else if (doc?.candidate) {
             // a further publish after the reopen: the candidate was the close publish
@@ -199,12 +212,14 @@ export class DiagnosticsTracker {
             const sinceCloseMs = (Number(receivedAt - doc.closedAt) / 1_000_000).toFixed(1);
             if (this._closeBehavior === 'publishes') {
                 generation--;
+                status = 'stale';
                 this.log(
                     `Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
                         `credited to closed generation ${generation}`,
                 );
             } else if (this._closeBehavior === 'unknown') {
                 tentative = true;
+                status = 'close candidate';
                 this.log(`Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, held as tentative`);
             }
         }
@@ -220,7 +235,11 @@ export class DiagnosticsTracker {
         };
         if (params.version !== undefined) {
             publish.version = params.version;
+            if (status === 'current' && doc?.version !== undefined && params.version !== doc.version) {
+                status = 'stale';
+            }
         }
+        this.onPublish(publish, status);
         if (tentative && doc) {
             doc.candidate = publish;
         } else {
@@ -645,6 +664,12 @@ export interface ServerExit {
     reason: string;
 }
 
+/** Options of LspHarness beyond the server config */
+export interface LspHarnessOptions {
+    /** append server stderr and log messages to this file instead of the console */
+    serverLog?: string;
+}
+
 /**
  * Manages a language server process and its JSON-RPC connection.
  */
@@ -668,15 +693,27 @@ export class LspHarness {
     private lifecycleTimings: RequestTiming[] = [];
     /** ServerConfig.settings with dotted keys expanded, undefined when none are given */
     private settings: Record<string, unknown> | undefined;
+    /** routes server stderr and log messages to the server log file or the console */
+    private output: ServerOutput;
 
     constructor(
         private config: ServerConfig,
         private workspaceRoot: string,
         verbose = false,
+        options: LspHarnessOptions = {},
     ) {
         this.verbose = verbose;
         this.settings = config.settings ? expandSettings(config.settings) : undefined;
-        this.diagnostics = new DiagnosticsTracker((msg) => this.log(msg));
+        this.output = new ServerOutput(options.serverLog, verbose);
+        this.diagnostics = new DiagnosticsTracker(
+            (msg) => this.log(msg),
+            CLOSE_PUBLISH_WINDOW_MS,
+            (publish, status) => {
+                if (this.verbose) {
+                    this.log(formatPublishLine(publish, status, this.workspaceRoot));
+                }
+            },
+        );
         this.progress = new ProgressTracker((msg) => this.log(msg));
     }
 
@@ -731,6 +768,7 @@ export class LspHarness {
         const { command, args = [], env } = this.config;
 
         this.log(`Spawning: ${command} ${args.join(' ')}`);
+        this.output.open(command, args);
         const spawnStart = process.hrtime.bigint();
 
         // spawn from the current working directory, not the workspace: the server
@@ -758,11 +796,11 @@ export class LspHarness {
         // capture stderr, and retain the tail so we can report it if the server dies
         let stderrTail = '';
         this.process.stderr?.on('data', (chunk: Buffer) => {
-            stderrTail = (stderrTail + chunk.toString()).slice(-4000);
-            if (this.verbose) {
-                process.stderr.write(`[server stderr] ${chunk.toString()}`);
-            }
+            const text = chunk.toString();
+            stderrTail = (stderrTail + text).slice(-4000);
+            this.output.stderr(text);
         });
+        this.process.stderr?.on('end', () => this.output.flush());
 
         // reject the initialize handshake if the process dies or fails to spawn,
         // otherwise sendRequest('initialize') hangs forever with no response
@@ -804,13 +842,15 @@ export class LspHarness {
             this.diagnostics.receive(params);
         });
 
-        // Log window messages from the server
+        // route the server's own log output with its stderr
         this.connection.onNotification('window/logMessage', (params: { type: number; message: string }) => {
-            this.log(`[server] ${params.message}`);
+            this.output.message(params.message);
         });
-
         this.connection.onNotification('window/showMessage', (params: { type: number; message: string }) => {
-            this.log(`[server msg] ${params.message}`);
+            this.output.message(`showMessage: ${params.message}`);
+        });
+        this.connection.onNotification('$/logTrace', (params: { message: string; verbose?: string }) => {
+            this.output.message(`trace: ${params.message}${params.verbose ? `\n${params.verbose}` : ''}`);
         });
 
         // answer workspace/configuration from the settings, or {} per item when none are given
@@ -869,13 +909,13 @@ export class LspHarness {
 
         // no user is present to pick an action, so dismiss the prompt
         this.connection.onRequest('window/showMessageRequest', (params: { type: number; message: string }) => {
-            this.log(`[server msg request] ${params.message}`);
+            this.log(`Dismissed window/showMessageRequest: ${params.message}`);
             return null;
         });
 
         // lsbench never mutates the workspace on the server's behalf
         this.connection.onRequest('workspace/applyEdit', (params: { label?: string }) => {
-            this.log(`[server applyEdit] declined${params.label ? `: ${params.label}` : ''}`);
+            this.log(`Declined workspace/applyEdit${params.label ? `: ${params.label}` : ''}`);
             return { applied: false, failureReason: 'lsbench does not apply workspace edits' };
         });
 
@@ -985,6 +1025,7 @@ export class LspHarness {
             }
         }
         this.process = null;
+        await this.output.close();
         this.diagnostics.clear();
         this.progress.clear();
         this._registrations.clear();
@@ -1394,6 +1435,123 @@ export function uriToPath(uri: string): string {
         return uri.slice(7);
     }
     return uri;
+}
+
+/** Longest first diagnostic message shown in a verbose publish line */
+const PUBLISH_MESSAGE_MAX = 100;
+
+/**
+ * One verbose log line for a publish: the workspace relative path (the URI when outside the
+ * workspace or not a file), the version or `-`, the diagnostic count, the tracker's
+ * classification and the first message on one line, truncated
+ */
+export function formatPublishLine(
+    publish: Pick<DiagnosticsPublish, 'uri' | 'version' | 'diagnostics'>,
+    status: PublishStatus,
+    workspaceRoot: string,
+): string {
+    let where = publish.uri;
+    if (publish.uri.startsWith('file://')) {
+        const rel = path.relative(path.resolve(workspaceRoot), uriToPath(publish.uri));
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+            where = rel;
+        }
+    }
+    let line = `Publish ${where} v=${publish.version ?? '-'} n=${publish.diagnostics.length} ${status}`;
+    const first = publish.diagnostics[0];
+    if (first) {
+        let message = String(first.message).replace(/\s+/g, ' ').trim();
+        if (message.length > PUBLISH_MESSAGE_MAX) {
+            message = `${message.slice(0, PUBLISH_MESSAGE_MAX - 3)}...`;
+        }
+        line += `: ${message}`;
+    }
+    return line;
+}
+
+/** Header written to a server log file each time a server starts */
+function formatServerLogHeader(command: string, args: string[], date = new Date()): string {
+    return `===== ${date.toISOString()} server start: ${[command, ...args].join(' ')}`;
+}
+
+/**
+ * Where server output (stderr, window/logMessage, window/showMessage, $/logTrace) goes: appended
+ * to a file when one is given, else to stderr prefixed `[server]` in verbose mode, else nowhere.
+ * Stderr arrives in chunks, so partial lines are held until their newline or `flush()`
+ */
+export class ServerOutput {
+    private stream: fs.WriteStream | null = null;
+    private partial = '';
+
+    constructor(
+        private file: string | undefined,
+        private verbose: boolean,
+        private toConsole: (text: string) => void = (text) => process.stderr.write(text),
+    ) {}
+
+    /** Begin output for a newly started server, writing the header line to the file */
+    open(command: string, args: string[]): void {
+        this.close();
+        if (this.file === undefined) {
+            return;
+        }
+        const stream = fs.createWriteStream(this.file, { flags: 'a' });
+        stream.on('error', (err) => {
+            console.error(`[lsbench] Cannot write server log ${this.file}: ${err.message}`);
+            this.stream = null;
+        });
+        this.stream = stream;
+        stream.write(`${formatServerLogHeader(command, args)}\n`);
+    }
+
+    /** A raw stderr chunk, possibly ending mid line */
+    stderr(chunk: string): void {
+        const text = this.partial + chunk;
+        const end = text.lastIndexOf('\n');
+        this.partial = text.slice(end + 1);
+        if (end >= 0) {
+            this.write(text.slice(0, end));
+        }
+    }
+
+    /** A complete message, which may span lines */
+    message(text: string): void {
+        this.write(text);
+    }
+
+    /** Write out a held partial stderr line */
+    flush(): void {
+        if (this.partial) {
+            const text = this.partial;
+            this.partial = '';
+            this.write(text);
+        }
+    }
+
+    /** Flush and end the file stream, resolving once it is written */
+    close(): Promise<void> {
+        this.flush();
+        const stream = this.stream;
+        this.stream = null;
+        if (!stream) {
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => stream.end(() => resolve()));
+    }
+
+    private write(text: string): void {
+        const lines = text.replace(/\r/g, '').split('\n');
+        if (this.file !== undefined) {
+            // never fall back to the console, output after close or a write error is dropped
+            this.stream?.write(`${lines.join('\n')}\n`);
+        } else if (this.verbose) {
+            let out = '';
+            for (const line of lines) {
+                out += `[server] ${line}\n`;
+            }
+            this.toConsole(out);
+        }
+    }
 }
 
 /** Resolve with the first promise to settle, or 'timeout' once timeoutMs has passed */

@@ -82,6 +82,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (opts.waitIdle !== undefined) {
         console.log(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
     }
+    if (opts.serverLog) {
+        console.log(`  Server log: ${path.resolve(opts.serverLog)}`);
+    }
     console.log();
 
     const benchStart = process.hrtime.bigint();
@@ -107,6 +110,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     let harness: LspHarness | null = null;
     let ctx: BenchContextImpl | null = null;
     // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
+    const harnessOptions = { serverLog: opts.serverLog };
     const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries, skipUnsupported: opts.skipUnsupported };
     let lifecycle: RequestTiming[] | undefined;
     // in verbose mode, summarize capabilities once, after the first server is up
@@ -121,7 +125,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
     // Start server if we're keeping it alive across iterations
     if (!opts.restart) {
-        harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
+        harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
         await harness.start();
         await waitIdleAfterStart(harness, opts.waitIdle);
         lifecycle = harness.takeLifecycleTimings();
@@ -143,7 +147,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // If restarting, create fresh harness each time (inside timed section
         // so cold-start benchmarks capture server spawn + initialize time)
         if (opts.restart) {
-            harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
+            harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
             ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
             try {
                 await harness.start();
