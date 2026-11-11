@@ -389,6 +389,8 @@ export class LspHarness {
             method,
             duration_ms: Math.round(ms * 1000) / 1000,
             success: error === undefined,
+            // lifecycle steps have no meaningful payload (shutdown even replies null by spec)
+            result: error === undefined ? 'ok' : 'error',
         };
         if (error !== undefined) {
             timing.error = (error instanceof Error ? error.message : String(error)).split('\n')[0];

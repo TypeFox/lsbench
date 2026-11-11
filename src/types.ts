@@ -36,9 +36,18 @@ export interface BenchOptions {
     verbose: boolean;
     /** Milliseconds to wait for a shutdown reply before killing the server (default 5000) */
     shutdownTimeout?: number;
+    /** How often a request rejected with ContentModified (-32801) is retried (default 3) */
+    contentModifiedRetries?: number;
 }
 
 // ── Timing & Results ────────────────────────────────────────────────────────
+
+/**
+ * Outcome of a request: `ok` for a non empty result, `empty` for an empty list
+ * (or a list wrapper such as a CompletionList with no items), `null` for a null
+ * result and `error` for a rejected request
+ */
+export type RequestResult = 'ok' | 'empty' | 'null' | 'error';
 
 export interface RequestTiming {
     /** LSP method name, e.g. "textDocument/hover" */
@@ -47,10 +56,14 @@ export interface RequestTiming {
     label?: string;
     /** Duration in milliseconds (high-resolution) */
     duration_ms: number;
-    /** Whether the request succeeded */
+    /** Whether the request succeeded, false exactly when `result` is `error` */
     success: boolean;
+    /** What the request returned */
+    result: RequestResult;
     /** Error message if failed */
     error?: string;
+    /** How often the request was retried after ContentModified, absent when never */
+    retries?: number;
 }
 
 export interface IterationResult {
@@ -70,6 +83,10 @@ export interface MethodStats {
     max_ms: number;
     stddev_ms: number;
     failure_rate: number;
+    /** Share of requests that returned null */
+    null_rate: number;
+    /** Share of requests that returned an empty list */
+    empty_rate: number;
 }
 
 export interface BenchReport {
@@ -124,6 +141,14 @@ export interface EditOperation {
     text: string;
 }
 
+/** The error of a rejected request, see `BenchContext.lastError` */
+export interface RequestError {
+    method: string;
+    message: string;
+    /** JSON-RPC error code, when the server sent one */
+    code?: number;
+}
+
 /** Options for opening a document */
 export interface OpenDocumentOptions {
     /** overrides the languageId detected from the file extension, for this document only */
@@ -137,6 +162,11 @@ export interface OpenDocumentOptions {
 export interface BenchContext {
     /** Absolute path of the workspace root */
     workspaceRoot: string;
+    /**
+     * The error of the last timed request, cleared when the next one starts.
+     * Tells a failed request apart from a null result, since both return null
+     */
+    readonly lastError: RequestError | undefined;
 
     // ── Document lifecycle ──────────────────────────────────────────────
     /** Sends didOpen, with the languageId detected from the extension unless `options.languageId` is given */

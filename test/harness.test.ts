@@ -186,15 +186,16 @@ describe('LspHarness.stop', () => {
         const harness = shutdownHarness('clean');
         await harness.start();
         const startTimings = harness.takeLifecycleTimings();
-        expect(startTimings.map((t) => [t.method, t.success])).toEqual([
-            ['lifecycle/spawn', true],
-            ['lifecycle/initialize', true],
+        expect(startTimings.map((t) => [t.method, t.success, t.result])).toEqual([
+            ['lifecycle/spawn', true, 'ok'],
+            ['lifecycle/initialize', true, 'ok'],
         ]);
         expect(harness.takeLifecycleTimings()).toEqual([]);
         await harness.stop();
         const [shutdown, ...rest] = harness.takeLifecycleTimings();
         expect(rest).toEqual([]);
-        expect(shutdown).toMatchObject({ method: 'lifecycle/shutdown', success: true });
+        // shutdown replies null by spec, which is still a plain ok for a lifecycle step
+        expect(shutdown).toMatchObject({ method: 'lifecycle/shutdown', success: true, result: 'ok' });
         expect(shutdown.duration_ms).toBeGreaterThan(0);
     });
 
@@ -207,6 +208,7 @@ describe('LspHarness.stop', () => {
             expect.objectContaining({
                 method: 'lifecycle/shutdown',
                 success: false,
+                result: 'error',
                 error: expect.stringMatching(/exited before replying/),
             }),
         ]);
@@ -231,6 +233,7 @@ describe('LspHarness.stop', () => {
             expect.objectContaining({
                 method: 'lifecycle/spawn',
                 success: false,
+                result: 'error',
                 error: expect.stringMatching(/ENOENT/),
             }),
         ]);

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Diagnostic, EditOperation, LspHarness, SaveSyncOptions } from 'lsbench';
-import { addRegisteredLanguage, BenchContextImpl } from 'lsbench';
+import { addRegisteredLanguage, BenchContextImpl, classifyResult } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 interface SentRequest {
@@ -30,8 +30,14 @@ class FakeHarness {
     /** what the fake server asks for around saves */
     saveOptions: SaveSyncOptions = { didSave: true, includeText: false, willSave: true, willSaveWaitUntil: true };
 
+    /** errors thrown by the next requests, in order, before any canned response */
+    rejections: unknown[] = [];
+
     async sendRequest<R>(method: string, params: unknown): Promise<R> {
         this.requests.push({ method, params });
+        if (this.rejections.length > 0) {
+            throw this.rejections.shift();
+        }
         if (this.failMethods.has(method)) {
             throw new Error(`simulated failure for ${method}`);
         }
@@ -704,6 +710,104 @@ describe('BenchContextImpl', () => {
             const timings = ctx.collectTimings();
             expect(timings[0].method).toBe('workspace/symbol');
             expect(timings[0].label).toBe('symbol-search');
+        });
+    });
+
+    describe('results and errors', () => {
+        /** an error shaped like a vscode-jsonrpc ResponseError */
+        function responseError(code: number, message: string): Error {
+            return Object.assign(new Error(message), { code });
+        }
+
+        it('classifies ok, empty and null results', async () => {
+            for (const response of [[1], [], null, { items: [] }]) {
+                harness.response = response;
+                await ctx.hover('sample.ts', 0, 0);
+            }
+            const timings = ctx.collectTimings();
+            expect(timings.map((t) => [t.result, t.success])).toEqual([
+                ['ok', true],
+                ['empty', true],
+                ['null', true],
+                ['empty', true],
+            ]);
+        });
+
+        it('records an error result and exposes it as lastError until the next request', async () => {
+            harness.rejections.push(responseError(-32603, 'internal'));
+            expect(await ctx.definition('sample.ts', 0, 6)).toBeNull();
+            expect(ctx.lastError).toEqual({ method: 'textDocument/definition', message: 'internal', code: -32603 });
+            expect(ctx.collectTimings()[0]).toMatchObject({ result: 'error', success: false, error: 'internal' });
+
+            harness.response = null;
+            await ctx.hover('sample.ts', 0, 0);
+            expect(ctx.lastError).toBeUndefined();
+        });
+
+        it('omits the code from lastError for errors without one', async () => {
+            harness.rejections.push(new Error('connection closed'));
+            await ctx.hover('sample.ts', 0, 0);
+            expect(ctx.lastError).toEqual({ method: 'textDocument/hover', message: 'connection closed' });
+        });
+
+        it('retries ContentModified and records the retry count', async () => {
+            ctx = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { retryBackoffMs: 0 });
+            harness.rejections.push(responseError(-32801, 'modified'), responseError(-32801, 'modified'));
+            harness.response = [1];
+
+            expect(await ctx.hover('sample.ts', 0, 0)).toEqual([1]);
+            expect(harness.requests).toHaveLength(3);
+            expect(ctx.lastError).toBeUndefined();
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(1);
+            expect(timings[0]).toMatchObject({ result: 'ok', retries: 2 });
+        });
+
+        it('gives up after the configured number of ContentModified retries', async () => {
+            ctx = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, {
+                contentModifiedRetries: 1,
+                retryBackoffMs: 0,
+            });
+            harness.rejections.push(responseError(-32801, 'modified'), responseError(-32801, 'modified'));
+
+            expect(await ctx.hover('sample.ts', 0, 0)).toBeNull();
+            expect(harness.requests).toHaveLength(2);
+            expect(ctx.lastError?.code).toBe(-32801);
+            expect(ctx.collectTimings()[0]).toMatchObject({ result: 'error', retries: 1, error: 'modified' });
+        });
+
+        it('does not retry other errors and omits retries when there were none', async () => {
+            harness.rejections.push(responseError(-32603, 'internal'));
+            await ctx.hover('sample.ts', 0, 0);
+            expect(harness.requests).toHaveLength(1);
+            expect(ctx.collectTimings()[0].retries).toBeUndefined();
+        });
+    });
+
+    describe('classifyResult', () => {
+        it('treats null and undefined as null', () => {
+            expect(classifyResult(null)).toBe('null');
+            expect(classifyResult(undefined)).toBe('null');
+        });
+
+        it('treats empty arrays and empty list wrappers as empty', () => {
+            expect(classifyResult([])).toBe('empty');
+            expect(classifyResult({ isIncomplete: false, items: [] })).toBe('empty');
+            expect(classifyResult({ kind: 'full', items: [] })).toBe('empty');
+            expect(classifyResult({ resultId: '1', data: [] })).toBe('empty');
+            expect(classifyResult({ resultId: '2', edits: [] })).toBe('empty');
+        });
+
+        it('treats filled lists and other values as ok', () => {
+            expect(classifyResult([{}])).toBe('ok');
+            expect(classifyResult({ isIncomplete: false, items: [{}] })).toBe('ok');
+            expect(classifyResult({ data: [1, 2, 3, 4, 5] })).toBe('ok');
+            expect(classifyResult({ contents: 'doc' })).toBe('ok');
+            expect(classifyResult({ kind: 'unchanged', resultId: '1' })).toBe('ok');
+        });
+
+        it('does not mistake the opaque data of a resolvable item for a list', () => {
+            expect(classifyResult({ label: 'foo', data: [] })).toBe('ok');
         });
     });
 

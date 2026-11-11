@@ -38,6 +38,7 @@ program
     .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
+    .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
@@ -69,6 +70,7 @@ program
             restart: rawOpts.restart as boolean,
             verbose: rawOpts.verbose as boolean,
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
+            contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
         };
@@ -100,6 +102,10 @@ program
         }
         if (Number.isNaN(opts.shutdownTimeout) || (opts.shutdownTimeout ?? 0) < 1) {
             console.error('Error: --shutdown-timeout must be a positive integer');
+            process.exit(1);
+        }
+        if (Number.isNaN(opts.contentModifiedRetries) || (opts.contentModifiedRetries ?? 0) < 0) {
+            console.error('Error: --content-modified-retries must be a non-negative integer');
             process.exit(1);
         }
 
@@ -218,6 +224,13 @@ The object passed to your script. Import its type from 'lsbench'. Methods marked
 (timed) record a RequestTiming entry and return the raw LSP result, or null on
 failure. Others are notifications or helpers.
 
+ctx.lastError is { method, message, code? } when the last timed request failed,
+and undefined otherwise (it is cleared as each request starts). Use it to tell
+a failure apart from a null result:
+
+    const res = await ctx.definition('src/index.ts', 10, 5);
+    if (ctx.lastError) { console.error(ctx.lastError.message); }
+
 Document lifecycle  (all but openDocument/closeDocument throw if the document is not open)
   openDocument(path)                      textDocument/didOpen, call before requests on a file
   closeDocument(path)                     textDocument/didClose
@@ -327,6 +340,8 @@ lsbench answers these so a server never stalls waiting on a client:
           --init-options-file <p>  JSON file with LSP initializationOptions
           --restart                Restart the server each iteration (cold start)   (default: false)
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
+          --content-modified-retries <n>
+                                   Retry requests rejected with ContentModified     (default: 3)
       -v, --verbose                Verbose logging                                  (default: false)
       -V, --version                Print version
       -h, --help                   Print help
@@ -338,7 +353,8 @@ Anything after \`--\` is passed through as extra args to the server command.
 ## Output format
 
 The JSON report (and the printed summary) contains:
-  - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms, failure_rate
+  - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms,
+                       failure_rate, null_rate, empty_rate
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
   - lifecycle          keep alive mode only: spawn, initialize and final shutdown
@@ -359,8 +375,16 @@ Example \`summary\` entry:
     "textDocument/hover": {
       "count": 50, "avg_ms": 12.4, "median_ms": 11.2, "p95_ms": 22.1,
       "p99_ms": 34.5, "min_ms": 8.1, "max_ms": 42.3, "stddev_ms": 5.2,
-      "failure_rate": 0
+      "failure_rate": 0, "null_rate": 0, "empty_rate": 0
     }
+
+Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
+such as a CompletionList with no items), null, or error (with \`error\` set).
+\`success\` is kept and is false exactly for errors. A high null_rate usually
+means a position misses a symbol, so its fast timings mean little.
+Requests rejected with ContentModified (-32801) are retried with a short
+backoff; \`retries\` records how often, and only the final attempt is timed.
+Lifecycle timings are ok or error.
 
 ## Tips for reliable numbers
 

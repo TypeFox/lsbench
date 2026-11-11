@@ -1,7 +1,26 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { type Diagnostic, type LspHarness, pathToUri } from './harness.js';
-import type { BenchContext, EditOperation, OpenDocumentOptions, Position, Range, RequestTiming } from './types.js';
+import type {
+    BenchContext,
+    EditOperation,
+    OpenDocumentOptions,
+    Position,
+    Range,
+    RequestError,
+    RequestResult,
+    RequestTiming,
+} from './types.js';
+
+/** JSON-RPC error code a server sends when a document change invalidated the result */
+const CONTENT_MODIFIED = -32801;
+
+export interface BenchContextOptions {
+    /** How often a request rejected with ContentModified is retried (default 3) */
+    contentModifiedRetries?: number;
+    /** Wait before retry n is n times this many milliseconds (default 20) */
+    retryBackoffMs?: number;
+}
 
 /**
  * Concrete implementation of BenchContext.
@@ -14,11 +33,20 @@ export class BenchContextImpl implements BenchContext {
     private timings: RequestTiming[] = [];
     private openDocuments = new Map<string, { uri: string; version: number; text: string }>();
     private verbose: boolean;
+    private contentModifiedRetries: number;
+    private retryBackoffMs: number;
+    private _lastError: RequestError | undefined;
 
-    constructor(harness: LspHarness, workspaceRoot: string, verbose = false) {
+    constructor(harness: LspHarness, workspaceRoot: string, verbose = false, options: BenchContextOptions = {}) {
         this.harness = harness;
         this.workspaceRoot = workspaceRoot;
         this.verbose = verbose;
+        this.contentModifiedRetries = options.contentModifiedRetries ?? 3;
+        this.retryBackoffMs = options.retryBackoffMs ?? 20;
+    }
+
+    get lastError(): RequestError | undefined {
+        return this._lastError;
     }
 
     /** Drain and return all collected timings, resetting for the next iteration */
@@ -436,36 +464,54 @@ export class BenchContextImpl implements BenchContext {
         return pathToUri(path.resolve(this.workspaceRoot, relativePath));
     }
 
+    /**
+     * Send a request and record its timing and result. A ContentModified rejection is retried
+     * after a short backoff, and only the final attempt is timed, since the earlier ones and
+     * the backoff measure the edit race rather than the request itself
+     */
     private async timedRequest<R>(method: string, params: unknown, label?: string): Promise<R> {
-        const start = process.hrtime.bigint();
-        let success = true;
-        let error: string | undefined;
-        let result: R;
+        this._lastError = undefined;
+        let retries = 0;
+        for (;;) {
+            const start = process.hrtime.bigint();
+            let result: R;
+            let failure: RequestError | undefined;
+            try {
+                result = await this.harness.sendRequest<R>(method, params);
+            } catch (err: unknown) {
+                failure = toRequestError(method, err);
+                result = null as R;
+            }
+            const duration_ms = Number(process.hrtime.bigint() - start) / 1_000_000; // nanoseconds → milliseconds
 
-        try {
-            result = await this.harness.sendRequest<R>(method, params);
-        } catch (err: unknown) {
-            success = false;
-            error = err instanceof Error ? err.message : String(err);
-            result = null as R;
+            if (failure?.code === CONTENT_MODIFIED && retries < this.contentModifiedRetries) {
+                retries++;
+                this.log(`${method}: content modified, retry ${retries} of ${this.contentModifiedRetries}`);
+                await this.sleep(this.retryBackoffMs * retries);
+                continue;
+            }
+
+            const timing: RequestTiming = {
+                method,
+                label,
+                duration_ms: Math.round(duration_ms * 1000) / 1000, // 3 decimal places
+                success: failure === undefined,
+                result: failure ? 'error' : classifyResult(result),
+                error: failure?.message,
+            };
+            if (retries > 0) {
+                timing.retries = retries;
+            }
+            this.timings.push(timing);
+            this._lastError = failure;
+
+            this.log(
+                `${method}${label ? ` [${label}]` : ''}: ${duration_ms.toFixed(1)}ms ${timing.result}` +
+                    `${failure ? ` ERROR: ${failure.message}` : ''}`,
+            );
+
+            return result;
         }
-
-        const end = process.hrtime.bigint();
-        const duration_ms = Number(end - start) / 1_000_000; // nanoseconds → milliseconds
-
-        this.timings.push({
-            method,
-            label,
-            duration_ms: Math.round(duration_ms * 1000) / 1000, // 3 decimal places
-            success,
-            error,
-        });
-
-        this.log(
-            `${method}${label ? ` [${label}]` : ''}: ${duration_ms.toFixed(1)}ms${success ? '' : ` ERROR: ${error}`}`,
-        );
-
-        return result;
     }
 
     private log(msg: string): void {
@@ -476,6 +522,44 @@ export class BenchContextImpl implements BenchContext {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────
+
+/** Turn a rejection into a RequestError, keeping the JSON-RPC code of a ResponseError */
+function toRequestError(method: string, err: unknown): RequestError {
+    const failure: RequestError = { method, message: err instanceof Error ? err.message : String(err) };
+    if (typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'number') {
+        failure.code = err.code;
+    }
+    return failure;
+}
+
+/**
+ * Classify a request result. Besides plain empty arrays, list wrappers count as empty when
+ * their list is: CompletionList and diagnostic reports (`items`), SemanticTokens (`data`)
+ * and SemanticTokensDelta (`edits`). Since `data` is also the opaque payload of resolvable
+ * items, `data` and `edits` only count on objects with no keys besides `resultId`
+ */
+export function classifyResult(result: unknown): Exclude<RequestResult, 'error'> {
+    if (result === null || result === undefined) {
+        return 'null';
+    }
+    if (Array.isArray(result)) {
+        return result.length === 0 ? 'empty' : 'ok';
+    }
+    if (typeof result !== 'object') {
+        return 'ok';
+    }
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record.items)) {
+        return record.items.length === 0 ? 'empty' : 'ok';
+    }
+    for (const key of ['data', 'edits']) {
+        const list = record[key];
+        if (Array.isArray(list) && Object.keys(record).every((k) => k === key || k === 'resultId')) {
+            return list.length === 0 ? 'empty' : 'ok';
+        }
+    }
+    return 'ok';
+}
 
 /** formatting options shared by all formatting requests */
 const FORMATTING_OPTIONS = { tabSize: 2, insertSpaces: true };

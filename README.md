@@ -77,6 +77,15 @@ export default async function (ctx: BenchContext) {
 
 The following paths should be considered relative to your workspace root, and their positions are zero based. Methods marked as `timed` record a timing entry and return the raw LSP result, or `null` on a failure. `ctx.workspaceRoot` holds the absolute workspace root path for reference.
 
+Since a failure and a `null` result both return `null`, `ctx.lastError` holds `{ method, message, code? }` when the last timed request failed, and is `undefined` otherwise. It is cleared as each timed request starts.
+
+```ts
+const res = await ctx.definition("src/index.ts", 10, 5);
+if (ctx.lastError) {
+  console.error(`definition failed: ${ctx.lastError.message}`);
+}
+```
+
 **Document lifecycle** (all but `openDocument` and `closeDocument` require an open document)
 
 | Method | Description |
@@ -225,6 +234,8 @@ Options:
   --init-options-file <path>  JSON file with LSP initializationOptions
   --restart                   Restart the server between iterations
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
+  --content-modified-retries <n>
+                              Retry requests rejected with ContentModified (default: 3)
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -261,7 +272,18 @@ The JSON report contains:
 - **lifecycle**: Keep alive mode only. Spawn, initialize and final shutdown timings of the single server
 - **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero
 
-Server lifecycle timings are recorded like methods:
+Each request timing has a `result`:
+
+- `ok`: a non empty result
+- `empty`: an empty list, or a list wrapper with an empty list (a `CompletionList` or diagnostic report with no `items`, `SemanticTokens` with no `data`)
+- `null`: a `null` result. A high `null_rate` usually means a position misses a symbol, so its fast timings mean little
+- `error`: the request failed, with the message in `error`
+
+`success` is kept for compatibility and is `false` exactly for `error`. `summary` aggregates `failure_rate`, `null_rate` and `empty_rate` per method, and the printed table adds Null% and Empty% columns when any method has a nonzero rate.
+
+Requests rejected with `ContentModified` (-32801), as servers do while loading or when an edit races a request, are retried up to `--content-modified-retries` times (default 3) with a short backoff. The timing records the count in `retries` and covers only the final attempt.
+
+Server lifecycle timings are recorded like methods, with a `result` of `ok` or `error`:
 
 - `lifecycle/spawn`: spawning the process until the OS reports it started
 - `lifecycle/initialize`: the `initialize` request until its response, which includes the server's own startup
@@ -284,14 +306,16 @@ With `--restart` each run's `requests` start with spawn and initialize and end w
       "min_ms": 8.1,
       "max_ms": 42.3,
       "stddev_ms": 5.2,
-      "failure_rate": 0
+      "failure_rate": 0,
+      "null_rate": 0,
+      "empty_rate": 0
     }
   },
   "runs": [
     {
       "iteration": 1,
       "requests": [
-        { "method": "textDocument/hover", "duration_ms": 13.2, "success": true }
+        { "method": "textDocument/hover", "duration_ms": 13.2, "success": true, "result": "ok" }
       ],
       "total_ms": 245.3
     }

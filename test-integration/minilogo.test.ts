@@ -114,6 +114,18 @@ describe('minilogo language server (integration)', () => {
         expect(hover === null || typeof hover === 'object').toBe(true);
     });
 
+    it('records an unknown method as an error result with its JSON-RPC code in lastError', async () => {
+        ctx.collectTimings();
+        expect(await ctx.request('lsbench/noSuchMethod', {})).toBeNull();
+        // -32601 is MethodNotFound
+        expect(ctx.lastError).toMatchObject({ method: 'lsbench/noSuchMethod', code: -32601 });
+        expect(timingFor(ctx, 'lsbench/noSuchMethod')).toMatchObject({ result: 'error', success: false });
+
+        await ctx.documentSymbol('test.logo');
+        expect(ctx.lastError).toBeUndefined();
+        expect(timingFor(ctx, 'textDocument/documentSymbol')?.result).toBe('ok');
+    });
+
     // ── methods added on this branch ────────────────────────────────────
 
     it('highlights `square` at its definition and both call sites', async () => {

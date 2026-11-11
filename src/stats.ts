@@ -23,7 +23,19 @@ function round(value: number, decimals = 3): number {
 /** Compute aggregate statistics for a set of durations */
 export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     const durations = sorted(timings.map((t) => t.duration_ms));
-    const failures = timings.filter((t) => !t.success).length;
+    let failures = 0;
+    let nulls = 0;
+    let empties = 0;
+    for (const t of timings) {
+        if (!t.success) {
+            failures++;
+        }
+        if (t.result === 'null') {
+            nulls++;
+        } else if (t.result === 'empty') {
+            empties++;
+        }
+    }
     const n = durations.length;
 
     if (n === 0) {
@@ -37,6 +49,8 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
             max_ms: 0,
             stddev_ms: 0,
             failure_rate: 0,
+            null_rate: 0,
+            empty_rate: 0,
         };
     }
 
@@ -54,6 +68,8 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         max_ms: round(durations[n - 1]),
         stddev_ms: round(Math.sqrt(variance)),
         failure_rate: round(failures / n, 4),
+        null_rate: round(nulls / n, 4),
+        empty_rate: round(empties / n, 4),
     };
 }
 
@@ -167,6 +183,16 @@ export function printSummary(report: BenchReport): void {
 
     // Column widths
     const nameWidth = Math.max(20, ...methods.map((m) => m.length)) + 2;
+    // null and empty columns only when some method has any, keeping the common table narrow
+    let showResults = false;
+    for (const method of methods) {
+        const s = report.summary[method];
+        if (s.null_rate > 0 || s.empty_rate > 0) {
+            showResults = true;
+            break;
+        }
+    }
+    const percent = (rate: number) => `${(rate * 100).toFixed(1)}%`.padStart(8);
 
     const header =
         '  ' +
@@ -178,7 +204,8 @@ export function printSummary(report: BenchReport): void {
         'Min'.padStart(10) +
         'Max'.padStart(10) +
         'Stddev'.padStart(10) +
-        'Fail%'.padStart(8);
+        'Fail%'.padStart(8) +
+        (showResults ? 'Null%'.padStart(8) + 'Empty%'.padStart(8) : '');
 
     console.log(header);
     console.log(`  ${'─'.repeat(header.length - 2)}`);
@@ -195,7 +222,8 @@ export function printSummary(report: BenchReport): void {
             `${s.min_ms}`.padStart(10) +
             `${s.max_ms}`.padStart(10) +
             `${s.stddev_ms}`.padStart(10) +
-            `${(s.failure_rate * 100).toFixed(1)}%`.padStart(8);
+            percent(s.failure_rate) +
+            (showResults ? percent(s.null_rate) + percent(s.empty_rate) : '');
         console.log(row);
     }
 

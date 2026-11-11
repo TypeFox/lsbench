@@ -95,6 +95,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     let harness: LspHarness | null = null;
     let ctx: BenchContextImpl | null = null;
     // keep alive spawn, initialize and final shutdown timings, which belong to no iteration
+    const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries };
     let lifecycle: RequestTiming[] | undefined;
 
     // Start server if we're keeping it alive across iterations
@@ -102,7 +103,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
         await harness.start();
         lifecycle = harness.takeLifecycleTimings();
-        ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose);
+        ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
     }
 
     for (let i = 0; i < totalIterations; i++) {
@@ -120,7 +121,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // so cold-start benchmarks capture server spawn + initialize time)
         if (opts.restart) {
             harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
-            ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose);
+            ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
             try {
                 await harness.start();
                 startTimings = harness.takeLifecycleTimings();

@@ -1,12 +1,13 @@
 import type { BenchOptions, IterationResult, RequestTiming } from 'lsbench';
-import { buildReport, computeMethodStats } from 'lsbench';
-import { describe, expect, it } from 'vitest';
+import { buildReport, computeMethodStats, printSummary } from 'lsbench';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 function timing(overrides: Partial<RequestTiming> = {}): RequestTiming {
     return {
         method: 'textDocument/hover',
         duration_ms: 10,
         success: true,
+        result: 'ok',
         ...overrides,
     };
 }
@@ -24,6 +25,8 @@ describe('computeMethodStats', () => {
             max_ms: 0,
             stddev_ms: 0,
             failure_rate: 0,
+            null_rate: 0,
+            empty_rate: 0,
         });
     });
 
@@ -71,13 +74,26 @@ describe('computeMethodStats', () => {
     it('reports the failure rate rounded to 4 decimals', () => {
         const timings = [
             timing({ success: true }),
-            timing({ success: false, error: 'boom' }),
-            timing({ success: false, error: 'boom' }),
+            timing({ success: false, result: 'error', error: 'boom' }),
+            timing({ success: false, result: 'error', error: 'boom' }),
         ];
         const stats = computeMethodStats(timings);
         expect(stats.count).toBe(3);
         // 2 of 3 failed
         expect(stats.failure_rate).toBeCloseTo(0.6667, 4);
+    });
+
+    it('reports null and empty rates apart from failures', () => {
+        const stats = computeMethodStats([
+            timing(),
+            timing({ result: 'null' }),
+            timing({ result: 'null' }),
+            timing({ result: 'empty' }),
+            timing({ success: false, result: 'error', error: 'boom' }),
+        ]);
+        expect(stats.failure_rate).toBe(0.2);
+        expect(stats.null_rate).toBe(0.4);
+        expect(stats.empty_rate).toBe(0.2);
     });
 });
 
@@ -181,5 +197,47 @@ describe('buildReport', () => {
         expect(report.lifecycle).toBe(lifecycle);
         // lifecycle timings stay out of the iteration totals
         expect(report.iteration_summary.avg_ms).toBe(20);
+    });
+});
+
+describe('printSummary', () => {
+    const opts: BenchOptions = {
+        server: 'fake-language-server --stdio',
+        workspace: '/tmp/ws',
+        script: 'actions.ts',
+        iterations: 1,
+        warmup: 0,
+        output: '',
+        restart: false,
+        verbose: false,
+    };
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** print a report over the given timings and return the table header line */
+    function header(requests: RequestTiming[]): string {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        printSummary(buildReport(opts, [{ iteration: 1, requests, total_ms: 10 }], 10));
+        for (const line of lines) {
+            if (line.includes('Method')) {
+                return line;
+            }
+        }
+        return '';
+    }
+
+    it('leaves out the null and empty columns when every result is ok', () => {
+        expect(header([timing()])).not.toMatch(/Null%|Empty%/);
+    });
+
+    it('adds the null and empty columns when any method has such results', () => {
+        expect(header([timing(), timing({ method: 'completionItem/resolve', result: 'null' })])).toMatch(
+            /Fail%\s+Null%\s+Empty%/,
+        );
     });
 });
