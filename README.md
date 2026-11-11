@@ -210,7 +210,7 @@ A timed request whose provider the server advertises neither statically nor thro
 lsbench answers requests from the server so it doesn't get stuck waiting on a client:
 
 - `workspace/configuration` returns an empty object per item
-- `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`)
+- `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`). lsbench advertises `workspace.didChangeWatchedFiles` with dynamic registration, as VS Code does, so servers leave file watching to the client; their watcher registrations are tracked, but lsbench never sends file events
 - `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) and `window/workDoneProgress/create` are acknowledged
 - `window/showMessageRequest` is dismissed with `null`
 - `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying the workspace using server-initiated requests
@@ -244,6 +244,8 @@ Options:
   --warmup <number>           Warmup iterations, not recorded (default: 2)
   -o, --output <path>         JSON report output file
   --init-options-file <path>  JSON file with LSP initializationOptions
+  --client-capabilities-file <path>
+                              JSON file deep merged over the default client capabilities
   --restart                   Restart the server between iterations
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
   --content-modified-retries <n>
@@ -273,7 +275,20 @@ lsbench "typescript-language-server --stdio" -w ./project -s ./actions.ts \
   --init-options-file ./init-options.json
 ```
 
-See [`examples/init-options.json`](examples/init-options.json) for a sample. For full control over `command`, `args`, `env`, and `initializationOptions`, drive `LspHarness` programmatically with a `ServerConfig`.
+See [`examples/init-options.json`](examples/init-options.json) for a sample.
+
+Add or override client capabilities with a JSON file. It is deep merged over the defaults lsbench sends: objects merge recursively, arrays and scalars replace. For example, to turn off completion snippets:
+
+```bash
+lsbench "typescript-language-server --stdio" -w ./project -s ./actions.ts \
+  --client-capabilities-file ./client-capabilities.json
+```
+
+```json
+{ "textDocument": { "completion": { "completionItem": { "snippetSupport": false } } } }
+```
+
+For full control over `command`, `args`, `env`, `initializationOptions` and `clientCapabilities`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults.
 
 ## Output format
 

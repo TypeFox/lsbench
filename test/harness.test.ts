@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { LspHarness, pathToUri, uriToPath } from 'lsbench';
+import { defaultClientCapabilities, LspHarness, mergeCapabilities, pathToUri, uriToPath } from 'lsbench';
 import { describe, expect, it } from 'vitest';
 
 describe('pathToUri', () => {
@@ -371,5 +371,131 @@ describe('LspHarness.saveSyncOptions', () => {
             ]);
             expect(harness.registrations.map((r) => r.id)).toEqual(['save']);
         });
+    });
+});
+
+describe('mergeCapabilities', () => {
+    it('merges nested objects recursively', () => {
+        const merged = mergeCapabilities(
+            { workspace: { configuration: true, symbol: { dynamicRegistration: true } } },
+            { workspace: { symbol: { resolveSupport: { properties: ['x'] } } } },
+        );
+        expect(merged).toEqual({
+            workspace: {
+                configuration: true,
+                symbol: { dynamicRegistration: true, resolveSupport: { properties: ['x'] } },
+            },
+        });
+    });
+
+    it('replaces arrays and scalars instead of merging them', () => {
+        const merged = mergeCapabilities(
+            { hover: { contentFormat: ['markdown', 'plaintext'], dynamicRegistration: true } },
+            { hover: { contentFormat: ['plaintext'], dynamicRegistration: false } },
+        );
+        expect(merged).toEqual({ hover: { contentFormat: ['plaintext'], dynamicRegistration: false } });
+    });
+
+    it('lets an override replace an object with a scalar and the reverse', () => {
+        const merged = mergeCapabilities({ a: { b: 1 }, c: true }, { a: false, c: { d: 2 } });
+        expect(merged).toEqual({ a: false, c: { d: 2 } });
+    });
+
+    it('does not mutate its inputs', () => {
+        const base = { a: { b: 1 } };
+        const override = { a: { c: 2 } };
+        mergeCapabilities(base, override);
+        expect(base).toEqual({ a: { b: 1 } });
+        expect(override).toEqual({ a: { c: 2 } });
+    });
+});
+
+describe('defaultClientCapabilities', () => {
+    it('advertises dynamic file watching with relative patterns', () => {
+        const workspace = defaultClientCapabilities().workspace as Record<string, unknown>;
+        expect(workspace.didChangeWatchedFiles).toEqual({ dynamicRegistration: true, relativePatternSupport: true });
+    });
+});
+
+/** a fake server that echoes the client capabilities and registers a file watcher */
+const echoCapabilitiesServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', (params) => ({ capabilities: { received: params.capabilities } }));
+conn.onNotification('initialized', async () => {
+    await conn.sendRequest('client/registerCapability', {
+        registrations: [
+            {
+                id: 'watch-1',
+                method: 'workspace/didChangeWatchedFiles',
+                registerOptions: { watchers: [{ globPattern: '**/*.ts' }] },
+            },
+        ],
+    });
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('LspHarness client capabilities', () => {
+    function echoHarness(clientCapabilities?: Record<string, unknown>): LspHarness {
+        return new LspHarness(
+            {
+                command: process.execPath,
+                args: ['--input-type=module', '-e', echoCapabilitiesServer],
+                clientCapabilities,
+            },
+            process.cwd(),
+        );
+    }
+
+    it('sends the defaults when no capabilities are configured', async () => {
+        const harness = echoHarness();
+        try {
+            await harness.start();
+            expect(harness.capabilities?.received).toEqual(defaultClientCapabilities());
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('sends the configured capabilities deep merged over the defaults', async () => {
+        const harness = echoHarness({
+            workspace: { didChangeWatchedFiles: { relativePatternSupport: false } },
+            textDocument: { hover: { contentFormat: ['plaintext'] } },
+            experimental: { custom: true },
+        });
+        try {
+            await harness.start();
+            const received = harness.capabilities?.received as Record<string, Record<string, Record<string, unknown>>>;
+            expect(received.workspace.didChangeWatchedFiles).toEqual({
+                dynamicRegistration: true,
+                relativePatternSupport: false,
+            });
+            expect(received.workspace.configuration).toBe(true);
+            expect(received.textDocument.hover).toEqual({ dynamicRegistration: true, contentFormat: ['plaintext'] });
+            expect(received.textDocument.completion).toEqual(
+                (defaultClientCapabilities().textDocument as Record<string, unknown>).completion,
+            );
+            expect(received.experimental).toEqual({ custom: true });
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('accepts and tracks file watcher registrations', async () => {
+        const harness = echoHarness();
+        try {
+            await harness.start();
+            await expect.poll(() => harness.registrations.map((r) => r.method)).toEqual([
+                'workspace/didChangeWatchedFiles',
+            ]);
+        } finally {
+            await harness.stop();
+        }
     });
 });

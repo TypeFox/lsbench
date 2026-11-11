@@ -283,7 +283,7 @@ export class LspHarness {
             rootUri: workspaceUri,
             rootPath: this.workspaceRoot,
             workspaceFolders: [{ uri: workspaceUri, name: path.basename(this.workspaceRoot) }],
-            capabilities: this.clientCapabilities(),
+            capabilities: mergeCapabilities(defaultClientCapabilities(), this.config.clientCapabilities ?? {}),
             initializationOptions: this.config.initializationOptions ?? {},
         };
 
@@ -441,156 +441,186 @@ export class LspHarness {
             console.error(`[lsbench] ${msg}`);
         }
     }
+}
 
-    /** Build comprehensive client capabilities */
-    private clientCapabilities(): Record<string, unknown> {
-        return {
-            workspace: {
-                workspaceFolders: true,
-                configuration: true,
-                didChangeConfiguration: { dynamicRegistration: true },
-                symbol: {
-                    dynamicRegistration: true,
-                    symbolKind: {
-                        valueSet: Array.from({ length: 26 }, (_, i) => i + 1),
-                    },
-                    resolveSupport: { properties: ['location.range'] },
+/**
+ * The client capabilities lsbench advertises by default, modeled on what
+ * VS Code sends. ServerConfig.clientCapabilities is deep merged over these.
+ */
+export function defaultClientCapabilities(): Record<string, unknown> {
+    return {
+        workspace: {
+            workspaceFolders: true,
+            configuration: true,
+            didChangeConfiguration: { dynamicRegistration: true },
+        // advertised so servers rely on the client for file watching, as they do under VS Code;
+        // the resulting registrations are tracked but no file events are ever sent
+        didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: true },
+            symbol: {
+                dynamicRegistration: true,
+                symbolKind: {
+                    valueSet: Array.from({ length: 26 }, (_, i) => i + 1),
                 },
+                resolveSupport: { properties: ['location.range'] },
             },
-            textDocument: {
-                synchronization: {
-                    dynamicRegistration: true,
-                    willSave: true,
-                    willSaveWaitUntil: true,
-                    didSave: true,
-                },
-                hover: {
-                    dynamicRegistration: true,
-                    contentFormat: ['markdown', 'plaintext'],
-                },
-                completion: {
-                    dynamicRegistration: true,
-                    completionItem: {
-                        snippetSupport: true,
-                        commitCharactersSupport: true,
-                        documentationFormat: ['markdown', 'plaintext'],
-                        resolveSupport: {
-                            properties: ['documentation', 'detail', 'additionalTextEdits'],
-                        },
-                    },
-                    contextSupport: true,
-                },
-                definition: { dynamicRegistration: true, linkSupport: true },
-                declaration: { dynamicRegistration: true, linkSupport: true },
-                typeDefinition: { dynamicRegistration: true, linkSupport: true },
-                implementation: { dynamicRegistration: true, linkSupport: true },
-                references: { dynamicRegistration: true },
-                documentHighlight: { dynamicRegistration: true },
-                documentSymbol: {
-                    dynamicRegistration: true,
-                    hierarchicalDocumentSymbolSupport: true,
-                    symbolKind: {
-                        valueSet: Array.from({ length: 26 }, (_, i) => i + 1),
-                    },
-                },
-                formatting: { dynamicRegistration: true },
-                rangeFormatting: { dynamicRegistration: true },
-                onTypeFormatting: { dynamicRegistration: true },
-                rename: { dynamicRegistration: true, prepareSupport: true },
-                codeAction: {
-                    dynamicRegistration: true,
-                    codeActionLiteralSupport: {
-                        codeActionKind: {
-                            valueSet: [
-                                '',
-                                'quickfix',
-                                'refactor',
-                                'refactor.extract',
-                                'refactor.inline',
-                                'refactor.rewrite',
-                                'source',
-                                'source.organizeImports',
-                            ],
-                        },
-                    },
-                    dataSupport: true,
-                    resolveSupport: { properties: ['edit'] },
-                },
-                signatureHelp: {
-                    dynamicRegistration: true,
-                    signatureInformation: {
-                        documentationFormat: ['markdown', 'plaintext'],
-                        parameterInformation: { labelOffsetSupport: true },
-                    },
-                },
-                foldingRange: { dynamicRegistration: true, lineFoldingOnly: false },
-                selectionRange: { dynamicRegistration: true },
-                documentLink: { dynamicRegistration: true, tooltipSupport: true },
-                codeLens: { dynamicRegistration: true },
-                inlayHint: {
-                    dynamicRegistration: true,
+        },
+        textDocument: {
+            synchronization: {
+                dynamicRegistration: true,
+                willSave: true,
+                willSaveWaitUntil: true,
+                didSave: true,
+            },
+            hover: {
+                dynamicRegistration: true,
+                contentFormat: ['markdown', 'plaintext'],
+            },
+            completion: {
+                dynamicRegistration: true,
+                completionItem: {
+                    snippetSupport: true,
+                    commitCharactersSupport: true,
+                    documentationFormat: ['markdown', 'plaintext'],
                     resolveSupport: {
-                        properties: ['tooltip', 'textEdits', 'label.tooltip', 'label.location', 'label.command'],
+                        properties: ['documentation', 'detail', 'additionalTextEdits'],
                     },
                 },
-                callHierarchy: { dynamicRegistration: true },
-                typeHierarchy: { dynamicRegistration: true },
-                semanticTokens: {
-                    dynamicRegistration: true,
-                    requests: {
-                        range: true,
-                        full: { delta: true },
-                    },
-                    tokenTypes: [
-                        'namespace',
-                        'type',
-                        'class',
-                        'enum',
-                        'interface',
-                        'struct',
-                        'typeParameter',
-                        'parameter',
-                        'variable',
-                        'property',
-                        'enumMember',
-                        'event',
-                        'function',
-                        'method',
-                        'macro',
-                        'keyword',
-                        'modifier',
-                        'comment',
-                        'string',
-                        'number',
-                        'regexp',
-                        'operator',
-                        'decorator',
-                    ],
-                    tokenModifiers: [
-                        'declaration',
-                        'definition',
-                        'readonly',
-                        'static',
-                        'deprecated',
-                        'abstract',
-                        'async',
-                        'modification',
-                        'documentation',
-                        'defaultLibrary',
-                    ],
-                    formats: ['relative'],
-                    overlappingTokenSupport: false,
-                    multilineTokenSupport: false,
-                },
-                // textDocument.diagnostic is intentionally not advertised: some servers switch
-                // from push to pull diagnostics when it is present, which breaks waitForDiagnostics
-                publishDiagnostics: {
-                    relatedInformation: true,
-                    tagSupport: { valueSet: [1, 2] },
+                contextSupport: true,
+            },
+            definition: { dynamicRegistration: true, linkSupport: true },
+            declaration: { dynamicRegistration: true, linkSupport: true },
+            typeDefinition: { dynamicRegistration: true, linkSupport: true },
+            implementation: { dynamicRegistration: true, linkSupport: true },
+            references: { dynamicRegistration: true },
+            documentHighlight: { dynamicRegistration: true },
+            documentSymbol: {
+                dynamicRegistration: true,
+                hierarchicalDocumentSymbolSupport: true,
+                symbolKind: {
+                    valueSet: Array.from({ length: 26 }, (_, i) => i + 1),
                 },
             },
-        };
+            formatting: { dynamicRegistration: true },
+            rangeFormatting: { dynamicRegistration: true },
+            onTypeFormatting: { dynamicRegistration: true },
+            rename: { dynamicRegistration: true, prepareSupport: true },
+            codeAction: {
+                dynamicRegistration: true,
+                codeActionLiteralSupport: {
+                    codeActionKind: {
+                        valueSet: [
+                            '',
+                            'quickfix',
+                            'refactor',
+                            'refactor.extract',
+                            'refactor.inline',
+                            'refactor.rewrite',
+                            'source',
+                            'source.organizeImports',
+                        ],
+                    },
+                },
+                dataSupport: true,
+                resolveSupport: { properties: ['edit'] },
+            },
+            signatureHelp: {
+                dynamicRegistration: true,
+                signatureInformation: {
+                    documentationFormat: ['markdown', 'plaintext'],
+                    parameterInformation: { labelOffsetSupport: true },
+                },
+            },
+            foldingRange: { dynamicRegistration: true, lineFoldingOnly: false },
+            selectionRange: { dynamicRegistration: true },
+            documentLink: { dynamicRegistration: true, tooltipSupport: true },
+            codeLens: { dynamicRegistration: true },
+            inlayHint: {
+                dynamicRegistration: true,
+                resolveSupport: {
+                    properties: ['tooltip', 'textEdits', 'label.tooltip', 'label.location', 'label.command'],
+                },
+            },
+            callHierarchy: { dynamicRegistration: true },
+            typeHierarchy: { dynamicRegistration: true },
+            semanticTokens: {
+                dynamicRegistration: true,
+                requests: {
+                    range: true,
+                    full: { delta: true },
+                },
+                tokenTypes: [
+                    'namespace',
+                    'type',
+                    'class',
+                    'enum',
+                    'interface',
+                    'struct',
+                    'typeParameter',
+                    'parameter',
+                    'variable',
+                    'property',
+                    'enumMember',
+                    'event',
+                    'function',
+                    'method',
+                    'macro',
+                    'keyword',
+                    'modifier',
+                    'comment',
+                    'string',
+                    'number',
+                    'regexp',
+                    'operator',
+                    'decorator',
+                ],
+                tokenModifiers: [
+                    'declaration',
+                    'definition',
+                    'readonly',
+                    'static',
+                    'deprecated',
+                    'abstract',
+                    'async',
+                    'modification',
+                    'documentation',
+                    'defaultLibrary',
+                ],
+                formats: ['relative'],
+                overlappingTokenSupport: false,
+                multilineTokenSupport: false,
+            },
+            // textDocument.diagnostic is intentionally not advertised: some servers switch
+            // from push to pull diagnostics when it is present, which breaks waitForDiagnostics
+            publishDiagnostics: {
+                relatedInformation: true,
+                tagSupport: { valueSet: [1, 2] },
+            },
+        },
+    };
+}
+
+/**
+ * Deep merge `override` over `base` without mutating either: plain objects merge
+ * recursively, arrays and scalars in `override` replace the value in `base`.
+ */
+export function mergeCapabilities(
+    base: Record<string, unknown>,
+    override: Record<string, unknown>,
+): Record<string, unknown> {
+    const result: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(override)) {
+        const current = result[key];
+        if (isPlainObject(current) && isPlainObject(value)) {
+            result[key] = mergeCapabilities(current, value);
+        } else {
+            result[key] = value;
+        }
     }
+    return result;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

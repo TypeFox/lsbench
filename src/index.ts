@@ -8,7 +8,7 @@ export { METHOD_PROVIDERS, summarizeSupport, supportsMethod } from './capabiliti
 export type { BenchContextOptions } from './context.js';
 export { addRegisteredLanguage, BenchContextImpl, classifyResult } from './context.js';
 export type { Diagnostic, SaveSyncOptions, ServerExit } from './harness.js';
-export { LspHarness, pathToUri, uriToPath } from './harness.js';
+export { defaultClientCapabilities, LspHarness, mergeCapabilities, pathToUri, uriToPath } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
 export { buildReport, computeMethodStats, printSummary } from './stats.js';
 

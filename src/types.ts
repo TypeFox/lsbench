@@ -9,6 +9,8 @@ export interface ServerConfig {
     env?: Record<string, string>;
     /** Initialization options sent during LSP initialize */
     initializationOptions?: unknown;
+    /** Client capabilities deep merged over the defaults: objects merge recursively, arrays and scalars replace */
+    clientCapabilities?: Record<string, unknown>;
 }
 
 // ── CLI Options ─────────────────────────────────────────────────────────────
@@ -32,6 +34,8 @@ export interface BenchOptions {
     serverArgs?: string[];
     /** Initialization options sent during the LSP initialize handshake */
     initializationOptions?: unknown;
+    /** Client capabilities deep merged over the defaults sent during initialize */
+    clientCapabilities?: Record<string, unknown>;
     /** Verbose logging */
     verbose: boolean;
     /** Milliseconds to wait for a shutdown reply before killing the server (default 5000) */

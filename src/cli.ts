@@ -36,6 +36,7 @@ program
     .option('--warmup <number>', 'Number of warmup iterations (not recorded)', '2')
     .option('-o, --output <path>', 'Output file for JSON report', '')
     .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
+    .option('--client-capabilities-file <path>', 'Path to a JSON file deep merged over the default client capabilities')
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
@@ -44,21 +45,18 @@ program
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
         const serverArgs = command.args.slice(1);
-        // Load initializationOptions from a JSON file if provided
-        let initializationOptions: unknown;
-        const initOptionsFile = rawOpts.initOptionsFile as string | undefined;
-        if (initOptionsFile) {
-            if (!fs.existsSync(initOptionsFile)) {
-                console.error(`Error: Init options file not found: ${initOptionsFile}`);
-                process.exit(1);
-            }
-            try {
-                initializationOptions = JSON.parse(fs.readFileSync(initOptionsFile, 'utf8'));
-            } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`Error: Failed to parse init options file ${initOptionsFile}: ${msg}`);
-                process.exit(1);
-            }
+        // load initializationOptions and client capabilities from JSON files if provided
+        const initializationOptions = readJsonFile(rawOpts.initOptionsFile as string | undefined, 'Init options');
+        const clientCapabilities = readJsonFile(
+            rawOpts.clientCapabilitiesFile as string | undefined,
+            'Client capabilities',
+        );
+        if (
+            clientCapabilities !== undefined &&
+            (typeof clientCapabilities !== 'object' || clientCapabilities === null || Array.isArray(clientCapabilities))
+        ) {
+            console.error('Error: Client capabilities file must contain a JSON object');
+            process.exit(1);
         }
 
         const opts: BenchOptions = {
@@ -75,6 +73,7 @@ program
             skipUnsupported: rawOpts.skipUnsupported as boolean,
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
+            clientCapabilities: clientCapabilities as Record<string, unknown> | undefined,
         };
 
         // Validate inputs
@@ -141,6 +140,24 @@ program
     });
 
 program.parse();
+
+/** Read and parse a JSON file named by a CLI flag, exiting with an error if it is missing or invalid */
+function readJsonFile(file: string | undefined, what: string): unknown {
+    if (!file) {
+        return undefined;
+    }
+    if (!fs.existsSync(file)) {
+        console.error(`Error: ${what} file not found: ${file}`);
+        process.exit(1);
+    }
+    try {
+        return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Error: Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
+        process.exit(1);
+    }
+}
 
 // ── Primer ──────────────────────────────────────────────────────────────────
 // A self-contained onboarding document for an agent (or human) about to use
@@ -337,6 +354,7 @@ Property
 lsbench answers these so a server never stalls waiting on a client:
   workspace/configuration                 an empty object per item
   client/(un)registerCapability           accepted, all registrations are tracked (ctx.registrations)
+                                          (didChangeWatchedFiles is advertised, but no file events are sent)
   workspace/*/refresh, workDoneProgress   acknowledged
   window/showMessageRequest               dismissed with null
   workspace/applyEdit                     declined, lsbench never modifies the workspace
@@ -355,6 +373,8 @@ lsbench answers these so a server never stalls waiting on a client:
           --warmup <number>        Warmup iterations, not recorded                  (default: 2)
       -o, --output <path>          Write the JSON report to this file
           --init-options-file <p>  JSON file with LSP initializationOptions
+          --client-capabilities-file <p>
+                                   JSON file deep merged over the client capabilities
           --restart                Restart the server each iteration (cold start)   (default: false)
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
           --content-modified-retries <n>

@@ -11,6 +11,7 @@ describe('resolveServerConfig', () => {
             command: 'my-language-server',
             args: [],
             initializationOptions: undefined,
+            clientCapabilities: undefined,
         });
     });
 
@@ -35,6 +36,12 @@ describe('resolveServerConfig', () => {
         const initOptions = { preferences: { includeCompletionsForModuleExports: true } };
         const cfg = resolveServerConfig('cmd', undefined, initOptions);
         expect(cfg.initializationOptions).toBe(initOptions);
+    });
+
+    it('passes clientCapabilities through untouched', () => {
+        const caps = { experimental: { custom: true } };
+        const cfg = resolveServerConfig('cmd', undefined, undefined, caps);
+        expect(cfg.clientCapabilities).toBe(caps);
     });
 });
 
