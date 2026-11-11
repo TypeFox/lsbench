@@ -217,7 +217,7 @@ The first matching publish is not always the final word. rust-analyzer and zls p
 - `until: (diagnostics) => boolean`: resolve on the first matching publish whose diagnostics pass it. Matching publishes failing it are counted in `publishes` but do not resolve the wait
 - `settleMs`: after the resolving publish, keep waiting until no further matching publish arrived for `settleMs`, then resolve with the latest one. With `until`, the quiet period starts once `until` is satisfied, and later publishes no longer need to pass it. Quiet time counts from the receipt of a publish, so a cached publish, or a close window candidate accepted at the end of its window, may already have been quiet long enough
 
-`timeout` caps the whole wait, quiet period included. The wait resolves with `{ diagnostics, timedOut, publishes, ms }`:
+`timeout` caps the whole wait, quiet period included. The wait resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }` (`source` and `pulls` are covered under [pull diagnostics](#pull-diagnostics)):
 
 - `diagnostics`: the diagnostics of the resolving publish (the latest one with `settleMs`). On timeout, those of the latest matching publish when one arrived, otherwise the cached ones
 - `timedOut`: `true` when the timeout fired before a matching publish (passing `until`, when given) arrived. A timeout during the quiet period does not count, the wait then resolves with the latest publish. This comes from the timer itself, never from comparing elapsed time against the timeout, since timers can fire slightly early
@@ -282,7 +282,7 @@ Pass `--wait-idle [ms]` to wait for idle after `initialized`, and after each res
 
 ### Unsupported requests
 
-A timed request whose provider the server advertises neither statically nor through `client/registerCapability` is not sent. It returns `null` without a round trip and records a timing with `result: "skipped"` and `duration_ms: 0`, so it shows up in the report as skipped instead of as a fast failure. This covers the timed context methods above, including `willSaveWaitUntil`, and `request()` calls for the same LSP methods. Other `request()` methods are always sent. Pass `--no-skip-unsupported` (or `skipUnsupported: false`) to send them anyway. Verbose mode prints which requests the server supports right after startup, and logs dynamic registrations as they arrive. A server that registers a provider only after `initialized` gets it skipped until the registration arrives, so wait (for example with `waitForDiagnostics`) before the first request.
+A timed request whose provider the server advertises neither statically nor through `client/registerCapability` is not sent. It returns `null` without a round trip and records a timing with `result: "skipped"` and `duration_ms: 0`, so it shows up in the report as skipped instead of as a fast failure. This covers the timed context methods above, including `willSaveWaitUntil`, and `request()` calls for the same LSP methods. A pulled diagnostics wait on a server without `diagnosticProvider` is skipped the same way, and resolves with the cached diagnostics. Other `request()` methods are always sent. Pass `--no-skip-unsupported` (or `skipUnsupported: false`) to send them anyway. Verbose mode prints which requests the server supports right after startup, and logs dynamic registrations as they arrive. A server that registers a provider only after `initialized` gets it skipped until the registration arrives, so wait (for example with `waitForDiagnostics`) before the first request.
 
 ### Save sync
 
@@ -312,6 +312,13 @@ addRegisteredLanguage('mylanguage', '.dsl');
 ```
 
 This will ensure that opening a document with the extension `.dsl` will have an associated language ID of `mylanguage`, to invoke the correct language server.
+
+To override the language ID of a single document instead, pass it when opening:
+
+```ts
+// a JSON file with comments, served as jsonc
+await ctx.openDocument(".vscode/settings.json", { languageId: "jsonc" });
+```
 
 ## CLI options
 
@@ -367,6 +374,11 @@ Server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` are fo
 
 When a server crashes, the tail of its stderr is still included in the error message either way.
 
+### Prime
+
+The CLI also supports a `prime` command that will print helpful information for working with `lsbench`.
+This can be leveraged by humans as well as agents to use the tool in a self-documenting fashion.
+
 ## Server configuration
 
 The server argument is a command string, split on whitespace. Anything after `--` is appended to the server's arguments:
@@ -417,7 +429,7 @@ For full control over `command`, `args`, `env`, `initializationOptions`, `client
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/open`, `diagnostics/edit`) and pulled diagnostics (`diagnostics/pull/open`, `diagnostics/pull/edit`)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, null rate, empty rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/*` and `diagnostics/pull/*`, see [waiting for diagnostics](#waiting-for-diagnostics)) and idle waits (`server/idle`)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize, idle and final shutdown timings of the single server
@@ -480,18 +492,32 @@ With `--restart` each run's `requests` start with spawn, initialize and idle and
 }
 ```
 
-## Prime
+## Comparing diagnostics timings
 
-The CLI also supports a `prime` command that will print helpful information for working with `lsbench`.
-This can be leveraged by humans as well as agents to use the tool in a self-documenting fashion.
+Time to diagnostics measures when a server publishes, which is often not how long it took to check the file. Keep these in mind before comparing servers:
+
+- **Debounce**: some servers wait on purpose before computing diagnostics, the VS Code JSON server for example. Your results will reflect that delay as a flat floor in the timings, with a min that sits at the delay. Compare such servers against their debounce, not against servers without one.
+- **Silent servers**: some servers never publish for a clean file, or skip some classes of errors, so the wait runs into its timeout and `timeout_rate` means "no diagnostics", not "slow". Give such waits an explicit, short `timeout` so they cost little. When you do expect diagnostics, `until: (d) => d.length > 0` makes the wait ignore empty publishes, and `settleMs` picks up diagnostics that arrive in a later publish.
+- **Push vs pull**: a push timing (`diagnostics/open`, `diagnostics/edit`) includes the server's debounce, a pull timing (`diagnostics/pull/*`) is a request without one, so the two are not comparable. In `auto` mode lsbench [learns per server](#pull-diagnostics) which one applies, so check which methods show up in the report, or pass `mode: "push"` or `mode: "pull"` to compare like with like.
+- **Intermediate publishes**: some servers publish in stages, rust-analyzer for example sends an empty syntax pass before the semantic diagnostics. Version aware waits already ignore publishes for older versions and closed documents, but such a pass belongs to the current state and resolves a plain wait early. Use `until` to skip it, and `settleMs` when a server publishes in bursts. `-v` logs every publish, which shows what a server sends.
+
+## Warmup and readiness
+
+Servers with a load phase, such as rust-analyzer, index the workspace after `initialized`. Requests sent meanwhile fail with `ContentModified` or answer from a partial model, which used to take several warmup iterations to wait out. Wait for the load to finish instead:
+
+- `--wait-idle [ms]` waits after `initialized`, and after each restart with `--restart`, before the script runs. It is recorded as `lifecycle/idle`
+- `ctx.waitForIdle()` waits inside the script, for example after an edit that triggers reindexing. It is recorded as `server/idle`
+
+Both rely on work done progress or rust-analyzer's server status (see [waiting for idle](#waiting-for-idle)). A server that reports neither resolves after the short quiet period, so the wait tells nothing about it.
+
+Warmup iterations are still useful for what idle does not cover: JIT compilation and caches that only warm up as requests run, per document state built on the first open, and servers that report no progress. Use `--warmup 3-5` for steady state numbers.
 
 ## Tips
 
-- **Warmup matters**: JIT compilation, caches, etc. need a few runs to stabilize (unless you want cold-start times). Use `--warmup 3-5` for reliable numbers once the server is warmed up.
 - **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks).
 - **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency. The wait itself is reported as `diagnostics/open` or `diagnostics/edit` (`diagnostics/pull/open` or `diagnostics/pull/edit` when pulled); check `timeout_rate` before reading its durations.
-- **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this, or `--wait-idle` for servers that report progress, such as rust-analyzer.
-- **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace.
+- **Warmup**: see [warmup and readiness](#warmup-and-readiness).
+- **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace, and read [comparing diagnostics timings](#comparing-diagnostics-timings) first.
 
 ## Development
 

@@ -233,8 +233,9 @@ workspace?".
 
 By default the server is kept alive across iterations (warm benchmark). With
 \`--restart\` a fresh server is spawned inside each timed iteration, so the timing
-captures spawn + initialize (cold start). Either way, spawn, initialize and
-shutdown are also reported as lifecycle/* methods (see Output format).
+captures spawn + initialize (cold start). Either way, spawn, initialize,
+idle (with --wait-idle) and shutdown are also reported as lifecycle/* methods
+(see Output format).
 
 ## Quick start
 
@@ -302,12 +303,15 @@ Unsupported requests: a timed request whose provider the server advertises
 neither statically nor dynamically is not sent. It returns null at once and
 records result "skipped" with duration_ms 0. This applies to the wrappers
 below, willSaveWaitUntil, and request() calls for the same methods; other
-request() methods are always sent. --no-skip-unsupported sends them anyway.
+request() methods are always sent. A pulled diagnostics wait without
+diagnosticProvider is skipped too and resolves with the cached diagnostics.
+--no-skip-unsupported (or skipUnsupported: false) sends them anyway.
 Providers registered dynamically after initialized are skipped until the
 registration arrives, so wait (e.g. waitForDiagnostics) before the first request.
 
 Document lifecycle  (all but openDocument/closeDocument throw if the document is not open)
-  openDocument(path)                      textDocument/didOpen, call before requests on a file
+  openDocument(path, options?)            textDocument/didOpen, call before requests on a file. options.languageId
+                                          overrides the languageId detected from the extension, for this file only
   closeDocument(path)                     textDocument/didClose
   edit(path, edits)                       textDocument/didChange. edits is an EditOperation or an array,
                                           each { range: { start: {line,character}, end: {line,character} }, text }.
@@ -366,7 +370,8 @@ Workspace, hierarchies, pull diagnostics  (timed)
   Pull diagnostics need a server with diagnosticProvider. lsbench does not
   advertise the textDocument.diagnostic client capability, since servers built
   on vscode-languageserver would then stop pushing diagnostics. waitForDiagnostics
-  pulls from servers that advertise diagnosticProvider anyway (see below).
+  pulls from servers that advertise diagnosticProvider anyway (see below). To
+  advertise it, set textDocument.diagnostic via --client-capabilities-file.
 
 Resolve  (timed, the item from the matching request is sent back as the params)
   completionItemResolve(item)             completionItem/resolve
@@ -456,12 +461,12 @@ lsbench answers these so a server never stalls waiting on a client:
                                           (didChangeWatchedFiles is advertised, but no file events are sent)
   workspace/*/refresh                     acknowledged
   window/workDoneProgress/create          acknowledged, the token is tracked for waitForIdle
+  window/showMessageRequest               dismissed with null
+  workspace/applyEdit                     declined, lsbench never modifies the workspace
 
 lsbench advertises window.workDoneProgress and rust-analyzer's
 experimental.serverStatusNotification, and tracks $/progress begin/end and
 experimental/serverStatus (verbose mode logs progress titles).
-  window/showMessageRequest               dismissed with null
-  workspace/applyEdit                     declined, lsbench never modifies the workspace
 
 ## CLI reference
 
@@ -486,7 +491,8 @@ experimental/serverStatus (verbose mode logs progress titles).
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
-          --no-skip-unsupported    Send requests the server does not advertise
+          --no-skip-unsupported    Send requests even when the server does not
+                                   advertise their provider
           --wait-idle [ms]         After initialized (and each restart), wait up to ms
                                    for the server to become idle before the script  (default: 30000)
           --server-log <file>      Append server stderr, window/logMessage, showMessage
@@ -545,7 +551,7 @@ These timings carry the diagnostic count in \`diagnostics\`.
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
 such as a CompletionList with no items), null, error (with \`error\` set),
 skipped (not sent, the server lacks the provider), or timeout (a diagnostics
-wait ran out). \`success\` is kept and is false exactly for errors, skips and
+or idle wait ran out). \`success\` is kept and is false exactly for errors, skips and
 timeouts. count and skipped include skips; the rates cover only requests
 actually sent, and durations also leave out timeouts, which only count toward
 timeout_rate (a server that never publishes for clean files shows 1 there).
@@ -563,9 +569,23 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
     timed as diagnostics/open or diagnostics/edit (diagnostics/pull/* when
     pulled); check timeout_rate first.
   - Point positions at real symbols in your workspace, or requests return null.
-  - Large workspaces: the first iteration is often much slower due to indexing —
-    warmup absorbs this. --wait-idle (or ctx.waitForIdle()) waits for servers
-    that report progress, such as rust-analyzer, to finish loading instead.
+  - Servers with a load phase (rust-analyzer): use --wait-idle, or
+    ctx.waitForIdle() in the script, instead of many warmup iterations. Both
+    rely on $/progress or experimental/serverStatus; a server reporting
+    neither resolves after quietMs. Warmup still covers JIT, caches and
+    servers without progress.
+  - Comparing time to diagnostics across servers:
+      debounce: some servers wait on purpose before computing diagnostics
+        (e.g. the VS Code JSON server); results show a flat floor, a min
+        that sits at the delay, so compare them against that delay
+      silence: some servers never publish for clean files or for some error
+        classes, so waits time out; give them a short timeout, and read
+        timeout_rate as "no diagnostics", not "slow"
+      push vs pull: diagnostics/pull/* has no debounce, so do not compare it
+        with diagnostics/open or /edit; pass mode 'push' or 'pull' to force one
+      intermediate publishes: some servers (e.g. rust-analyzer) publish an
+        empty syntax pass first; until: d => d.length > 0 skips it, settleMs
+        takes the last publish of a burst
   - Cold start: use --restart to measure spawn + initialize time per iteration
     (lifecycle/spawn, lifecycle/initialize).
   - Compare servers: run the same script/workspace against different servers
