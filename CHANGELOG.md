@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## v0.3.0 (unreleased)
+## v0.3.0-next.0 (preview)
 
 Makes diagnostics timings trustworthy (version aware, timed, push or pull, with explicit timeouts), adds a readiness signal for servers that load in the background, classifies every result, skips requests the server does not support, and keeps the report when a server crashes.
 
