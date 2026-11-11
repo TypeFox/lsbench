@@ -36,10 +36,16 @@ export interface SaveSyncOptions {
 }
 
 /**
- * How long after a didClose an empty, unversioned publish is still credited to the closed
- * generation when it arrives after the document was reopened (a later patch may expose this)
+ * How long after a didClose the first empty, unversioned publish following a reopen may
+ * still be the server clearing the closed document (a later patch may expose this)
  */
 export const CLOSE_PUBLISH_WINDOW_MS = 1000;
+
+/**
+ * What a tracker has learned about its server: `publishes` when it clears closed documents
+ * with a publish, `silent` when it does not, `unknown` until either was observed
+ */
+export type ClosePublishBehavior = 'unknown' | 'publishes' | 'silent';
 
 /** A textDocument/publishDiagnostics notification as received, stamped with the document state */
 export interface DiagnosticsPublish {
@@ -71,20 +77,36 @@ export interface DocumentSyncState {
 }
 
 interface TrackedDocument extends DocumentSyncState {
-    /** receipt time of the latest didClose, while its clearing publish may still arrive */
+    /** time of the latest didClose, until its close window ends */
     closedAt?: bigint;
+    /** ends the close window */
+    closeTimer?: NodeJS.Timeout;
+    /** whether any publish arrived since the latest didClose */
+    publishedSinceClose?: boolean;
+    /** a publish after the reopen that may still be the clearing publish of the close */
+    candidate?: DiagnosticsPublish;
 }
 
 /**
  * Tracks document sync notifications and diagnostics publishes per URI, so waits can tell
  * a publish for the current document state from a stale one. Publishes received while a
  * document is closed keep the closed generation and never match a later open.
+ *
+ * Many servers clear a closed document with an empty, unversioned publish, which can land
+ * after a quick reopen and look like the publish for the new generation. Until the tracker
+ * knows how its server behaves, the first such publish within the close window is held as
+ * a tentative candidate: a further publish before the window ends supersedes it, otherwise
+ * it is accepted with its own receipt time when the window ends. What happens teaches the
+ * tracker whether the server publishes on close, and only then is the candidate dropped
+ * right away (`publishes`) or the rule turned off (`silent`). One tracker serves one
+ * server process, `clear()` forgets what it learned.
  */
 export class DiagnosticsTracker {
     private documents = new Map<string, TrackedDocument>();
     private latest = new Map<string, DiagnosticsPublish>();
     private listeners = new Map<string, Set<(publish: DiagnosticsPublish) => void>>();
     private seq = 0;
+    private _closeBehavior: ClosePublishBehavior = 'unknown';
 
     constructor(
         private log: (msg: string) => void = () => {},
@@ -93,8 +115,7 @@ export class DiagnosticsTracker {
 
     /** Update document state from an outgoing notification, other methods are ignored */
     noteNotification(method: string, params: unknown): void {
-        const textDocument = (params as { textDocument?: { uri?: unknown; version?: unknown } } | null)
-            ?.textDocument;
+        const textDocument = (params as { textDocument?: { uri?: unknown; version?: unknown } } | null)?.textDocument;
         if (typeof textDocument?.uri !== 'string') {
             return;
         }
@@ -111,35 +132,47 @@ export class DiagnosticsTracker {
             this.markSynced(doc, 'didChange');
         } else if (method === 'textDocument/didClose') {
             doc.open = false;
-            doc.closedAt = process.hrtime.bigint();
+            this.startCloseWindow(uri, doc);
         } else {
             return;
         }
         this.documents.set(uri, doc);
     }
 
-    /** Record a publish and hand it to the listeners of its URI */
+    /** Record a publish and hand it to the listeners of its URI, unless it is held as a candidate */
     receive(params: PublishDiagnosticsParams): DiagnosticsPublish {
         const receivedAt = process.hrtime.bigint();
         const doc = this.documents.get(params.uri);
         let generation = doc?.generation ?? 0;
-        if (doc?.closedAt !== undefined) {
-            // the first publish after a close may be the server clearing the closed document,
-            // landing after the reopen; credit it to the closed generation if it looks like one
-            const sinceCloseMs = Number(receivedAt - doc.closedAt) / 1_000_000;
-            if (
-                doc.open &&
-                params.diagnostics.length === 0 &&
-                params.version === undefined &&
-                sinceCloseMs <= this.closeWindowMs
-            ) {
+        let tentative = false;
+        if (doc && doc.generation > 0 && !doc.open) {
+            this.learn('publishes', `publish for ${params.uri} while it is closed`);
+        } else if (doc?.candidate) {
+            // a further publish after the reopen: the candidate was the close publish
+            this.log(`Publish for ${params.uri} supersedes the tentative empty publish after didClose`);
+            doc.candidate = undefined;
+            this.learn('publishes', `a publish superseded the empty one after closing ${params.uri}`);
+        } else if (
+            doc?.closedAt !== undefined &&
+            !doc.publishedSinceClose &&
+            params.diagnostics.length === 0 &&
+            params.version === undefined
+        ) {
+            // the first publish after the reopen may be the server clearing the closed document
+            const sinceCloseMs = (Number(receivedAt - doc.closedAt) / 1_000_000).toFixed(1);
+            if (this._closeBehavior === 'publishes') {
                 generation--;
                 this.log(
-                    `Empty publish for ${params.uri} ${sinceCloseMs.toFixed(1)}ms after didClose, ` +
+                    `Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
                         `credited to closed generation ${generation}`,
                 );
+            } else if (this._closeBehavior === 'unknown') {
+                tentative = true;
+                this.log(`Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, held as tentative`);
             }
-            doc.closedAt = undefined;
+        }
+        if (doc?.closedAt !== undefined) {
+            doc.publishedSinceClose = true;
         }
         const publish: DiagnosticsPublish = {
             uri: params.uri,
@@ -151,11 +184,17 @@ export class DiagnosticsTracker {
         if (params.version !== undefined) {
             publish.version = params.version;
         }
-        this.latest.set(params.uri, publish);
-        for (const cb of this.listeners.get(params.uri) ?? []) {
-            cb(publish);
+        if (tentative && doc) {
+            doc.candidate = publish;
+        } else {
+            this.deliver(publish);
         }
         return publish;
+    }
+
+    /** What the tracker learned about the server publishing on close */
+    get closeBehavior(): ClosePublishBehavior {
+        return this._closeBehavior;
     }
 
     /** The state of a document, from the notifications sent for it */
@@ -217,11 +256,61 @@ export class DiagnosticsTracker {
         });
     }
 
-    /** Forget all documents and publishes, pending waits run into their timeout */
+    /** Forget all documents, publishes and learned behavior, pending waits run into their timeout */
     clear(): void {
+        for (const doc of this.documents.values()) {
+            clearTimeout(doc.closeTimer);
+        }
+        this._closeBehavior = 'unknown';
         this.documents.clear();
         this.latest.clear();
         this.listeners.clear();
+    }
+
+    /** Make a publish the latest for its URI and hand it to the listeners */
+    private deliver(publish: DiagnosticsPublish): void {
+        this.latest.set(publish.uri, publish);
+        for (const cb of this.listeners.get(publish.uri) ?? []) {
+            cb(publish);
+        }
+    }
+
+    /** Open a close window, dropping a candidate still held from an earlier close */
+    private startCloseWindow(uri: string, doc: TrackedDocument): void {
+        clearTimeout(doc.closeTimer);
+        doc.candidate = undefined;
+        doc.closedAt = process.hrtime.bigint();
+        doc.publishedSinceClose = false;
+        doc.closeTimer = setTimeout(() => this.endCloseWindow(uri, doc), this.closeWindowMs);
+        // a pending window must not keep the process alive
+        doc.closeTimer.unref();
+    }
+
+    /** At the end of the close window, accept a held candidate and learn from what arrived */
+    private endCloseWindow(uri: string, doc: TrackedDocument): void {
+        doc.closeTimer = undefined;
+        doc.closedAt = undefined;
+        const candidate = doc.candidate;
+        if (candidate) {
+            doc.candidate = undefined;
+            this.log(`No further publish for ${uri} within the close window, accepting the empty one`);
+            this.learn('silent', `the empty publish after reopening ${uri} was not superseded`);
+            this.deliver(candidate);
+        } else if (!doc.publishedSinceClose) {
+            this.learn('silent', `no publish for ${uri} within ${this.closeWindowMs}ms of didClose`);
+        }
+    }
+
+    private learn(behavior: Exclude<ClosePublishBehavior, 'unknown'>, reason: string): void {
+        if (this._closeBehavior === behavior) {
+            return;
+        }
+        this._closeBehavior = behavior;
+        this.log(
+            behavior === 'publishes'
+                ? `Server publishes on close (${reason}), empty publishes after a reopen are credited to the close`
+                : `Server does not publish on close (${reason}), the close window rule is off`,
+        );
     }
 
     private markSynced(doc: TrackedDocument, by: 'didOpen' | 'didChange'): void {
@@ -660,9 +749,9 @@ export function defaultClientCapabilities(): Record<string, unknown> {
             workspaceFolders: true,
             configuration: true,
             didChangeConfiguration: { dynamicRegistration: true },
-        // advertised so servers rely on the client for file watching, as they do under VS Code;
-        // the resulting registrations are tracked but no file events are ever sent
-        didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: true },
+            // advertised so servers rely on the client for file watching, as they do under VS Code;
+            // the resulting registrations are tracked but no file events are ever sent
+            didChangeWatchedFiles: { dynamicRegistration: true, relativePatternSupport: true },
             symbol: {
                 dynamicRegistration: true,
                 symbolKind: {

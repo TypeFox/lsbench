@@ -1057,7 +1057,7 @@ describe('BenchContextImpl', () => {
                 harness.setDiagnostics(uri, []);
                 const wait = ctx.waitForDiagnostics('sample.ts', 5000);
                 expect(await settledWithin(wait)).toBe('pending');
-                expect(harness.logs.some((l) => l.includes('credited to closed generation 1'))).toBe(true);
+                expect(harness.logs.some((l) => l.includes('held as tentative'))).toBe(true);
                 harness.setDiagnostics(uri, [diag('fresh')]);
                 expect((await wait).diagnostics.map((d) => d.message)).toEqual(['fresh']);
             });
@@ -1091,6 +1091,21 @@ describe('BenchContextImpl', () => {
                 // a clean file from a server that never publishes on close
                 harness.setDiagnostics(uri, []);
                 expect(await settledWithin(ctx.waitForDiagnostics('sample.ts', 5000))).toEqual([]);
+            });
+
+            it('times an empty publish accepted at the end of the close window from its receipt', async () => {
+                harness.tracker = new DiagnosticsTracker(() => {}, 60);
+                await ctx.openDocument('sample.ts');
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                // a clean file from a server that never publishes on close
+                harness.setDiagnostics(uri, []);
+                const start = Date.now();
+                const result = await ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(Date.now() - start).toBeGreaterThanOrEqual(40);
+                expect(result).toMatchObject({ diagnostics: [], timedOut: false, publishes: 1 });
+                expect(result.ms).toBeLessThan(30);
+                expect(harness.tracker.closeBehavior).toBe('silent');
             });
 
             it('does not resolve a wait for a newer version with an old version publish', async () => {

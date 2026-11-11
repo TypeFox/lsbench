@@ -7,7 +7,14 @@ export type { ProviderRequirement } from './capabilities.js';
 export { METHOD_PROVIDERS, summarizeSupport, supportsMethod } from './capabilities.js';
 export type { BenchContextOptions } from './context.js';
 export { addRegisteredLanguage, BenchContextImpl, classifyResult, isCurrentPublish } from './context.js';
-export type { Diagnostic, DiagnosticsPublish, DocumentSyncState, SaveSyncOptions, ServerExit } from './harness.js';
+export type {
+    ClosePublishBehavior,
+    Diagnostic,
+    DiagnosticsPublish,
+    DocumentSyncState,
+    SaveSyncOptions,
+    ServerExit,
+} from './harness.js';
 export {
     CLOSE_PUBLISH_WINDOW_MS,
     DiagnosticsTracker,

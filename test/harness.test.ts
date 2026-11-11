@@ -1,5 +1,13 @@
 import * as path from 'node:path';
-import { DiagnosticsTracker, defaultClientCapabilities, LspHarness, mergeCapabilities, pathToUri, uriToPath } from 'lsbench';
+import type { DiagnosticsPublish } from 'lsbench';
+import {
+    DiagnosticsTracker,
+    defaultClientCapabilities,
+    LspHarness,
+    mergeCapabilities,
+    pathToUri,
+    uriToPath,
+} from 'lsbench';
 import { describe, expect, it } from 'vitest';
 
 describe('pathToUri', () => {
@@ -491,9 +499,9 @@ describe('LspHarness client capabilities', () => {
         const harness = echoHarness();
         try {
             await harness.start();
-            await expect.poll(() => harness.registrations.map((r) => r.method)).toEqual([
-                'workspace/didChangeWatchedFiles',
-            ]);
+            await expect
+                .poll(() => harness.registrations.map((r) => r.method))
+                .toEqual(['workspace/didChangeWatchedFiles']);
         } finally {
             await harness.stop();
         }
@@ -541,6 +549,90 @@ describe('DiagnosticsTracker', () => {
         tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
         tracker.noteNotification('textDocument/didOpen', open());
         expect(tracker.receive({ uri, version: 1, diagnostics: [] }).generation).toBe(2);
+    });
+
+    describe('close window rule', () => {
+        const close = { textDocument: { uri } };
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        /** accepts publishes of the current open generation */
+        const current = (tracker: DiagnosticsTracker) => (p: DiagnosticsPublish) =>
+            p.generation === tracker.document(uri)?.generation;
+
+        function reopened(windowMs: number, logs: string[] = []): DiagnosticsTracker {
+            const tracker = new DiagnosticsTracker((msg) => logs.push(msg), windowMs);
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.receive({ uri, diagnostics: [{ range: {}, message: 'first' }] });
+            tracker.noteNotification('textDocument/didClose', close);
+            tracker.noteNotification('textDocument/didOpen', open());
+            return tracker;
+        }
+
+        it('lets a later publish supersede the tentative empty one and learns the server publishes on close', async () => {
+            const logs: string[] = [];
+            const tracker = reopened(1000, logs);
+            const stale = tracker.receive({ uri, diagnostics: [] });
+            const wait = tracker.waitFor(uri, current(tracker), 5000);
+            expect(tracker.latestPublish(uri)?.seq).not.toBe(stale.seq);
+            tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
+            expect((await wait)?.diagnostics.map((d) => d.message)).toEqual(['fresh']);
+            expect(tracker.closeBehavior).toBe('publishes');
+            expect(logs.some((l) => l.includes('Server publishes on close'))).toBe(true);
+        });
+
+        it('accepts the tentative publish when the window ends, keeping its receipt time', async () => {
+            const logs: string[] = [];
+            const tracker = reopened(40, logs);
+            const candidate = tracker.receive({ uri, diagnostics: [] });
+            const wait = tracker.waitFor(uri, current(tracker), 5000);
+            const accepted = await wait;
+            expect(accepted).toBe(candidate);
+            expect(process.hrtime.bigint() - candidate.receivedAt).toBeGreaterThan(20_000_000n);
+            expect(tracker.closeBehavior).toBe('silent');
+            expect(logs.some((l) => l.includes('the close window rule is off'))).toBe(true);
+        });
+
+        it('turns the rule off once the server is known not to publish on close', async () => {
+            const tracker = reopened(20);
+            tracker.receive({ uri, diagnostics: [] });
+            await sleep(40);
+            expect(tracker.closeBehavior).toBe('silent');
+            tracker.noteNotification('textDocument/didClose', close);
+            tracker.noteNotification('textDocument/didOpen', open());
+            const publish = tracker.receive({ uri, diagnostics: [] });
+            expect(publish.generation).toBe(3);
+            expect(tracker.latestPublish(uri)).toBe(publish);
+        });
+
+        it('learns silence from a close with no publish within the window', async () => {
+            const tracker = new DiagnosticsTracker(() => {}, 10);
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.noteNotification('textDocument/didClose', close);
+            await sleep(30);
+            expect(tracker.closeBehavior).toBe('silent');
+        });
+
+        it('credits the empty publish to the close at once when the server publishes on close', () => {
+            const tracker = new DiagnosticsTracker(() => {}, 1000);
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.noteNotification('textDocument/didClose', close);
+            tracker.receive({ uri, diagnostics: [] });
+            expect(tracker.closeBehavior).toBe('publishes');
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.noteNotification('textDocument/didClose', close);
+            tracker.noteNotification('textDocument/didOpen', open());
+            const stale = tracker.receive({ uri, diagnostics: [] });
+            expect(stale.generation).toBe(2);
+            expect(tracker.latestPublish(uri)).toBe(stale);
+        });
+
+        it('forgets what it learned on clear', () => {
+            const tracker = new DiagnosticsTracker(() => {}, 1000);
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.noteNotification('textDocument/didClose', close);
+            tracker.receive({ uri, diagnostics: [] });
+            tracker.clear();
+            expect(tracker.closeBehavior).toBe('unknown');
+        });
     });
 
     it('resolves from the cache, and unregisters a wait once it settles', async () => {

@@ -346,7 +346,11 @@ Synchronization
                                           the time from the latest didOpen/didChange to the publish.
                                           Only publishes for the current version and open generation count,
                                           and one already received resolves at once. The first empty,
-                                          unversioned publish within 1000ms of a close is treated as stale.
+                                          unversioned publish after a reopen within 1000ms of the close
+                                          is held: a later publish in that window supersedes it as the
+                                          close publish, otherwise it is accepted when the window ends.
+                                          lsbench learns per server whether it publishes on close, then
+                                          treats such a publish as stale at once, or drops the rule.
                                           Each wait is recorded as diagnostics/open or diagnostics/edit
                                           (diagnostics/wait for a document that is not open, timed from
                                           the call), with the count in \`diagnostics\` and result ok, empty

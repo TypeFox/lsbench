@@ -383,6 +383,8 @@ export default async function (ctx: BenchContext) {
             avg_ms: 0,
         });
         expect(symbolStats.skipped).toBe(0);
+        // Langium never publishes on close, so each reopen must not run into the timeout
+        expect(report.summary['diagnostics/open']).toMatchObject({ count: 2, timeout_rate: 0 });
     });
 
     it('records the wait after didOpen as diagnostics/open', async () => {

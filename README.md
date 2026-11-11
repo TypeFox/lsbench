@@ -204,7 +204,12 @@ lsbench advertises `resolveSupport` for completion items, code actions, inlay hi
 - carries the current document version, or
 - carries no version and arrived after the latest `didOpen` or `didChange`.
 
-Publishes received while the document was closed, and publishes for other versions, are ignored. Servers often clear a closed document with an empty publish that can land after the next `didOpen`; the first empty, unversioned publish within 1000 ms of a `didClose` is therefore credited to the closed generation (logged in verbose mode). For a document that is not open, the wait resolves on the next publish.
+Publishes received while the document was closed, and publishes for other versions, are ignored. Servers often clear a closed document with an empty publish that can land after the next `didOpen`, while others never publish on close, so an empty publish after a quick reopen is ambiguous. The first empty, unversioned publish after a reopen within 1000 ms of the `didClose` is therefore held as a tentative candidate:
+
+- if another publish for the document arrives before the window ends, it supersedes the candidate, which was the close publish
+- otherwise the candidate is accepted when the window ends, and `ms` still counts to its own receipt
+
+lsbench learns per server process which case applies. A publish for a closed document, or a superseded candidate, shows that the server publishes on close, and from then on such a publish is credited to the closed generation at once. A candidate accepted at the end of the window, or a close with no publish within it, shows that it does not, and the rule is turned off. A server that never publishes on close thus pays the window at most once. Verbose mode logs candidates and what was learned. For a document that is not open, the wait resolves on the next publish.
 
 The wait resolves with `{ diagnostics, timedOut, publishes, ms }`:
 

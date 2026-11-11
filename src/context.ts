@@ -1,7 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { supportsMethod } from './capabilities.js';
-import { type Diagnostic, type DiagnosticsPublish, type DocumentSyncState, type LspHarness, pathToUri } from './harness.js';
+import {
+    type Diagnostic,
+    type DiagnosticsPublish,
+    type DocumentSyncState,
+    type LspHarness,
+    pathToUri,
+} from './harness.js';
 import type {
     BenchContext,
     EditOperation,
