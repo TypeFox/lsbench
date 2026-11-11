@@ -13,6 +13,13 @@
 - `publishes` now counts every current publish the wait saw, including those failing `until`. On timeout, `diagnostics` are those of the latest current publish when one arrived, otherwise the cached ones.
 - With `settleMs`, `ms` is the time to the latest publish before the quiet period, the quiet period itself is not included. A timeout during the quiet period is not a timeout, the wait resolves with the latest publish.
 
+### Pull diagnostics in waits
+
+- `waitForDiagnostics` options gain `mode: 'push' | 'pull' | 'auto'` (default `auto`) and `pullAfterMs` (default 1000). In `auto` mode lsbench learns per server process whether a server advertising `diagnosticProvider` pushes: until it sent any publish, a wait pulls through `textDocument/diagnostic` after `pullAfterMs` without one (at half the timeout when that is not longer), and once such a pull resolved without a push the server counts as pull only and is pulled at once. Any publish makes auto waits wait for pushes for the rest of the session, so servers that push and also advertise `diagnosticProvider` (rust-analyzer) keep being measured by their pushes, while pull only servers such as ts7 no longer time out on every wait.
+- Pulls repeat with a short backoff until `until` passes or the timeout, send `previousResultId`, and resolve `unchanged` reports to the previous diagnostics. Pulled waits are recorded as `diagnostics/pull/open`, `diagnostics/pull/edit` or `diagnostics/pull/wait`, timed from the first pull to the resolving response.
+- The result gains `source` (`push` or `pull`) and `pulls`.
+- `textDocument.diagnostic` stays unadvertised in the default client capabilities, since servers built on `vscode-languageserver` stop pushing when it is present.
+
 ### Close publishes
 
 - An empty, unversioned publish after a quick reopen is no longer dropped outright as the clearing publish of the close. It is held for the rest of a 1000 ms window after the `didClose`, superseded by any later publish, and otherwise accepted with its own receipt time. lsbench learns per server whether it publishes on close and then decides at once, so servers that never clear closed documents (such as Langium) no longer time out on every reopen of a clean file.

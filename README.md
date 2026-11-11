@@ -168,7 +168,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 
 | Method | Description |
 | --- | --- |
-| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version and time it (`options` is `{ timeout, until, settleMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
+| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version, or pull them, and time it (`options` is `{ timeout, until, settleMs, mode, pullAfterMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
 | `notify(method, params)` | Arbitrary LSP notification |
@@ -195,7 +195,7 @@ if (items.length > 0) {
 
 lsbench advertises `resolveSupport` for completion items, code actions, inlay hints, and workspace symbols, so some servers return partial items and defer that work to the resolve request.
 
-`documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability, since some servers would then stop pushing diagnostics and break `waitForDiagnostics`.
+`documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability, since servers built on `vscode-languageserver` (such as the VS Code CSS, HTML and JSON servers, and ESLint) stop pushing diagnostics when it is present, which would silently turn push timings into pull timings. Servers that advertise `diagnosticProvider` regardless are pulled by `waitForDiagnostics` (see [pull diagnostics](#pull-diagnostics)). To advertise it anyway, set `textDocument.diagnostic` through `--client-capabilities-file`.
 
 ### Waiting for diagnostics
 
@@ -239,6 +239,23 @@ Each wait also records a timing, so time to diagnostics shows up in the report l
 - `diagnostics/wait`: the document is not open, timed from the call
 
 The timing's `duration_ms` is `ms`, and `diagnostics` holds the diagnostic count. Its `result` is `ok` with diagnostics, `empty` without, and `timeout` when the wait timed out. Timeouts count toward `timeout_rate` and are left out of the duration stats, since their duration is just the timeout. Some servers never publish for clean files, so a `timeout_rate` near 1 means "no diagnostics", not necessarily a slow server.
+
+#### Pull diagnostics
+
+Some servers advertise `diagnosticProvider` and never push (ts7, for example), so a push wait would always run into its timeout. The `mode` option picks where diagnostics come from:
+
+- `auto` (default): a server without `diagnosticProvider` (neither static nor dynamically registered) is only ever waited on for pushes. For one with it, lsbench learns per server process how it delivers diagnostics:
+  - unknown, no publish seen yet: wait for a push up to `pullAfterMs` (default 1000 ms), then pull. When `timeout` is not longer than `pullAfterMs`, pulling starts at half the timeout. Any publish from the server in the meantime, for any document, keeps the wait on push
+  - push: once the server sent any `publishDiagnostics`, for any document, auto waits only wait for pushes. Servers that push and also advertise `diagnosticProvider`, such as rust-analyzer, are thus measured by their pushes even when their debounce is longer than the grace period
+  - pull only: once an auto wait fell back to pulling and the pull resolved with no publish arriving in the meantime, later auto waits pull at once. A later publish flips the server back to push
+
+  Verbose mode logs what was learned
+- `push`: only wait for pushes
+- `pull`: send `textDocument/diagnostic` at once. A server without `diagnosticProvider` gets the wait recorded as `skipped`, like other unsupported requests
+
+A pull resolves on the first report passing `until` (any report without it). Otherwise lsbench pulls again with a backoff from 25 ms doubling up to 250 ms, until `until` passes or the remaining `timeout` runs out. Each pull sends the `resultId` of the previous report for the document as `previousResultId`, and an `unchanged` report resolves to the diagnostics of that previous report. Closing the document forgets its `resultId`. A request rejected with ContentModified or ServerCancelled is pulled again, any other error ends the wait with `result: "error"`. `settleMs` does not apply, a report is the server's complete answer.
+
+The result's `source` is `push` or `pull`, telling which one resolved the wait, and `pulls` counts the requests sent (0 for push, `publishes` is 0 for pull). A pull has no server debounce, so its timing is not comparable with time to a push. It is recorded under its own methods, `diagnostics/pull/open`, `diagnostics/pull/edit` and `diagnostics/pull/wait`, and its `ms` runs from the first pull request to the resolving response, re-pulls and backoff included. The grace period of `auto` mode is not part of it, and the first auto wait on a pull only server pays it once. `codeAction` codes match against pulled diagnostics when the server never published for the document.
 
 ### Unsupported requests
 
@@ -337,7 +354,7 @@ For full control over `command`, `args`, `env`, `initializationOptions` and `cli
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, timeout rate, skipped), including the server lifecycle (see below) and time to diagnostics (`diagnostics/open`, `diagnostics/edit`)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/open`, `diagnostics/edit`) and pulled diagnostics (`diagnostics/pull/open`, `diagnostics/pull/edit`)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize and final shutdown timings of the single server
@@ -408,7 +425,7 @@ This can be leveraged by humans as well as agents to use the tool in a self-docu
 
 - **Warmup matters**: JIT compilation, caches, etc. need a few runs to stabilize (unless you want cold-start times). Use `--warmup 3-5` for reliable numbers once the server is warmed up.
 - **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks).
-- **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency. The wait itself is reported as `diagnostics/open` or `diagnostics/edit`; check `timeout_rate` before reading its durations.
+- **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency. The wait itself is reported as `diagnostics/open` or `diagnostics/edit` (`diagnostics/pull/open` or `diagnostics/pull/edit` when pulled); check `timeout_rate` before reading its durations.
 - **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this.
 - **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace.
 

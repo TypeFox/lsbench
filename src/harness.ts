@@ -47,6 +47,13 @@ export const CLOSE_PUBLISH_WINDOW_MS = 1000;
  */
 export type ClosePublishBehavior = 'unknown' | 'publishes' | 'silent';
 
+/**
+ * How a tracker has learned its server delivers diagnostics: `push` once any publish arrived,
+ * `pull` once a pull fell back to after waiting for a push resolved without one, `unknown`
+ * until either happened. A publish always flips it to `push`
+ */
+export type DiagnosticsDelivery = 'unknown' | 'push' | 'pull';
+
 /** A textDocument/publishDiagnostics notification as received, stamped with the document state */
 export interface DiagnosticsPublish {
     uri: string;
@@ -69,6 +76,8 @@ export interface PublishWaitOptions {
     until?: (publish: DiagnosticsPublish) => boolean;
     /** after the resolving publish, wait until no accepted publish arrived for this long */
     settleMs?: number;
+    /** aborting ends the wait at once, resolving with what it saw so far and `aborted` set */
+    signal?: AbortSignal;
 }
 
 /** What DiagnosticsTracker.waitForPublishes resolved with */
@@ -79,6 +88,8 @@ export interface PublishWaitResult {
     publishes: number;
     /** the timeout fired before an accepted publish passed `until` */
     timedOut: boolean;
+    /** the wait was ended through `signal`, `timedOut` is then false */
+    aborted?: boolean;
 }
 
 /** What the client last told the server about a document */
@@ -118,8 +129,9 @@ interface TrackedDocument extends DocumentSyncState {
  * a tentative candidate: a further publish before the window ends supersedes it, otherwise
  * it is accepted with its own receipt time when the window ends. What happens teaches the
  * tracker whether the server publishes on close, and only then is the candidate dropped
- * right away (`publishes`) or the rule turned off (`silent`). One tracker serves one
- * server process, `clear()` forgets what it learned.
+ * right away (`publishes`) or the rule turned off (`silent`). It also learns whether the
+ * server pushes diagnostics at all, see `delivery`. One tracker serves one server process,
+ * `clear()` forgets what it learned.
  */
 export class DiagnosticsTracker {
     private documents = new Map<string, TrackedDocument>();
@@ -127,6 +139,7 @@ export class DiagnosticsTracker {
     private listeners = new Map<string, Set<(publish: DiagnosticsPublish) => void>>();
     private seq = 0;
     private _closeBehavior: ClosePublishBehavior = 'unknown';
+    private _delivery: DiagnosticsDelivery = 'unknown';
 
     constructor(
         private log: (msg: string) => void = () => {},
@@ -162,6 +175,10 @@ export class DiagnosticsTracker {
     /** Record a publish and hand it to the listeners of its URI, unless it is held as a candidate */
     receive(params: PublishDiagnosticsParams): DiagnosticsPublish {
         const receivedAt = process.hrtime.bigint();
+        if (this._delivery !== 'push') {
+            this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
+            this._delivery = 'push';
+        }
         const doc = this.documents.get(params.uri);
         let generation = doc?.generation ?? 0;
         let tentative = false;
@@ -217,6 +234,20 @@ export class DiagnosticsTracker {
         return this._closeBehavior;
     }
 
+    /** What the tracker learned about how the server delivers diagnostics */
+    get delivery(): DiagnosticsDelivery {
+        return this._delivery;
+    }
+
+    /** Learn that the server answers pulls but does not push, ignored once a publish was seen */
+    markPullOnly(reason: string): void {
+        if (this._delivery !== 'unknown') {
+            return;
+        }
+        this._delivery = 'pull';
+        this.log(`Server only answers pulls (${reason}), auto waits pull at once`);
+    }
+
     /** The state of a document, from the notifications sent for it */
     document(uri: string): DocumentSyncState | undefined {
         const doc = this.documents.get(uri);
@@ -268,8 +299,12 @@ export class DiagnosticsTracker {
         accept: (publish: DiagnosticsPublish) => boolean,
         options: PublishWaitOptions,
     ): Promise<PublishWaitResult> {
-        const { timeoutMs, until, settleMs } = options;
+        const { timeoutMs, until, settleMs, signal } = options;
         return new Promise((resolve, reject) => {
+            if (signal?.aborted) {
+                resolve({ publishes: 0, timedOut: false, aborted: true });
+                return;
+            }
             let listeners = this.listeners.get(uri);
             if (!listeners) {
                 listeners = new Set();
@@ -284,6 +319,7 @@ export class DiagnosticsTracker {
                 finished = true;
                 clearTimeout(timer);
                 clearTimeout(quietTimer);
+                signal?.removeEventListener('abort', onAbort);
                 listeners.delete(listener);
                 if (listeners.size === 0 && this.listeners.get(uri) === listeners) {
                     this.listeners.delete(uri);
@@ -329,6 +365,11 @@ export class DiagnosticsTracker {
                 }
                 finish(!satisfied);
             }, timeoutMs);
+            const onAbort = () => {
+                cleanup();
+                resolve({ publish: latest, publishes, timedOut: false, aborted: true });
+            };
+            signal?.addEventListener('abort', onAbort);
             listeners.add(listener);
             const cached = this.latest.get(uri);
             if (cached) {
@@ -343,6 +384,7 @@ export class DiagnosticsTracker {
             clearTimeout(doc.closeTimer);
         }
         this._closeBehavior = 'unknown';
+        this._delivery = 'unknown';
         this.documents.clear();
         this.latest.clear();
         this.listeners.clear();
@@ -778,6 +820,16 @@ export class LspHarness {
         return this.diagnostics.document(uri);
     }
 
+    /** How the server was learned to deliver diagnostics, see DiagnosticsTracker.delivery */
+    diagnosticsDelivery(): DiagnosticsDelivery {
+        return this.diagnostics.delivery;
+    }
+
+    /** Learn that the server answers pulls but does not push, see DiagnosticsTracker.markPullOnly */
+    markPullOnly(reason: string): void {
+        this.diagnostics.markPullOnly(reason);
+    }
+
     /** The current publish sequence number, a publish received after now has a larger seq */
     currentPublishSeq(): number {
         return this.diagnostics.currentSeq();
@@ -966,8 +1018,10 @@ export function defaultClientCapabilities(): Record<string, unknown> {
                 overlappingTokenSupport: false,
                 multilineTokenSupport: false,
             },
-            // textDocument.diagnostic is intentionally not advertised: some servers switch
-            // from push to pull diagnostics when it is present, which breaks waitForDiagnostics
+            // textDocument.diagnostic is intentionally not advertised: servers built on
+            // vscode-languageserver (the VS Code CSS, HTML and JSON servers, ESLint) stop pushing
+            // when it is present, which would turn push timings into pull timings. Servers that
+            // advertise diagnosticProvider anyway are pulled by waitForDiagnostics in auto mode
             publishDiagnostics: {
                 relatedInformation: true,
                 tagSupport: { valueSet: [1, 2] },

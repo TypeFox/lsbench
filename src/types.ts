@@ -195,10 +195,27 @@ export interface WaitForDiagnosticsOptions {
     /**
      * after the resolving publish (the first passing `until`, when given), keep waiting
      * until no current publish arrived for this many milliseconds, then resolve with the
-     * latest one. `ms` stays the time to that publish, the quiet period is not included
+     * latest one. `ms` stays the time to that publish, the quiet period is not included.
+     * Push only, a pulled report is the server's complete answer and resolves at once
      */
     settleMs?: number;
+    /**
+     * where diagnostics come from (default `auto`): `push` waits for publishDiagnostics,
+     * `pull` sends textDocument/diagnostic. `auto` waits for pushes unless the server
+     * advertises diagnosticProvider and has not been seen pushing: an unknown server is
+     * pulled when it sent no publish within `pullAfterMs`, one learned to be pull only is
+     * pulled at once. Any publish from the server makes later auto waits wait for pushes
+     */
+    mode?: DiagnosticsMode;
+    /**
+     * auto mode, server not yet seen pushing: how long to wait for a publish before pulling
+     * (default 1000). With a timeout not longer than this, pulling starts at half the timeout
+     */
+    pullAfterMs?: number;
 }
+
+/** How waitForDiagnostics obtains diagnostics */
+export type DiagnosticsMode = 'push' | 'pull' | 'auto';
 
 /** What a diagnostics wait resolved with */
 export interface WaitForDiagnosticsResult {
@@ -214,11 +231,16 @@ export interface WaitForDiagnosticsResult {
     timedOut: boolean;
     /** how many current publishes the wait saw, those failing `until` and a cached one included */
     publishes: number;
+    /** whether the diagnostics were pushed (publishDiagnostics) or pulled (textDocument/diagnostic) */
+    source: 'push' | 'pull';
+    /** how many textDocument/diagnostic requests the wait sent, 0 for push */
+    pulls: number;
     /**
      * Milliseconds from the latest didOpen or didChange of the document to the resolving
      * publish (or to the timeout). With `settleMs` that is the latest publish before the
      * quiet period, which is not included. For a document that is not open, from the
-     * start of the wait
+     * start of the wait. Pulled diagnostics are timed from the first pull request to the
+     * resolving response instead, re-pulls and their backoff included
      */
     ms: number;
 }
@@ -310,6 +332,7 @@ export interface BenchContext {
     /**
      * Wait until the server publishes diagnostics for the current state of the given file,
      * and record the time to diagnostics as `diagnostics/open` or `diagnostics/edit`.
+     * Pulled diagnostics are recorded as `diagnostics/pull/open` or `diagnostics/pull/edit`.
      * Useful after opening a document or making edits. `options` may be a bare timeout in ms
      */
     waitForDiagnostics(

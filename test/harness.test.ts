@@ -423,6 +423,12 @@ describe('defaultClientCapabilities', () => {
         const workspace = defaultClientCapabilities().workspace as Record<string, unknown>;
         expect(workspace.didChangeWatchedFiles).toEqual({ dynamicRegistration: true, relativePatternSupport: true });
     });
+
+    it('does not advertise pull diagnostics, so servers supporting both keep pushing', () => {
+        const textDocument = defaultClientCapabilities().textDocument as Record<string, unknown>;
+        expect(textDocument.diagnostic).toBeUndefined();
+        expect(textDocument.publishDiagnostics).toBeDefined();
+    });
 });
 
 /** a fake server that echoes the client capabilities and registers a file watcher */
@@ -655,5 +661,46 @@ describe('DiagnosticsTracker', () => {
         const cut = tracker.waitForPublishes(uri, () => true, { timeoutMs: 10, settleMs: 1000 });
         expect(await cut).toMatchObject({ timedOut: false, publishes: 1 });
         expect(listeners.size).toBe(0);
+    });
+
+    it('learns whether the server pushes or only answers pulls', () => {
+        const tracker = new DiagnosticsTracker();
+        expect(tracker.delivery).toBe('unknown');
+        tracker.markPullOnly('test');
+        expect(tracker.delivery).toBe('pull');
+        tracker.receive({ uri, diagnostics: [] });
+        expect(tracker.delivery).toBe('push');
+        // a push is never overruled by a pull
+        tracker.markPullOnly('test');
+        expect(tracker.delivery).toBe('push');
+        tracker.clear();
+        expect(tracker.delivery).toBe('unknown');
+    });
+
+    it('ends a wait through its signal with what it saw so far, unregistering it', async () => {
+        const tracker = new DiagnosticsTracker();
+        const listeners = (tracker as unknown as { listeners: Map<string, unknown> }).listeners;
+        const abort = new AbortController();
+        const wait = tracker.waitForPublishes(uri, () => true, {
+            timeoutMs: 1000,
+            until: (p) => p.diagnostics.length > 0,
+            signal: abort.signal,
+        });
+        tracker.receive({ uri, diagnostics: [] });
+        abort.abort();
+        const result = await wait;
+        expect(result).toMatchObject({ timedOut: false, aborted: true, publishes: 1 });
+        expect(result.publish?.diagnostics).toEqual([]);
+        expect(listeners.size).toBe(0);
+    });
+
+    it('resolves at once for an already aborted signal', async () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.receive({ uri, diagnostics: [] });
+        const result = await tracker.waitForPublishes(uri, () => true, {
+            timeoutMs: 1000,
+            signal: AbortSignal.abort(),
+        });
+        expect(result).toEqual({ publishes: 0, timedOut: false, aborted: true });
     });
 });

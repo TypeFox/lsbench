@@ -322,8 +322,9 @@ Workspace, hierarchies, pull diagnostics  (timed)
   workspaceDiagnostic(prevResultIds?)     workspace/diagnostic (prevResultIds is [{uri,value}], default [])
 
   Pull diagnostics need a server with diagnosticProvider. lsbench does not
-  advertise the textDocument.diagnostic client capability, since some servers
-  would then stop pushing diagnostics and break waitForDiagnostics.
+  advertise the textDocument.diagnostic client capability, since servers built
+  on vscode-languageserver would then stop pushing diagnostics. waitForDiagnostics
+  pulls from servers that advertise diagnosticProvider anyway (see below).
 
 Resolve  (timed, the item from the matching request is sent back as the params)
   completionItemResolve(item)             completionItem/resolve
@@ -339,13 +340,13 @@ Resolve  (timed, the item from the matching request is sent back as the params)
 
 Synchronization
   waitForDiagnostics(path, options?)      waits for the server's diagnostics. Call after open/edit before timing.
-                                          options is { timeout, until, settleMs } or a bare timeout
+                                          options is { timeout, until, settleMs, mode, pullAfterMs } or a bare timeout
                                           (default 30_000ms). until: (diagnostics) => boolean resolves
                                           on the first current publish passing it, e.g. d => d.length > 0
                                           to skip an empty syntax pass. settleMs keeps waiting after that
                                           publish until none arrived for settleMs, then takes the latest.
                                           timeout caps both. Resolves with { diagnostics, timedOut,
-                                          publishes, ms }: timedOut is true when the timer fired before a
+                                          publishes, source, pulls, ms }: timedOut is true when the timer fired before a
                                           publish passed until (diagnostics are then the latest current
                                           publish, or the cached ones), a timeout while settling is not
                                           a timeout. publishes counts the current publishes seen, those
@@ -363,6 +364,24 @@ Synchronization
                                           (diagnostics/wait for a document that is not open, timed from
                                           the call), with the count in \`diagnostics\` and result ok, empty
                                           or timeout.
+                                          mode is 'auto' (default), 'push' or 'pull'. auto waits for
+                                          pushes unless the server advertises diagnosticProvider, then
+                                          learns per server: before any publish from it, pull through
+                                          textDocument/diagnostic after pullAfterMs (default 1000, half
+                                          the timeout when that is not longer) without a publish; once
+                                          any publish arrived, push only; once a fallback pull resolved
+                                          with no push meanwhile, pull at once (a later publish flips
+                                          it back). pull pulls at once (skipped without
+                                          diagnosticProvider). Pulls repeat with a
+                                          25 to 250ms backoff until until passes or the timeout, sending
+                                          previousResultId; an unchanged report reuses the previous
+                                          diagnostics. ContentModified/ServerCancelled re-pull, other
+                                          errors end the wait as error. settleMs does not apply. source
+                                          says whether push or pull resolved, pulls counts requests.
+                                          Pulled waits are recorded as diagnostics/pull/open,
+                                          diagnostics/pull/edit or diagnostics/pull/wait, timed from the
+                                          first pull to the resolving response (no server debounce, so
+                                          not comparable with push timings).
   sleep(ms)                               pause execution, useful to let background indexing settle.
 
 Escape hatches (for methods without a convenience wrapper)
@@ -445,6 +464,9 @@ waitForDiagnostics call:
   - diagnostics/open   from didOpen to the resolving publish
   - diagnostics/edit   from the latest didChange to the resolving publish
   - diagnostics/wait   document not open, from the call to the next publish
+  - diagnostics/pull/open, diagnostics/pull/edit, diagnostics/pull/wait
+                       pulled instead (textDocument/diagnostic), from the first
+                       pull to the resolving response, not comparable with push
 These timings carry the diagnostic count in \`diagnostics\`.
 
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
@@ -465,7 +487,8 @@ Lifecycle timings are ok or error.
   - Warmup matters: JIT and caches need a few runs to stabilize. Use --warmup 3-5.
   - Always waitForDiagnostics after opening or editing before you time requests;
     servers do background work that skews latency otherwise. The wait itself is
-    timed as diagnostics/open or diagnostics/edit; check timeout_rate first.
+    timed as diagnostics/open or diagnostics/edit (diagnostics/pull/* when
+    pulled); check timeout_rate first.
   - Point positions at real symbols in your workspace, or requests return null.
   - Large workspaces: the first iteration is often much slower due to indexing —
     warmup absorbs this.

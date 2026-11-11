@@ -10,6 +10,7 @@ export { addRegisteredLanguage, BenchContextImpl, classifyResult, isCurrentPubli
 export type {
     ClosePublishBehavior,
     Diagnostic,
+    DiagnosticsDelivery,
     DiagnosticsPublish,
     DocumentSyncState,
     PublishWaitOptions,
@@ -36,6 +37,7 @@ export type {
     BenchContext,
     BenchOptions,
     BenchReport,
+    DiagnosticsMode,
     EditOperation,
     IterationResult,
     MethodStats,
