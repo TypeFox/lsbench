@@ -30,7 +30,7 @@ addRegisteredLanguage('minilogo', '.logo');
 export default async function (ctx: BenchContext) {
     // open the document and let the Langium builder resolve cross-references
     await ctx.openDocument('test.logo');
-    await ctx.waitForDiagnostics('test.logo', 30_000);
+    await ctx.waitForDiagnostics('test.logo', { timeout: 30_000 });
 
     // exercise the requests a DSL server typically supports (each is timed).
     // positions below match `def square(...)` in the minilogo test.logo sample:

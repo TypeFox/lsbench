@@ -13,6 +13,8 @@ import type {
     RequestResult,
     RequestTiming,
     ServerCapabilities,
+    WaitForDiagnosticsOptions,
+    WaitForDiagnosticsResult,
 } from './types.js';
 
 /** JSON-RPC error code a server sends when a document change invalidated the result */
@@ -447,10 +449,19 @@ export class BenchContextImpl implements BenchContext {
     /**
      * Wait for diagnostics matching the current state of the document. An open document
      * resolves at once when such a publish is already cached; a document that is not open
-     * waits for the next publish. On timeout the cached diagnostics are returned
+     * waits for the next publish. On timeout the cached diagnostics are returned with
+     * `timedOut` set. Each wait records a timing labeled by what the latest sync was:
+     * `diagnostics/open` or `diagnostics/edit`, timed from that didOpen or didChange to the
+     * resolving publish, or `diagnostics/wait`, timed from the call, for a document that
+     * is not open
      */
-    async waitForDiagnostics(relativePath: string, timeoutMs = 30000): Promise<Diagnostic[]> {
+    async waitForDiagnostics(
+        relativePath: string,
+        options: WaitForDiagnosticsOptions | number = {},
+    ): Promise<WaitForDiagnosticsResult> {
+        const timeout = (typeof options === 'number' ? options : options.timeout) ?? 30000;
         const uri = this.getUri(relativePath);
+        const calledAt = process.hrtime.bigint();
         const after = this.harness.currentPublishSeq();
         const publish = await this.harness.waitForPublish(
             uri,
@@ -458,9 +469,34 @@ export class BenchContextImpl implements BenchContext {
                 const doc = this.harness.documentState(uri);
                 return doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
             },
-            timeoutMs,
+            timeout,
         );
-        return publish?.diagnostics ?? this.harness.getDiagnostics(uri);
+        // only the timer firing means a timeout, elapsed time is never compared to it
+        const timedOut = publish === undefined;
+        const endedAt = publish?.receivedAt ?? process.hrtime.bigint();
+        const diagnostics = publish?.diagnostics ?? this.harness.getDiagnostics(uri);
+
+        // the document state at resolution is what the accepted publish matched
+        const doc = this.harness.documentState(uri);
+        let method = 'diagnostics/wait';
+        let startedAt = calledAt;
+        if (doc?.open && doc.syncedBy !== undefined) {
+            method = doc.syncedBy === 'didOpen' ? 'diagnostics/open' : 'diagnostics/edit';
+            startedAt = doc.syncedAt;
+        }
+        const ms = Math.max(0, Number(endedAt - startedAt) / 1_000_000); // nanoseconds → milliseconds
+
+        const timing: RequestTiming = {
+            method,
+            duration_ms: Math.round(ms * 1000) / 1000, // 3 decimal places
+            success: !timedOut,
+            result: timedOut ? 'timeout' : classifyResult(diagnostics),
+            diagnostics: diagnostics.length,
+        };
+        this.timings.push(timing);
+        this.log(`${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ${diagnostics.length} diagnostics`);
+
+        return { diagnostics, timedOut, publishes: timedOut ? 0 : 1, ms: timing.duration_ms };
     }
 
     async sleep(ms: number): Promise<void> {
@@ -592,7 +628,7 @@ function toRequestError(method: string, err: unknown): RequestError {
  * and SemanticTokensDelta (`edits`). Since `data` is also the opaque payload of resolvable
  * items, `data` and `edits` only count on objects with no keys besides `resultId`
  */
-export function classifyResult(result: unknown): Exclude<RequestResult, 'error' | 'skipped'> {
+export function classifyResult(result: unknown): Exclude<RequestResult, 'error' | 'skipped' | 'timeout'> {
     if (result === null || result === undefined) {
         return 'null';
     }

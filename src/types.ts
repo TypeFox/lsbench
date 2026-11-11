@@ -1,3 +1,5 @@
+import type { Diagnostic } from './harness.js';
+
 // ── Server Configuration ────────────────────────────────────────────────────
 
 export interface ServerConfig {
@@ -51,10 +53,11 @@ export interface BenchOptions {
 /**
  * Outcome of a request: `ok` for a non empty result, `empty` for an empty list
  * (or a list wrapper such as a CompletionList with no items), `null` for a null
- * result, `error` for a rejected request and `skipped` for a request never sent
- * because the server does not advertise its provider
+ * result, `error` for a rejected request, `skipped` for a request never sent
+ * because the server does not advertise its provider, and `timeout` for a
+ * diagnostics wait that ran out before a matching publish arrived
  */
-export type RequestResult = 'ok' | 'empty' | 'null' | 'error' | 'skipped';
+export type RequestResult = 'ok' | 'empty' | 'null' | 'error' | 'skipped' | 'timeout';
 
 export interface RequestTiming {
     /** LSP method name, e.g. "textDocument/hover" */
@@ -63,7 +66,7 @@ export interface RequestTiming {
     label?: string;
     /** Duration in milliseconds (high-resolution), 0 when skipped */
     duration_ms: number;
-    /** Whether the request succeeded, false exactly when `result` is `error` or `skipped` */
+    /** Whether the request succeeded, false exactly when `result` is `error`, `skipped` or `timeout` */
     success: boolean;
     /** What the request returned */
     result: RequestResult;
@@ -71,6 +74,8 @@ export interface RequestTiming {
     error?: string;
     /** How often the request was retried after ContentModified, absent when never */
     retries?: number;
+    /** Diagnostics waits only: how many diagnostics the wait resolved with */
+    diagnostics?: number;
 }
 
 export interface IterationResult {
@@ -81,8 +86,8 @@ export interface IterationResult {
 }
 
 /**
- * Per method aggregates. `count` and `skipped` include skipped requests, every other
- * field covers only the requests actually sent
+ * Per method aggregates. `count` and `skipped` include skipped requests, the rates cover
+ * only the requests actually sent, and the durations additionally leave out timeouts
  */
 export interface MethodStats {
     count: number;
@@ -98,6 +103,8 @@ export interface MethodStats {
     null_rate: number;
     /** Share of requests that returned an empty list */
     empty_rate: number;
+    /** Share of diagnostics waits that timed out */
+    timeout_rate: number;
     /** Requests skipped because the server does not advertise their provider */
     skipped: number;
     /** Share of all requests that were skipped */
@@ -174,6 +181,27 @@ export interface RequestError {
     message: string;
     /** JSON-RPC error code, when the server sent one */
     code?: number;
+}
+
+/** Options for `BenchContext.waitForDiagnostics` */
+export interface WaitForDiagnosticsOptions {
+    /** give up after this many milliseconds (default 30000) */
+    timeout?: number;
+}
+
+/** What a diagnostics wait resolved with */
+export interface WaitForDiagnosticsResult {
+    /** the diagnostics of the resolving publish, or the cached ones on timeout */
+    diagnostics: Diagnostic[];
+    /** true when the timeout fired before a matching publish arrived */
+    timedOut: boolean;
+    /** how many publishes the wait accepted, 0 on timeout */
+    publishes: number;
+    /**
+     * Milliseconds from the latest didOpen or didChange of the document to the resolving
+     * publish (or to the timeout). For a document that is not open, from the start of the wait
+     */
+    ms: number;
 }
 
 /** Options for opening a document */
@@ -261,10 +289,14 @@ export interface BenchContext {
 
     // ── Synchronization helpers ─────────────────────────────────────────
     /**
-     * Wait until the server publishes diagnostics for the given file.
-     * Useful after opening a document or making edits.
+     * Wait until the server publishes diagnostics for the current state of the given file,
+     * and record the time to diagnostics as `diagnostics/open` or `diagnostics/edit`.
+     * Useful after opening a document or making edits. `options` may be a bare timeout in ms
      */
-    waitForDiagnostics(relativePath: string, timeoutMs?: number): Promise<unknown[]>;
+    waitForDiagnostics(
+        relativePath: string,
+        options?: WaitForDiagnosticsOptions | number,
+    ): Promise<WaitForDiagnosticsResult>;
 
     /**
      * Sleep for the given number of milliseconds.

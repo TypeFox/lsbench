@@ -20,16 +20,25 @@ function round(value: number, decimals = 3): number {
     return Math.round(value * f) / f;
 }
 
-/** Compute aggregate statistics for a set of timings, skipped ones only count toward skipped and skip_rate */
+/**
+ * Compute aggregate statistics for a set of timings. Skipped ones only count toward skipped
+ * and skip_rate, timeouts count toward timeout_rate but are left out of the durations,
+ * since their duration is just the timeout
+ */
 export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     const durations: number[] = [];
     let failures = 0;
     let nulls = 0;
     let empties = 0;
     let skipped = 0;
+    let timeouts = 0;
     for (const t of timings) {
         if (t.result === 'skipped') {
             skipped++;
+            continue;
+        }
+        if (t.result === 'timeout') {
+            timeouts++;
             continue;
         }
         durations.push(t.duration_ms);
@@ -45,7 +54,17 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     sorted(durations);
     const n = durations.length;
     const count = timings.length;
-    const skip_rate = count === 0 ? 0 : round(skipped / count, 4);
+    // rates cover every timing actually sent, timeouts included
+    const sent = count - skipped;
+    const rate = (k: number, of: number) => (of === 0 ? 0 : round(k / of, 4));
+    const rates = {
+        failure_rate: rate(failures, sent),
+        null_rate: rate(nulls, sent),
+        empty_rate: rate(empties, sent),
+        timeout_rate: rate(timeouts, sent),
+        skipped,
+        skip_rate: rate(skipped, count),
+    };
 
     if (n === 0) {
         return {
@@ -57,11 +76,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
             min_ms: 0,
             max_ms: 0,
             stddev_ms: 0,
-            failure_rate: 0,
-            null_rate: 0,
-            empty_rate: 0,
-            skipped,
-            skip_rate,
+            ...rates,
         };
     }
 
@@ -78,11 +93,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         min_ms: round(durations[0]),
         max_ms: round(durations[n - 1]),
         stddev_ms: round(Math.sqrt(variance)),
-        failure_rate: round(failures / n, 4),
-        null_rate: round(nulls / n, 4),
-        empty_rate: round(empties / n, 4),
-        skipped,
-        skip_rate,
+        ...rates,
     };
 }
 
@@ -196,11 +207,15 @@ export function printSummary(report: BenchReport): void {
 
     // Column widths
     const nameWidth = Math.max(20, ...methods.map((m) => m.length)) + 2;
-    // null, empty and skip columns only when some method has any, keeping the common table narrow
+    // null, empty, timeout and skip columns only when some method has any, keeping the common table narrow
     let showResults = false;
     let showSkipped = false;
+    let showTimeouts = false;
     for (const method of methods) {
         const s = report.summary[method];
+        if (s.timeout_rate > 0) {
+            showTimeouts = true;
+        }
         if (s.null_rate > 0 || s.empty_rate > 0) {
             showResults = true;
         }
@@ -222,6 +237,7 @@ export function printSummary(report: BenchReport): void {
         'Stddev'.padStart(10) +
         'Fail%'.padStart(8) +
         (showResults ? 'Null%'.padStart(8) + 'Empty%'.padStart(8) : '') +
+        (showTimeouts ? 'Tmout%'.padStart(8) : '') +
         (showSkipped ? 'Skip%'.padStart(8) : '');
 
     console.log(header);
@@ -241,6 +257,7 @@ export function printSummary(report: BenchReport): void {
             `${s.stddev_ms}`.padStart(10) +
             percent(s.failure_rate) +
             (showResults ? percent(s.null_rate) + percent(s.empty_rate) : '') +
+            (showTimeouts ? percent(s.timeout_rate) : '') +
             (showSkipped ? percent(s.skip_rate) : '');
         console.log(row);
     }

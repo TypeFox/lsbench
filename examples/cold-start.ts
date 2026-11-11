@@ -17,8 +17,12 @@ export default async function (ctx: BenchContext) {
     // Open a file — this triggers project loading
     await ctx.openDocument('src/index.ts');
 
-    // Wait for the server to fully load (diagnostics are a good "ready" signal)
-    await ctx.waitForDiagnostics('src/index.ts', 60_000);
+    // Wait for the server to fully load (diagnostics are a good "ready" signal).
+    // The wait is recorded as diagnostics/open, timed from didOpen to the publish
+    const { timedOut } = await ctx.waitForDiagnostics('src/index.ts', { timeout: 60_000 });
+    if (timedOut) {
+        console.warn('no diagnostics within 60s, the hover below may hit a server still loading');
+    }
 
     // Fire one request to confirm the server is responsive
     await ctx.hover('src/index.ts', 0, 0);

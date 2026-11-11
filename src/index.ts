@@ -39,4 +39,6 @@ export type {
     RequestTiming,
     ServerCapabilities,
     ServerConfig,
+    WaitForDiagnosticsOptions,
+    WaitForDiagnosticsResult,
 } from './types.js';

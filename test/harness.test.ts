@@ -524,6 +524,17 @@ describe('DiagnosticsTracker', () => {
         expect(typeof publish.receivedAt).toBe('bigint');
     });
 
+    it('records which notification last synced the document', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.noteNotification('textDocument/didOpen', open());
+        expect(tracker.document(uri)?.syncedBy).toBe('didOpen');
+        tracker.noteNotification('textDocument/didChange', { textDocument: { uri, version: 2 }, contentChanges: [] });
+        expect(tracker.document(uri)?.syncedBy).toBe('didChange');
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        expect(tracker.document(uri)?.syncedBy).toBe('didOpen');
+    });
+
     it('does not credit a versioned or non empty publish after reopen to the closed generation', () => {
         const tracker = new DiagnosticsTracker();
         tracker.noteNotification('textDocument/didOpen', open());

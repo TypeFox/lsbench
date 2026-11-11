@@ -27,6 +27,7 @@ describe('computeMethodStats', () => {
             failure_rate: 0,
             null_rate: 0,
             empty_rate: 0,
+            timeout_rate: 0,
             skipped: 0,
             skip_rate: 0,
         });
@@ -119,6 +120,38 @@ describe('computeMethodStats', () => {
     it('reports a fully skipped method with zero durations and a skip rate of 1', () => {
         const stats = computeMethodStats([timing({ duration_ms: 0, success: false, result: 'skipped' })]);
         expect(stats).toMatchObject({ count: 1, skipped: 1, skip_rate: 1, avg_ms: 0, failure_rate: 0 });
+    });
+
+    it('counts timeouts in timeout_rate but keeps them out of durations and failures', () => {
+        const timeout = timing({ method: 'diagnostics/open', duration_ms: 3000, success: false, result: 'timeout' });
+        const stats = computeMethodStats([
+            timing({ method: 'diagnostics/open', duration_ms: 10 }),
+            timing({ method: 'diagnostics/open', duration_ms: 30, result: 'empty' }),
+            timeout,
+            timeout,
+        ]);
+        expect(stats).toMatchObject({
+            count: 4,
+            avg_ms: 20,
+            max_ms: 30,
+            timeout_rate: 0.5,
+            failure_rate: 0,
+            empty_rate: 0.25,
+            skip_rate: 0,
+        });
+    });
+
+    it('reports a method where every wait timed out with zero durations and a timeout rate of 1', () => {
+        const stats = computeMethodStats([timing({ duration_ms: 3000, success: false, result: 'timeout' })]);
+        expect(stats).toMatchObject({ count: 1, timeout_rate: 1, avg_ms: 0, max_ms: 0, failure_rate: 0 });
+    });
+
+    it('leaves skipped requests out of the timeout rate', () => {
+        const stats = computeMethodStats([
+            timing({ result: 'timeout', success: false }),
+            timing({ result: 'skipped', success: false, duration_ms: 0 }),
+        ]);
+        expect(stats).toMatchObject({ timeout_rate: 1, skip_rate: 0.5 });
     });
 });
 
@@ -271,5 +304,10 @@ describe('printSummary', () => {
         expect(header([timing(), timing({ method: 'textDocument/definition', result: 'skipped' })])).toMatch(
             /Fail%\s+Skip%/,
         );
+    });
+
+    it('adds the timeout column only when some wait timed out', () => {
+        expect(header([timing()])).not.toMatch(/Tmout%/);
+        expect(header([timing(), timing({ method: 'diagnostics/open', result: 'timeout' })])).toMatch(/Fail%\s+Tmout%/);
     });
 });

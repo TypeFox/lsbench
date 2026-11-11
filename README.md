@@ -168,7 +168,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 
 | Method | Description |
 | --- | --- |
-| `waitForDiagnostics(path, timeout?)` | Wait for `publishDiagnostics` matching the current document version (default 30000 ms), see [Waiting for diagnostics](#waiting-for-diagnostics) |
+| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version and time it (`options` is `{ timeout }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
 | `notify(method, params)` | Arbitrary LSP notification |
@@ -204,7 +204,27 @@ lsbench advertises `resolveSupport` for completion items, code actions, inlay hi
 - carries the current document version, or
 - carries no version and arrived after the latest `didOpen` or `didChange`.
 
-Publishes received while the document was closed, and publishes for other versions, are ignored. Servers often clear a closed document with an empty publish that can land after the next `didOpen`; the first empty, unversioned publish within 1000 ms of a `didClose` is therefore credited to the closed generation (logged in verbose mode). For a document that is not open, the wait resolves on the next publish. On timeout the cached diagnostics are returned.
+Publishes received while the document was closed, and publishes for other versions, are ignored. Servers often clear a closed document with an empty publish that can land after the next `didOpen`; the first empty, unversioned publish within 1000 ms of a `didClose` is therefore credited to the closed generation (logged in verbose mode). For a document that is not open, the wait resolves on the next publish.
+
+The wait resolves with `{ diagnostics, timedOut, publishes, ms }`:
+
+- `diagnostics`: the diagnostics of the matching publish, or the cached ones on timeout
+- `timedOut`: `true` when the timeout fired before a matching publish arrived. This comes from the timer itself, never from comparing elapsed time against the timeout, since timers can fire slightly early
+- `publishes`: how many publishes the wait accepted, currently 1, or 0 on timeout
+- `ms`: time from the latest `didOpen` or `didChange` of the document to the matching publish (or to the timeout), so time to diagnostics is measured even when other work ran before the wait
+
+```typescript
+await ctx.openDocument("src/index.ts");
+const { diagnostics, timedOut, ms } = await ctx.waitForDiagnostics("src/index.ts", { timeout: 10_000 });
+```
+
+Each wait also records a timing, so time to diagnostics shows up in the report like any method:
+
+- `diagnostics/open`: the latest sync of the document was `didOpen`
+- `diagnostics/edit`: the latest sync was `didChange`
+- `diagnostics/wait`: the document is not open, timed from the call
+
+The timing's `duration_ms` is `ms`, and `diagnostics` holds the diagnostic count. Its `result` is `ok` with diagnostics, `empty` without, and `timeout` when the wait timed out. Timeouts count toward `timeout_rate` and are left out of the duration stats, since their duration is just the timeout. Some servers never publish for clean files, so a `timeout_rate` near 1 means "no diagnostics", not necessarily a slow server.
 
 ### Unsupported requests
 
@@ -303,7 +323,7 @@ For full control over `command`, `args`, `env`, `initializationOptions` and `cli
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, skipped), including the server lifecycle (see below)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, timeout rate, skipped), including the server lifecycle (see below) and time to diagnostics (`diagnostics/open`, `diagnostics/edit`)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize and final shutdown timings of the single server
@@ -316,8 +336,9 @@ Each request timing has a `result`:
 - `null`: a `null` result. A high `null_rate` usually means a position misses a symbol, so its fast timings mean little
 - `error`: the request failed, with the message in `error`
 - `skipped`: never sent, since the server does not advertise the provider (see [unsupported requests](#unsupported-requests))
+- `timeout`: a diagnostics wait ran out before a matching publish arrived (see [waiting for diagnostics](#waiting-for-diagnostics))
 
-`success` is kept for compatibility and is `false` exactly for `error` and `skipped`. `summary` aggregates `failure_rate`, `null_rate` and `empty_rate` per method, and the printed table adds Null% and Empty% columns when any method has a nonzero rate. `count` includes skipped requests, `skipped` counts them and `skip_rate` is their share. Every other stat covers only the requests actually sent, so a fully skipped method has zero durations and a `failure_rate` of 0. The printed table adds a Skip% column when any request was skipped.
+`success` is kept for compatibility and is `false` exactly for `error`, `skipped` and `timeout`. `summary` aggregates `failure_rate`, `null_rate`, `empty_rate` and `timeout_rate` per method, and the printed table adds Null% and Empty% columns when any method has a nonzero rate, and a Tmout% column when any wait timed out. Timeouts are not failures, so they only count toward `timeout_rate`. `count` includes skipped requests, `skipped` counts them and `skip_rate` is their share. The rates cover only the requests actually sent, and the duration stats additionally leave out timeouts, so a fully skipped method has zero durations and a `failure_rate` of 0. The printed table adds a Skip% column when any request was skipped.
 
 Requests rejected with `ContentModified` (-32801), as servers do while loading or when an edit races a request, are retried up to `--content-modified-retries` times (default 3) with a short backoff. The timing records the count in `retries` and covers only the final attempt.
 
@@ -347,6 +368,7 @@ With `--restart` each run's `requests` start with spawn and initialize and end w
       "failure_rate": 0,
       "null_rate": 0,
       "empty_rate": 0,
+      "timeout_rate": 0,
       "skipped": 0,
       "skip_rate": 0
     }
@@ -372,7 +394,7 @@ This can be leveraged by humans as well as agents to use the tool in a self-docu
 
 - **Warmup matters**: JIT compilation, caches, etc. need a few runs to stabilize (unless you want cold-start times). Use `--warmup 3-5` for reliable numbers once the server is warmed up.
 - **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks).
-- **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency.
+- **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency. The wait itself is reported as `diagnostics/open` or `diagnostics/edit`; check `timeout_rate` before reading its durations.
 - **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this.
 - **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace.
 

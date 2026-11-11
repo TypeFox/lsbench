@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## Unreleased
+
+### Breaking changes
+
+- `waitForDiagnostics` now resolves with `{ diagnostics, timedOut, publishes, ms }` instead of the diagnostics array. Scripts that used the array need `(await ctx.waitForDiagnostics(path)).diagnostics`. Its second argument may be an options object `{ timeout }`, and a bare timeout number still works.
+- A timed out wait is now reported (`timedOut: true`, result `timeout`) instead of silently resolving with the cached diagnostics. The timeout comes from the timer itself, never from elapsed time.
+
+### Time to diagnostics
+
+- Each `waitForDiagnostics` records a timing, `diagnostics/open` or `diagnostics/edit` by the latest sync of the document (`diagnostics/wait` for a document that is not open), measured from that `didOpen` or `didChange` to the matching publish and carrying the diagnostic count in `diagnostics`.
+- `RequestResult` gains `timeout`, and `MethodStats` gains `timeout_rate`. Timeouts are left out of the duration stats and of `failure_rate`, and the printed table adds a Tmout% column when any wait timed out.
+
 ## v0.2.0
 
 Adds most remaining LSP requests to `BenchContext`, server-aware save handling, answers for common server to client requests, and a second integration suite against Langium's grammar language server.

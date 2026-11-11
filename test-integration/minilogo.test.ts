@@ -385,6 +385,28 @@ export default async function (ctx: BenchContext) {
         expect(symbolStats.skipped).toBe(0);
     });
 
+    it('records the wait after didOpen as diagnostics/open', async () => {
+        const { runBenchmark } = await import('lsbench');
+
+        // a single fresh open, so no publish from a previous close is in play
+        const report = await runBenchmark({
+            server: `node ${serverEntry} --stdio`,
+            workspace: examplesDir,
+            script: scriptPath,
+            iterations: 1,
+            warmup: 0,
+            output: '',
+            restart: false,
+            verbose: false,
+        });
+
+        expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 0, failure_rate: 0 });
+        expect(report.summary['diagnostics/open'].avg_ms).toBeGreaterThan(0);
+        const wait = report.runs[0].requests.find((r) => r.method === 'diagnostics/open');
+        expect(wait).toMatchObject({ success: true, diagnostics: 0 });
+        expect(wait?.result).toMatch(/^(ok|empty)$/);
+    });
+
     it('sends unadvertised requests when skipUnsupported is off', async () => {
         const { runBenchmark } = await import('lsbench');
 

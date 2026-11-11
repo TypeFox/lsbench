@@ -72,7 +72,7 @@ describe('langium grammar language server (integration)', () => {
 
         await ctx.openDocument(FILE);
         // let the builder run so cross-references resolve before we query
-        initialDiagnostics = (await ctx.waitForDiagnostics(FILE, 30_000)) as typeof initialDiagnostics;
+        initialDiagnostics = (await ctx.waitForDiagnostics(FILE, 30_000)).diagnostics as typeof initialDiagnostics;
     });
 
     afterAll(async () => {
@@ -474,13 +474,18 @@ describe('langium grammar language server (integration)', () => {
     it('republishes diagnostics after an edit', async () => {
         const grammarName = { start: { line: 4, character: 8 }, end: { line: 4, character: 9 } };
 
+        ctx.collectTimings();
         await ctx.edit(FILE, { range: grammarName, text: 's' });
-        const after = (await ctx.waitForDiagnostics(FILE, 30_000)) as typeof initialDiagnostics;
-        const codes = after.map((d) => d.data?.code).sort();
+        const after = await ctx.waitForDiagnostics(FILE, { timeout: 30_000 });
+        expect(after).toMatchObject({ timedOut: false, publishes: 1 });
+        const codes = (after.diagnostics as typeof initialDiagnostics).map((d) => d.data?.code).sort();
         expect(codes).toEqual(['grammar-name-uppercase', 'rule-name-uppercase']);
+        expect(ctx.collectTimings()).toMatchObject([
+            { method: 'diagnostics/edit', result: 'ok', diagnostics: 2, duration_ms: after.ms },
+        ]);
 
         await ctx.edit(FILE, { range: grammarName, text: 'S' });
-        const reverted = (await ctx.waitForDiagnostics(FILE, 30_000)) as typeof initialDiagnostics;
+        const reverted = (await ctx.waitForDiagnostics(FILE, 30_000)).diagnostics as typeof initialDiagnostics;
         expect(reverted.map((d) => d.data?.code)).toEqual(['rule-name-uppercase']);
     });
 

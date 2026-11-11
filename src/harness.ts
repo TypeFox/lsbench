@@ -66,6 +66,8 @@ export interface DocumentSyncState {
     syncedAt: bigint;
     /** seq of the latest didOpen or didChange, comparable with DiagnosticsPublish.seq */
     syncSeq: number;
+    /** which notification last synced the document, undefined before the first */
+    syncedBy?: 'didOpen' | 'didChange';
 }
 
 interface TrackedDocument extends DocumentSyncState {
@@ -103,10 +105,10 @@ export class DiagnosticsTracker {
             doc.generation++;
             doc.open = true;
             doc.version = version;
-            this.markSynced(doc);
+            this.markSynced(doc, 'didOpen');
         } else if (method === 'textDocument/didChange') {
             doc.version = version ?? doc.version;
-            this.markSynced(doc);
+            this.markSynced(doc, 'didChange');
         } else if (method === 'textDocument/didClose') {
             doc.open = false;
             doc.closedAt = process.hrtime.bigint();
@@ -162,8 +164,8 @@ export class DiagnosticsTracker {
         if (!doc) {
             return undefined;
         }
-        const { generation, open, version, syncedAt, syncSeq } = doc;
-        return { generation, open, version, syncedAt, syncSeq };
+        const { generation, open, version, syncedAt, syncSeq, syncedBy } = doc;
+        return { generation, open, version, syncedAt, syncSeq, syncedBy };
     }
 
     /** The latest publish received for a URI */
@@ -179,7 +181,8 @@ export class DiagnosticsTracker {
     /**
      * Resolve with the first publish for uri that `accept` takes, checking the cached latest
      * publish first so a wait registered after the notification still sees it. Resolves
-     * undefined after timeoutMs
+     * undefined exactly when the timeout timer fires, so callers never infer a timeout from
+     * elapsed time (timers can fire slightly early)
      */
     waitFor(
         uri: string,
@@ -221,9 +224,10 @@ export class DiagnosticsTracker {
         this.listeners.clear();
     }
 
-    private markSynced(doc: TrackedDocument): void {
+    private markSynced(doc: TrackedDocument, by: 'didOpen' | 'didChange'): void {
         doc.syncedAt = process.hrtime.bigint();
         doc.syncSeq = ++this.seq;
+        doc.syncedBy = by;
     }
 }
 

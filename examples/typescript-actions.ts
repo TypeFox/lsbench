@@ -35,7 +35,7 @@ export default async function (ctx: BenchContext) {
     // ── 1. Open the main file and wait for diagnostics ────────────────
     //    (This ensures tsserver has finished loading the project.)
     await ctx.openDocument(FILE);
-    await ctx.waitForDiagnostics(FILE, 30_000);
+    await ctx.waitForDiagnostics(FILE, { timeout: 30_000 });
 
     // ── 2. Core requests ──────────────────────────────────────────────
     await coreRequests(ctx);
@@ -146,8 +146,12 @@ async function editAndSave(ctx: BenchContext) {
         text: 'const __benchTemp = 42;\n',
     });
 
-    // wait for the server to process the change, then hover the new variable
-    await ctx.waitForDiagnostics(FILE, 10_000);
+    // wait for the server to process the change (timed as diagnostics/edit),
+    // then hover the new variable
+    const { diagnostics } = await ctx.waitForDiagnostics(FILE, { timeout: 10_000 });
+    if (diagnostics.length > 0) {
+        console.warn(`the inserted line produced ${diagnostics.length} diagnostics`);
+    }
     await ctx.hover(FILE, 20, 10);
 
     // save like an editor would: willSaveWaitUntil is timed and may return

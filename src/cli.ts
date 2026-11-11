@@ -213,7 +213,7 @@ must be "erasable" TypeScript: no \`enum\`, \`namespace\`, or parameter properti
     export default async function (ctx: BenchContext) {
       // 1. open the file and wait for the server to finish loading
       await ctx.openDocument('src/index.ts');
-      await ctx.waitForDiagnostics('src/index.ts', 30_000);
+      await ctx.waitForDiagnostics('src/index.ts', { timeout: 30_000 });
 
       // 2. exercise typical editor interactions (each call is timed)
       await ctx.hover('src/index.ts', 10, 5);
@@ -227,7 +227,7 @@ must be "erasable" TypeScript: no \`enum\`, \`namespace\`, or parameter properti
         range: { start: { line: 20, character: 0 }, end: { line: 20, character: 0 } },
         text: 'const __benchTemp = 42;\\n',
       });
-      await ctx.waitForDiagnostics('src/index.ts', 10_000);
+      await ctx.waitForDiagnostics('src/index.ts', { timeout: 10_000 });
       await ctx.hover('src/index.ts', 20, 10);
 
       // 4. clean up
@@ -338,12 +338,19 @@ Resolve  (timed, the item from the matching request is sent back as the params)
   workspace symbols, so some servers defer work from the request to resolve.
 
 Synchronization
-  waitForDiagnostics(path, timeoutMs?)    resolves with the diagnostics array once the server publishes
-                                          them (default timeout 30_000ms). Call after open/edit before timing.
+  waitForDiagnostics(path, options?)      waits for the server's diagnostics. Call after open/edit before timing.
+                                          options is { timeout } or a bare timeout (default 30_000ms).
+                                          Resolves with { diagnostics, timedOut, publishes, ms }:
+                                          timedOut is true when the timer fired first (diagnostics are
+                                          then the cached ones), publishes is 1 (0 on timeout), ms is
+                                          the time from the latest didOpen/didChange to the publish.
                                           Only publishes for the current version and open generation count,
                                           and one already received resolves at once. The first empty,
                                           unversioned publish within 1000ms of a close is treated as stale.
-                                          On timeout, returns the cached diagnostics.
+                                          Each wait is recorded as diagnostics/open or diagnostics/edit
+                                          (diagnostics/wait for a document that is not open, timed from
+                                          the call), with the count in \`diagnostics\` and result ok, empty
+                                          or timeout.
   sleep(ms)                               pause execution, useful to let background indexing settle.
 
 Escape hatches (for methods without a convenience wrapper)
@@ -396,7 +403,7 @@ Anything after \`--\` is passed through as extra args to the server command.
 
 The JSON report (and the printed summary) contains:
   - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms,
-                       failure_rate, null_rate, empty_rate, skipped, skip_rate
+                       failure_rate, null_rate, empty_rate, timeout_rate, skipped, skip_rate
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
   - lifecycle          keep alive mode only: spawn, initialize and final shutdown
@@ -418,15 +425,25 @@ Example \`summary\` entry:
       "count": 50, "avg_ms": 12.4, "median_ms": 11.2, "p95_ms": 22.1,
       "p99_ms": 34.5, "min_ms": 8.1, "max_ms": 42.3, "stddev_ms": 5.2,
       "failure_rate": 0, "null_rate": 0, "empty_rate": 0,
-      "skipped": 0, "skip_rate": 0
+      "timeout_rate": 0, "skipped": 0, "skip_rate": 0
     }
 
+Time to diagnostics appears in summary like methods too, one entry per
+waitForDiagnostics call:
+  - diagnostics/open   from didOpen to the matching publish
+  - diagnostics/edit   from the latest didChange to the matching publish
+  - diagnostics/wait   document not open, from the call to the next publish
+These timings carry the diagnostic count in \`diagnostics\`.
+
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
-such as a CompletionList with no items), null, error (with \`error\` set), or
-skipped (not sent, the server lacks the provider). \`success\` is kept and is
-false exactly for errors and skips. count and skipped include skips; durations
-and the other rates cover only requests actually sent. A high null_rate usually
-means a position misses a symbol, so its fast timings mean little.
+such as a CompletionList with no items), null, error (with \`error\` set),
+skipped (not sent, the server lacks the provider), or timeout (a diagnostics
+wait ran out). \`success\` is kept and is false exactly for errors, skips and
+timeouts. count and skipped include skips; the rates cover only requests
+actually sent, and durations also leave out timeouts, which only count toward
+timeout_rate (a server that never publishes for clean files shows 1 there).
+A high null_rate usually means a position misses a symbol, so its fast
+timings mean little.
 Requests rejected with ContentModified (-32801) are retried with a short
 backoff; \`retries\` records how often, and only the final attempt is timed.
 Lifecycle timings are ok or error.
@@ -435,7 +452,8 @@ Lifecycle timings are ok or error.
 
   - Warmup matters: JIT and caches need a few runs to stabilize. Use --warmup 3-5.
   - Always waitForDiagnostics after opening or editing before you time requests;
-    servers do background work that skews latency otherwise.
+    servers do background work that skews latency otherwise. The wait itself is
+    timed as diagnostics/open or diagnostics/edit; check timeout_rate first.
   - Point positions at real symbols in your workspace, or requests return null.
   - Large workspaces: the first iteration is often much slower due to indexing —
     warmup absorbs this.
