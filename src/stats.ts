@@ -180,7 +180,7 @@ export function buildReport(
 /** Pretty-print a summary table to the console */
 export function printSummary(report: BenchReport): void {
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
-    console.log('║                     lsbench results                        ║');
+    console.log('║                     lsbench results                          ║');
     console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
     console.log(`  Server:      ${report.server}`);
