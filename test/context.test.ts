@@ -108,6 +108,33 @@ describe('BenchContextImpl', () => {
             expect(params.textDocument.languageId).toBe('minilogo');
         });
 
+        it.each([
+            ['sample.mjs', 'javascript'],
+            ['sample.cjs', 'javascript'],
+            ['sample.mts', 'typescript'],
+            ['sample.cts', 'typescript'],
+            ['sample.jsonc', 'jsonc'],
+        ])('detects the languageId of %s as %s', async (file, languageId) => {
+            fs.writeFileSync(path.join(tmpDir, file), '\n', 'utf-8');
+
+            await ctx.openDocument(file);
+
+            const params = harness.notifications[0].params as { textDocument: { languageId: string } };
+            expect(params.textDocument.languageId).toBe(languageId);
+        });
+
+        it('uses options.languageId over the detected languageId for that document only', async () => {
+            fs.writeFileSync(path.join(tmpDir, 'other.ts'), '\n', 'utf-8');
+
+            await ctx.openDocument('sample.ts', { languageId: 'typescript-next' });
+            await ctx.openDocument('other.ts');
+
+            const ids = harness.notifications.map(
+                (n) => (n.params as { textDocument: { languageId: string } }).textDocument.languageId,
+            );
+            expect(ids).toEqual(['typescript-next', 'typescript']);
+        });
+
         it('is idempotent — opening the same document twice sends one didOpen', async () => {
             await ctx.openDocument('sample.ts');
             await ctx.openDocument('sample.ts');

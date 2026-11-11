@@ -18,6 +18,7 @@ export type {
     EditOperation,
     IterationResult,
     MethodStats,
+    OpenDocumentOptions,
     Position,
     Range,
     RequestTiming,

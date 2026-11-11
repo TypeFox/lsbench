@@ -107,6 +107,12 @@ export interface EditOperation {
     text: string;
 }
 
+/** Options for opening a document */
+export interface OpenDocumentOptions {
+    /** overrides the languageId detected from the file extension, for this document only */
+    languageId?: string;
+}
+
 /**
  * The context object passed to user action scripts.
  * All methods that send LSP requests are automatically timed.
@@ -116,7 +122,8 @@ export interface BenchContext {
     workspaceRoot: string;
 
     // ── Document lifecycle ──────────────────────────────────────────────
-    openDocument(relativePath: string): Promise<void>;
+    /** Sends didOpen, with the languageId detected from the extension unless `options.languageId` is given */
+    openDocument(relativePath: string, options?: OpenDocumentOptions): Promise<void>;
     closeDocument(relativePath: string): Promise<void>;
     /** Sends didSave only if the server asked for it, with the tracked text when it wants includeText */
     saveDocument(relativePath: string): Promise<void>;

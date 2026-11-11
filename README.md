@@ -81,7 +81,7 @@ The following paths should be considered relative to your workspace root, and th
 
 | Method | Description |
 | --- | --- |
-| `openDocument(path)` | Send `textDocument/didOpen` |
+| `openDocument(path, options?)` | Send `textDocument/didOpen`. `options.languageId` overrides the languageId detected from the extension, for this document only |
 | `closeDocument(path)` | Send `textDocument/didClose` |
 | `edit(path, edits)` | Send `textDocument/didChange` and apply the edits to the tracked text, in order |
 | `saveDocument(path)` | Send `textDocument/didSave` only if the server asks for it, with the tracked text when it wants `includeText` |
@@ -192,7 +192,7 @@ lsbench answers requests from the server so it doesn't get stuck waiting on a cl
 - `client/registerCapability` and `client/unregisterCapability` are accepted (save related registrations are tracked)
 - `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) and `window/workDoneProgress/create` are acknowledged
 - `window/showMessageRequest` is dismissed with `null`
-- `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying thw workspace using server-initiated requests
+- `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying the workspace using server-initiated requests
 
 ### Registering languages
 

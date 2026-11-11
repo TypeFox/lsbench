@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { type Diagnostic, type LspHarness, pathToUri } from './harness.js';
-import type { BenchContext, EditOperation, Position, Range, RequestTiming } from './types.js';
+import type { BenchContext, EditOperation, OpenDocumentOptions, Position, Range, RequestTiming } from './types.js';
 
 /**
  * Concrete implementation of BenchContext.
@@ -44,7 +44,7 @@ export class BenchContextImpl implements BenchContext {
 
     // ── Document lifecycle ──────────────────────────────────────────────
 
-    async openDocument(relativePath: string): Promise<void> {
+    async openDocument(relativePath: string, options?: OpenDocumentOptions): Promise<void> {
         const absPath = path.resolve(this.workspaceRoot, relativePath);
         const uri = pathToUri(absPath);
 
@@ -53,7 +53,7 @@ export class BenchContextImpl implements BenchContext {
         }
 
         const text = fs.readFileSync(absPath, 'utf-8');
-        const languageId = detectLanguageId(absPath);
+        const languageId = options?.languageId ?? detectLanguageId(absPath);
 
         const doc = { uri, version: 1, text };
         this.openDocuments.set(relativePath, doc);
@@ -570,9 +570,14 @@ function filterDiagnosticsByCode(diagnostics: Diagnostic[], codes: (string | num
 const RegisteredLanguages: Record<string, string> = {
     '.ts': 'typescript',
     '.tsx': 'typescriptreact',
+    '.mts': 'typescript',
+    '.cts': 'typescript',
     '.js': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
     '.jsx': 'javascriptreact',
     '.json': 'json',
+    '.jsonc': 'jsonc',
     '.html': 'html',
     '.css': 'css',
     '.scss': 'scss',
