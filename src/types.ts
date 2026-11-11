@@ -46,6 +46,11 @@ export interface BenchOptions {
     contentModifiedRetries?: number;
     /** Skip requests whose provider the server does not advertise, recording them as skipped (default true) */
     skipUnsupported?: boolean;
+    /**
+     * Wait up to this many milliseconds for the server to become idle after initialized
+     * (and after each restart) before the script runs, recorded as lifecycle/idle
+     */
+    waitIdle?: number;
 }
 
 // ── Timing & Results ────────────────────────────────────────────────────────
@@ -130,7 +135,7 @@ export interface BenchReport {
     };
     runs: IterationResult[];
     /**
-     * Keep alive mode only: spawn, initialize and final shutdown timings of the single
+     * Keep alive mode only: spawn, initialize, idle and final shutdown timings of the single
      * server, which belong to no iteration. With restart they are in each run's requests
      */
     lifecycle?: RequestTiming[];
@@ -245,6 +250,27 @@ export interface WaitForDiagnosticsResult {
     ms: number;
 }
 
+/** Options for `BenchContext.waitForIdle` */
+export interface WaitForIdleOptions {
+    /** give up after this many milliseconds (default 30000) */
+    timeout?: number;
+    /** how long the server must stay idle before the wait resolves (default 100) */
+    quietMs?: number;
+}
+
+/** What an idle wait resolved with */
+export interface WaitForIdleResult {
+    /** whether the server was idle when the wait resolved, on timeout possibly without a full quiet period */
+    idle: boolean;
+    /** the timeout fired before the server stayed idle for the quiet period */
+    timedOut: boolean;
+    /**
+     * milliseconds from the call until the server became idle for the last time, 0 when it
+     * already was; the quiet period is not included. On timeout, the time until the timeout
+     */
+    ms: number;
+}
+
 /** Options for opening a document */
 export interface OpenDocumentOptions {
     /** overrides the languageId detected from the file extension, for this document only */
@@ -339,6 +365,16 @@ export interface BenchContext {
         relativePath: string,
         options?: WaitForDiagnosticsOptions | number,
     ): Promise<WaitForDiagnosticsResult>;
+
+    /**
+     * Wait until the server has finished its background work: no work done progress token
+     * ($/progress) is active and, once rust-analyzer sent experimental/serverStatus, the
+     * latest status is quiescent. The server must stay idle for `quietMs` (default 100), so
+     * back to back progress tokens do not resolve the wait in between; a server that never
+     * reports progress resolves after the quiet period. Recorded as `server/idle`, result
+     * ok or timeout. `options` may be a bare timeout in ms
+     */
+    waitForIdle(options?: WaitForIdleOptions | number): Promise<WaitForIdleResult>;
 
     /**
      * Sleep for the given number of milliseconds.

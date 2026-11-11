@@ -443,6 +443,195 @@ export class DiagnosticsTracker {
     }
 }
 
+/** How long the server must stay idle before an idle wait resolves */
+export const DEFAULT_IDLE_QUIET_MS = 100;
+
+/** A progress token, as sent in window/workDoneProgress/create and $/progress */
+export type ProgressToken = number | string;
+
+/** The params of a $/progress notification, `value` is only checked for work done progress */
+interface ProgressParams {
+    token: ProgressToken;
+    value?: { kind?: unknown; title?: unknown; message?: unknown; percentage?: unknown };
+}
+
+/** The params of rust-analyzer's experimental/serverStatus notification */
+export interface ServerStatusParams {
+    health?: 'ok' | 'warning' | 'error';
+    /** false while the server still has work queued, e.g. loading the workspace */
+    quiescent: boolean;
+    message?: string;
+}
+
+/** Options of ProgressTracker.waitForIdle */
+export interface IdleWaitOptions {
+    /** give up after this many milliseconds */
+    timeoutMs: number;
+    /** how long the server must stay idle before the wait resolves (default DEFAULT_IDLE_QUIET_MS) */
+    quietMs?: number;
+}
+
+/** What an idle wait resolved with */
+export interface IdleWaitResult {
+    /** whether the server was idle when the wait resolved, also on timeout (then without a full quiet period) */
+    idle: boolean;
+    /** the timeout fired before the server stayed idle for the quiet period */
+    timedOut: boolean;
+    /**
+     * milliseconds from the start of the wait until the server became idle for the last
+     * time, 0 when it already was; the quiet period is not included. On timeout, the
+     * time until the timeout
+     */
+    ms: number;
+}
+
+/**
+ * Tracks work done progress ($/progress begin, report and end) and rust-analyzer's
+ * experimental/serverStatus, so a wait can tell when the server has finished background
+ * work such as loading or indexing a workspace. The server is idle while no progress
+ * token is active and, once it ever sent a server status, the latest one is quiescent.
+ * Tokens are tracked whether or not the server created them first through
+ * window/workDoneProgress/create. One tracker serves one server process, `clear()`
+ * forgets all state
+ */
+export class ProgressTracker {
+    /** active tokens with the title of their begin */
+    private active = new Map<ProgressToken, string>();
+    private status: ServerStatusParams | undefined;
+    /** process.hrtime.bigint() of the latest change from busy to idle, or of creation */
+    private idleSince = process.hrtime.bigint();
+    private listeners = new Set<() => void>();
+
+    constructor(private log: (msg: string) => void = () => {}) {}
+
+    /** Whether no token is active and the latest server status, if any, is quiescent */
+    get idle(): boolean {
+        return this.active.size === 0 && (this.status === undefined || this.status.quiescent);
+    }
+
+    /** The titles of the active progress tokens */
+    get activeTitles(): string[] {
+        return [...this.active.values()];
+    }
+
+    /** The latest experimental/serverStatus, undefined when none arrived */
+    get serverStatus(): ServerStatusParams | undefined {
+        return this.status;
+    }
+
+    /** Note a window/workDoneProgress/create request, the token only counts once it begins */
+    create(token: ProgressToken): void {
+        this.log(`Progress token ${token} created`);
+    }
+
+    /** Update the active tokens from a $/progress notification, other than work done progress is ignored */
+    progress(params: ProgressParams): void {
+        const { token, value } = params;
+        const kind = value?.kind;
+        this.update(() => {
+            if (kind === 'begin') {
+                const title = typeof value?.title === 'string' ? value.title : String(token);
+                this.active.set(token, title);
+                const message = typeof value?.message === 'string' ? ` (${value.message})` : '';
+                this.log(`Progress begin: ${title}${message}`);
+            } else if (kind === 'end') {
+                const title = this.active.get(token);
+                if (title === undefined) {
+                    this.log(`Progress end for unknown token ${token}`);
+                    return;
+                }
+                this.active.delete(token);
+                const message = typeof value?.message === 'string' ? ` (${value.message})` : '';
+                this.log(`Progress end: ${title}${message}`);
+            }
+        });
+    }
+
+    /** Record an experimental/serverStatus notification */
+    serverStatusChanged(params: ServerStatusParams): void {
+        this.update(() => {
+            const changed = this.status?.quiescent !== params.quiescent || this.status?.health !== params.health;
+            this.status = params;
+            if (changed) {
+                const message = params.message ? `: ${params.message}` : '';
+                this.log(
+                    `Server status ${params.health ?? 'ok'}, ${params.quiescent ? 'quiescent' : 'busy'}${message}`,
+                );
+            }
+        });
+    }
+
+    /**
+     * Resolve once the server has been idle for `quietMs`, counting from the later of the
+     * start of the wait and the latest change to idle, so back to back progress tokens do
+     * not resolve the wait in between and a server that never reports progress resolves
+     * after the quiet period. Resolves with timedOut set exactly when the timeout timer fires
+     */
+    waitForIdle(options: IdleWaitOptions): Promise<IdleWaitResult> {
+        const { timeoutMs, quietMs = DEFAULT_IDLE_QUIET_MS } = options;
+        const startedAt = process.hrtime.bigint();
+        const sinceStart = (at: bigint) => Math.max(0, Number(at - startedAt) / 1_000_000);
+        return new Promise((resolve) => {
+            let quietTimer: NodeJS.Timeout | undefined;
+            const finish = (result: IdleWaitResult) => {
+                clearTimeout(timer);
+                clearTimeout(quietTimer);
+                this.listeners.delete(check);
+                resolve(result);
+            };
+            // (re)start the quiet period when idle, cancel it when busy
+            const check = () => {
+                clearTimeout(quietTimer);
+                if (!this.idle) {
+                    return;
+                }
+                const quietFrom = this.idleSince > startedAt ? this.idleSince : startedAt;
+                const quietSoFar = Number(process.hrtime.bigint() - quietFrom) / 1_000_000;
+                quietTimer = setTimeout(
+                    () => finish({ idle: true, timedOut: false, ms: sinceStart(quietFrom) }),
+                    Math.max(0, quietMs - quietSoFar),
+                );
+            };
+            const timer = setTimeout(() => {
+                if (!this.idle) {
+                    this.log(`Server not idle after ${timeoutMs}ms, active: ${this.describeBusy()}`);
+                }
+                finish({ idle: this.idle, timedOut: true, ms: sinceStart(process.hrtime.bigint()) });
+            }, timeoutMs);
+            this.listeners.add(check);
+            check();
+        });
+    }
+
+    /** Forget all tokens and the server status, pending waits see the server as idle */
+    clear(): void {
+        this.update(() => {
+            this.active.clear();
+            this.status = undefined;
+        });
+    }
+
+    /** Apply a change, note when the server turned idle and let the waits recheck */
+    private update(change: () => void): void {
+        const wasIdle = this.idle;
+        change();
+        if (!wasIdle && this.idle) {
+            this.idleSince = process.hrtime.bigint();
+        }
+        for (const check of this.listeners) {
+            check();
+        }
+    }
+
+    private describeBusy(): string {
+        const parts = this.activeTitles;
+        if (this.status && !this.status.quiescent) {
+            parts.push('server status not quiescent');
+        }
+        return parts.join(', ');
+    }
+}
+
 /** default time to wait for a shutdown reply before giving up on the server */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 
@@ -463,6 +652,7 @@ export class LspHarness {
     private process: cp.ChildProcess | null = null;
     private connection: rpc.MessageConnection | null = null;
     private diagnostics: DiagnosticsTracker;
+    private progress: ProgressTracker;
     private _capabilities: ServerCapabilities | null = null;
     /** dynamic registrations by registration id */
     private _registrations = new Map<string, Registration>();
@@ -484,6 +674,7 @@ export class LspHarness {
     ) {
         this.verbose = verbose;
         this.diagnostics = new DiagnosticsTracker((msg) => this.log(msg));
+        this.progress = new ProgressTracker((msg) => this.log(msg));
     }
 
     /** How the server process ended, or null while it is still running */
@@ -629,17 +820,28 @@ export class LspHarness {
             return;
         });
 
-        // acknowledge refresh and progress requests, we hold no cached state to invalidate
+        // acknowledge refresh requests, we hold no cached state to invalidate
         const noOpRequests = [
             'workspace/semanticTokens/refresh',
             'workspace/inlayHint/refresh',
             'workspace/codeLens/refresh',
             'workspace/inlineValue/refresh',
-            'window/workDoneProgress/create',
         ];
         for (const method of noOpRequests) {
             this.connection.onRequest(method, () => null);
         }
+
+        // track work done progress and rust-analyzer's server status for idle waits
+        this.connection.onRequest('window/workDoneProgress/create', (params: { token: ProgressToken }) => {
+            this.progress.create(params.token);
+            return null;
+        });
+        this.connection.onNotification('$/progress', (params: ProgressParams) => {
+            this.progress.progress(params);
+        });
+        this.connection.onNotification('experimental/serverStatus', (params: ServerStatusParams) => {
+            this.progress.serverStatusChanged(params);
+        });
 
         // accept and remember all dynamic registrations
         this.connection.onRequest('client/registerCapability', (params: { registrations?: Registration[] }) => {
@@ -770,6 +972,7 @@ export class LspHarness {
         }
         this.process = null;
         this.diagnostics.clear();
+        this.progress.clear();
         this._registrations.clear();
         return this._exit;
     }
@@ -847,6 +1050,27 @@ export class LspHarness {
         return this.diagnostics.waitForPublishes(uri, accept, options);
     }
 
+    /** Resolve once the server has finished its background work, see ProgressTracker.waitForIdle */
+    waitForIdle(options: IdleWaitOptions): Promise<IdleWaitResult> {
+        return this.progress.waitForIdle(options);
+    }
+
+    /**
+     * Wait for the server to become idle and record the wait as lifecycle/idle, result ok
+     * or timeout, for use right after start()
+     */
+    async waitForIdleAfterStart(options: IdleWaitOptions): Promise<IdleWaitResult> {
+        const result = await this.progress.waitForIdle(options);
+        this.lifecycleTimings.push({
+            method: 'lifecycle/idle',
+            duration_ms: Math.round(result.ms * 1000) / 1000,
+            success: !result.timedOut,
+            result: result.timedOut ? 'timeout' : 'ok',
+        });
+        this.log(`Server ${result.timedOut ? 'not idle' : 'idle'} after ${result.ms.toFixed(1)}ms`);
+        return result;
+    }
+
     /** Wait for the next diagnostics publication for a URI, falling back to the cached ones on timeout */
     async onDiagnostics(uri: string, timeoutMs: number): Promise<Diagnostic[]> {
         const after = this.diagnostics.currentSeq();
@@ -878,6 +1102,10 @@ export class LspHarness {
  */
 export function defaultClientCapabilities(): Record<string, unknown> {
     return {
+        // servers report background work such as indexing through $/progress, see waitForIdle
+        window: { workDoneProgress: true },
+        // rust-analyzer reports whether it finished loading through experimental/serverStatus
+        experimental: { serverStatusNotification: true },
         workspace: {
             workspaceFolders: true,
             configuration: true,

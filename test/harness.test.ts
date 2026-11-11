@@ -5,6 +5,7 @@ import {
     defaultClientCapabilities,
     LspHarness,
     mergeCapabilities,
+    ProgressTracker,
     pathToUri,
     uriToPath,
 } from 'lsbench';
@@ -424,6 +425,12 @@ describe('defaultClientCapabilities', () => {
         expect(workspace.didChangeWatchedFiles).toEqual({ dynamicRegistration: true, relativePatternSupport: true });
     });
 
+    it('advertises work done progress and the rust-analyzer server status', () => {
+        const caps = defaultClientCapabilities();
+        expect(caps.window).toEqual({ workDoneProgress: true });
+        expect(caps.experimental).toEqual({ serverStatusNotification: true });
+    });
+
     it('does not advertise pull diagnostics, so servers supporting both keep pushing', () => {
         const textDocument = defaultClientCapabilities().textDocument as Record<string, unknown>;
         expect(textDocument.diagnostic).toBeUndefined();
@@ -495,7 +502,7 @@ describe('LspHarness client capabilities', () => {
             expect(received.textDocument.completion).toEqual(
                 (defaultClientCapabilities().textDocument as Record<string, unknown>).completion,
             );
-            expect(received.experimental).toEqual({ custom: true });
+            expect(received.experimental).toEqual({ serverStatusNotification: true, custom: true });
         } finally {
             await harness.stop();
         }
@@ -702,5 +709,191 @@ describe('DiagnosticsTracker', () => {
             signal: AbortSignal.abort(),
         });
         expect(result).toEqual({ publishes: 0, timedOut: false, aborted: true });
+    });
+});
+
+describe('ProgressTracker', () => {
+    const begin = (token: string | number, title = `task ${token}`) => ({ token, value: { kind: 'begin', title } });
+    const end = (token: string | number) => ({ token, value: { kind: 'end' } });
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    it('resolves after the quiet period when the server never reports progress', async () => {
+        const tracker = new ProgressTracker();
+        const started = Date.now();
+        const result = await tracker.waitForIdle({ timeoutMs: 1000, quietMs: 50 });
+        expect(result).toEqual({ idle: true, timedOut: false, ms: 0 });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(45);
+    });
+
+    it('waits until every active token has ended', async () => {
+        const tracker = new ProgressTracker();
+        tracker.progress(begin('a'));
+        tracker.progress(begin(1));
+        expect(tracker.idle).toBe(false);
+        const wait = tracker.waitForIdle({ timeoutMs: 1000, quietMs: 20 });
+        await sleep(30);
+        tracker.progress({ token: 'a', value: { kind: 'report', message: 'halfway' } });
+        tracker.progress(end('a'));
+        expect(tracker.activeTitles).toEqual(['task 1']);
+        await sleep(30);
+        tracker.progress(end(1));
+        const result = await wait;
+        expect(result.idle).toBe(true);
+        expect(result.timedOut).toBe(false);
+        expect(result.ms).toBeGreaterThanOrEqual(50);
+    });
+
+    it('does not resolve between back to back tokens', async () => {
+        const tracker = new ProgressTracker();
+        tracker.progress(begin('load'));
+        const wait = tracker.waitForIdle({ timeoutMs: 1000, quietMs: 60 });
+        let resolved = false;
+        void wait.then(() => {
+            resolved = true;
+        });
+        tracker.progress(end('load'));
+        await sleep(20);
+        tracker.progress(begin('index'));
+        await sleep(80);
+        expect(resolved).toBe(false);
+        tracker.progress(end('index'));
+        const result = await wait;
+        expect(result.idle).toBe(true);
+        expect(result.ms).toBeGreaterThanOrEqual(90);
+    });
+
+    it('treats tokens as distinct by value and type, and ignores unknown ends and partial results', () => {
+        const tracker = new ProgressTracker();
+        tracker.progress(begin(1));
+        tracker.progress(end('1'));
+        tracker.progress({ token: 'partial', value: [] as unknown as { kind?: unknown } });
+        expect(tracker.activeTitles).toEqual(['task 1']);
+        tracker.progress(end(1));
+        expect(tracker.idle).toBe(true);
+    });
+
+    it('stays busy until a server status, once received, is quiescent', async () => {
+        const tracker = new ProgressTracker();
+        tracker.serverStatusChanged({ health: 'ok', quiescent: false });
+        expect(tracker.idle).toBe(false);
+        const wait = tracker.waitForIdle({ timeoutMs: 1000, quietMs: 20 });
+        await sleep(30);
+        tracker.serverStatusChanged({ health: 'ok', quiescent: true });
+        const result = await wait;
+        expect(result).toMatchObject({ idle: true, timedOut: false });
+        expect(result.ms).toBeGreaterThanOrEqual(25);
+        expect(tracker.serverStatus?.quiescent).toBe(true);
+    });
+
+    it('is busy while a token is active even when the server status is quiescent', () => {
+        const tracker = new ProgressTracker();
+        tracker.serverStatusChanged({ quiescent: true });
+        tracker.progress(begin('a'));
+        expect(tracker.idle).toBe(false);
+    });
+
+    it('times out while a token never ends', async () => {
+        const tracker = new ProgressTracker();
+        tracker.progress(begin('stuck'));
+        const result = await tracker.waitForIdle({ timeoutMs: 50, quietMs: 10 });
+        expect(result.idle).toBe(false);
+        expect(result.timedOut).toBe(true);
+        expect(result.ms).toBeGreaterThanOrEqual(40);
+    });
+
+    it('counts the quiet period from the start of the wait when the server was idle before', async () => {
+        const tracker = new ProgressTracker();
+        tracker.progress(begin('a'));
+        tracker.progress(end('a'));
+        await sleep(60);
+        const started = Date.now();
+        const result = await tracker.waitForIdle({ timeoutMs: 1000, quietMs: 40 });
+        expect(result.ms).toBe(0);
+        expect(Date.now() - started).toBeGreaterThanOrEqual(35);
+    });
+
+    it('logs progress begin and end titles', () => {
+        const logs: string[] = [];
+        const tracker = new ProgressTracker((msg) => logs.push(msg));
+        tracker.create('t');
+        tracker.progress({ token: 't', value: { kind: 'begin', title: 'Indexing', message: '1/3' } });
+        tracker.progress(end('t'));
+        expect(logs).toContain('Progress begin: Indexing (1/3)');
+        expect(logs).toContain('Progress end: Indexing');
+    });
+
+    it('forgets active tokens and the server status on clear', () => {
+        const tracker = new ProgressTracker();
+        tracker.progress(begin('a'));
+        tracker.serverStatusChanged({ quiescent: false });
+        tracker.clear();
+        expect(tracker.idle).toBe(true);
+        expect(tracker.serverStatus).toBeUndefined();
+    });
+});
+
+/**
+ * A fake server that, after initialized, creates a progress token, loads for loadMs
+ * (argv) under it and reports a non quiescent server status meanwhile
+ */
+const progressServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const loadMs = Number(process.argv[1]);
+conn.onRequest('initialize', () => ({ capabilities: {} }));
+conn.onNotification('initialized', async () => {
+    conn.sendNotification('experimental/serverStatus', { health: 'ok', quiescent: false });
+    await conn.sendRequest('window/workDoneProgress/create', { token: 'load' });
+    conn.sendNotification('$/progress', { token: 'load', value: { kind: 'begin', title: 'Loading' } });
+    setTimeout(() => {
+        conn.sendNotification('$/progress', { token: 'load', value: { kind: 'end' } });
+        conn.sendNotification('experimental/serverStatus', { health: 'ok', quiescent: true });
+    }, loadMs);
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('LspHarness idle waits', () => {
+    function progressHarness(loadMs: number): LspHarness {
+        return new LspHarness(
+            { command: process.execPath, args: ['--input-type=module', '-e', progressServer, String(loadMs)] },
+            process.cwd(),
+        );
+    }
+
+    it('waits for server initiated progress and the server status after initialized', async () => {
+        const harness = progressHarness(200);
+        try {
+            await harness.start();
+            harness.takeLifecycleTimings();
+            const result = await harness.waitForIdleAfterStart({ timeoutMs: 5000 });
+            expect(result).toMatchObject({ idle: true, timedOut: false });
+            expect(result.ms).toBeGreaterThanOrEqual(150);
+            expect(harness.takeLifecycleTimings()).toEqual([
+                { method: 'lifecycle/idle', duration_ms: expect.any(Number), success: true, result: 'ok' },
+            ]);
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('records a timeout as lifecycle/idle when the server stays busy', async () => {
+        const harness = progressHarness(10_000);
+        try {
+            await harness.start();
+            harness.takeLifecycleTimings();
+            const result = await harness.waitForIdleAfterStart({ timeoutMs: 300 });
+            expect(result).toMatchObject({ idle: false, timedOut: true });
+            expect(harness.takeLifecycleTimings()).toEqual([
+                { method: 'lifecycle/idle', duration_ms: expect.any(Number), success: false, result: 'timeout' },
+            ]);
+        } finally {
+            await harness.stop();
+        }
     });
 });

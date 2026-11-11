@@ -77,6 +77,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     console.log(`  Script:     ${opts.script}`);
     console.log(`  Iterations: ${opts.iterations} (+ ${opts.warmup} warmup)`);
     console.log(`  Restart:    ${opts.restart ? 'each iteration' : 'keep alive'}`);
+    if (opts.waitIdle !== undefined) {
+        console.log(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
+    }
     console.log();
 
     const benchStart = process.hrtime.bigint();
@@ -101,7 +104,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
     let harness: LspHarness | null = null;
     let ctx: BenchContextImpl | null = null;
-    // keep alive spawn, initialize and final shutdown timings, which belong to no iteration
+    // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
     const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries, skipUnsupported: opts.skipUnsupported };
     let lifecycle: RequestTiming[] | undefined;
     // in verbose mode, summarize capabilities once, after the first server is up
@@ -118,6 +121,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (!opts.restart) {
         harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
         await harness.start();
+        await waitIdleAfterStart(harness, opts.waitIdle);
         lifecycle = harness.takeLifecycleTimings();
         logCapabilities(harness);
         ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
@@ -141,6 +145,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
             try {
                 await harness.start();
+                await waitIdleAfterStart(harness, opts.waitIdle);
                 startTimings = harness.takeLifecycleTimings();
                 logCapabilities(harness);
             } catch (err: unknown) {
@@ -241,6 +246,17 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     }
 
     return report;
+}
+
+/** With --wait-idle, wait for a freshly started server to become idle, recorded as lifecycle/idle */
+async function waitIdleAfterStart(harness: LspHarness, timeoutMs: number | undefined): Promise<void> {
+    if (timeoutMs === undefined) {
+        return;
+    }
+    const result = await harness.waitForIdleAfterStart({ timeoutMs });
+    if (result.timedOut) {
+        console.error(`  Warning: server not idle after ${timeoutMs}ms`);
+    }
 }
 
 /** Print which context request methods the server supports statically, dynamic registrations are logged as they arrive */

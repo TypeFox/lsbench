@@ -13,18 +13,24 @@ export type {
     DiagnosticsDelivery,
     DiagnosticsPublish,
     DocumentSyncState,
+    IdleWaitOptions,
+    IdleWaitResult,
+    ProgressToken,
     PublishWaitOptions,
     PublishWaitResult,
     SaveSyncOptions,
     ServerExit,
+    ServerStatusParams,
 } from './harness.js';
 export {
     CLOSE_PUBLISH_WINDOW_MS,
+    DEFAULT_IDLE_QUIET_MS,
     DiagnosticsTracker,
     defaultClientCapabilities,
     LspHarness,
     mergeCapabilities,
     pathToUri,
+    ProgressTracker,
     uriToPath,
 } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
@@ -52,4 +58,6 @@ export type {
     ServerConfig,
     WaitForDiagnosticsOptions,
     WaitForDiagnosticsResult,
+    WaitForIdleOptions,
+    WaitForIdleResult,
 } from './types.js';

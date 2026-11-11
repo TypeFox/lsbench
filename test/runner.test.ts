@@ -186,8 +186,9 @@ describe('runBenchmark lifecycle timings', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    function options(restart: boolean, output: string): BenchOptions {
+    function options(restart: boolean, output: string, waitIdle?: number): BenchOptions {
         return {
+            ...(waitIdle !== undefined ? { waitIdle } : {}),
             server: process.execPath,
             serverArgs: ['--input-type=module', '-e', cleanServer],
             workspace: tmpDir,
@@ -237,5 +238,27 @@ describe('runBenchmark lifecycle timings', () => {
         const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
         expect(written.lifecycle).toHaveLength(3);
         expect(written.summary['lifecycle/shutdown'].count).toBe(1);
+    });
+
+    it('records lifecycle/idle after each start with waitIdle', async () => {
+        const restart = await runBenchmark(options(true, path.join(tmpDir, 'report-idle-restart.json'), 2000));
+        for (const run of restart.runs) {
+            expect(run.requests.map((r) => r.method)).toEqual([
+                'lifecycle/spawn',
+                'lifecycle/initialize',
+                'lifecycle/idle',
+                'textDocument/hover',
+                'lifecycle/shutdown',
+            ]);
+        }
+        expect(restart.summary['lifecycle/idle']).toMatchObject({ count: 2, timeout_rate: 0 });
+
+        const keepAlive = await runBenchmark(options(false, path.join(tmpDir, 'report-idle-keep-alive.json'), 2000));
+        expect(keepAlive.lifecycle?.map((t) => t.method)).toEqual([
+            'lifecycle/spawn',
+            'lifecycle/initialize',
+            'lifecycle/idle',
+            'lifecycle/shutdown',
+        ]);
     });
 });

@@ -6,6 +6,9 @@ import { runBenchmark } from './runner.js';
 import type { BenchOptions } from './types.js';
 import { CLI_VERSION } from './version.js';
 
+/** idle wait timeout of --wait-idle without a value */
+const DEFAULT_WAIT_IDLE_MS = 30000;
+
 const program = new Command();
 
 program
@@ -41,6 +44,10 @@ program
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
     .option('--no-skip-unsupported', 'Send requests even when the server does not advertise their provider')
+    .option(
+        '--wait-idle [ms]',
+        `Wait up to ms (default ${DEFAULT_WAIT_IDLE_MS}) for the server to finish background work after initialized`,
+    )
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
@@ -71,6 +78,7 @@ program
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
             skipUnsupported: rawOpts.skipUnsupported as boolean,
+            waitIdle: parseWaitIdle(rawOpts.waitIdle as string | boolean | undefined),
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
             clientCapabilities: clientCapabilities as Record<string, unknown> | undefined,
@@ -103,6 +111,10 @@ program
         }
         if (Number.isNaN(opts.shutdownTimeout) || (opts.shutdownTimeout ?? 0) < 1) {
             console.error('Error: --shutdown-timeout must be a positive integer');
+            process.exit(1);
+        }
+        if (opts.waitIdle !== undefined && (Number.isNaN(opts.waitIdle) || opts.waitIdle < 1)) {
+            console.error('Error: --wait-idle must be a positive integer');
             process.exit(1);
         }
         if (Number.isNaN(opts.contentModifiedRetries) || (opts.contentModifiedRetries ?? 0) < 0) {
@@ -140,6 +152,17 @@ program
     });
 
 program.parse();
+
+/** The --wait-idle timeout: undefined without the flag, the default for a bare flag */
+function parseWaitIdle(value: string | boolean | undefined): number | undefined {
+    if (value === undefined || value === false) {
+        return undefined;
+    }
+    if (value === true) {
+        return DEFAULT_WAIT_IDLE_MS;
+    }
+    return /^\d+$/.test(value) ? parseInt(value, 10) : Number.NaN;
+}
 
 /** Read and parse a JSON file named by a CLI flag, exiting with an error if it is missing or invalid */
 function readJsonFile(file: string | undefined, what: string): unknown {
@@ -382,6 +405,17 @@ Synchronization
                                           diagnostics/pull/edit or diagnostics/pull/wait, timed from the
                                           first pull to the resolving response (no server debounce, so
                                           not comparable with push timings).
+  waitForIdle(options?)                   waits until the server finished background work (loading,
+                                          indexing): no $/progress token is active and, once rust-analyzer
+                                          sent experimental/serverStatus, the latest status is quiescent.
+                                          options is { timeout, quietMs } or a bare timeout (default
+                                          30_000ms). The server must stay idle for quietMs (default 100),
+                                          so back to back progress tokens do not resolve it in between; a
+                                          server that never reports progress resolves after quietMs.
+                                          Resolves with { idle, timedOut, ms }: ms is the time from the
+                                          call until the server last became idle (0 if it already was,
+                                          the quiet period not included). Recorded as server/idle, result
+                                          ok or timeout.
   sleep(ms)                               pause execution, useful to let background indexing settle.
 
 Escape hatches (for methods without a convenience wrapper)
@@ -397,7 +431,12 @@ lsbench answers these so a server never stalls waiting on a client:
   workspace/configuration                 an empty object per item
   client/(un)registerCapability           accepted, all registrations are tracked (ctx.registrations)
                                           (didChangeWatchedFiles is advertised, but no file events are sent)
-  workspace/*/refresh, workDoneProgress   acknowledged
+  workspace/*/refresh                     acknowledged
+  window/workDoneProgress/create          acknowledged, the token is tracked for waitForIdle
+
+lsbench advertises window.workDoneProgress and rust-analyzer's
+experimental.serverStatusNotification, and tracks $/progress begin/end and
+experimental/serverStatus (verbose mode logs progress titles).
   window/showMessageRequest               dismissed with null
   workspace/applyEdit                     declined, lsbench never modifies the workspace
 
@@ -422,6 +461,8 @@ lsbench answers these so a server never stalls waiting on a client:
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
           --no-skip-unsupported    Send requests the server does not advertise
+          --wait-idle [ms]         After initialized (and each restart), wait up to ms
+                                   for the server to become idle before the script  (default: 30000)
       -v, --verbose                Verbose logging                                  (default: false)
       -V, --version                Print version
       -h, --help                   Print help
@@ -437,7 +478,7 @@ The JSON report (and the printed summary) contains:
                        failure_rate, null_rate, empty_rate, timeout_rate, skipped, skip_rate
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
-  - lifecycle          keep alive mode only: spawn, initialize and final shutdown
+  - lifecycle          keep alive mode only: spawn, initialize, idle and final shutdown
                        timings of the single server
   - abnormal_exits     servers that crashed or exited unexpectedly (only when any did,
                        lsbench then exits non zero but still writes the report)
@@ -445,10 +486,13 @@ The JSON report (and the printed summary) contains:
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started
   - lifecycle/initialize  initialize request until its response (includes server startup)
+  - lifecycle/idle        --wait-idle only: initialized until the server became idle
+                          (quiet period not included), timeout when it never did
+                          (lsbench then prints a warning)
   - lifecycle/shutdown    shutdown request until its reply, failed when the server
                           exits first or does not reply within --shutdown-timeout
 With --restart they are in each run's requests (shutdown comes after the
-iteration and is not part of total_ms). Without it they go in \`lifecycle\`.
+iteration and is not part of total_ms, idle is). Without it they go in \`lifecycle\`.
 
 Example \`summary\` entry:
 
@@ -480,7 +524,7 @@ A high null_rate usually means a position misses a symbol, so its fast
 timings mean little.
 Requests rejected with ContentModified (-32801) are retried with a short
 backoff; \`retries\` records how often, and only the final attempt is timed.
-Lifecycle timings are ok or error.
+Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
 
 ## Tips for reliable numbers
 
@@ -491,7 +535,8 @@ Lifecycle timings are ok or error.
     pulled); check timeout_rate first.
   - Point positions at real symbols in your workspace, or requests return null.
   - Large workspaces: the first iteration is often much slower due to indexing —
-    warmup absorbs this.
+    warmup absorbs this. --wait-idle (or ctx.waitForIdle()) waits for servers
+    that report progress, such as rust-analyzer, to finish loading instead.
   - Cold start: use --restart to measure spawn + initialize time per iteration
     (lifecycle/spawn, lifecycle/initialize).
   - Compare servers: run the same script/workspace against different servers

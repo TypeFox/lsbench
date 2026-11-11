@@ -169,6 +169,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 | Method | Description |
 | --- | --- |
 | `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version, or pull them, and time it (`options` is `{ timeout, until, settleMs, mode, pullAfterMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
+| `waitForIdle(options?)` | Wait until the server finished background work such as loading the workspace (`options` is `{ timeout, quietMs }` or a bare timeout, default 30000 ms). Resolves with `{ idle, timedOut, ms }`, see [Waiting for idle](#waiting-for-idle) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
 | `notify(method, params)` | Arbitrary LSP notification |
@@ -257,6 +258,28 @@ A pull resolves on the first report passing `until` (any report without it). Oth
 
 The result's `source` is `push` or `pull`, telling which one resolved the wait, and `pulls` counts the requests sent (0 for push, `publishes` is 0 for pull). A pull has no server debounce, so its timing is not comparable with time to a push. It is recorded under its own methods, `diagnostics/pull/open`, `diagnostics/pull/edit` and `diagnostics/pull/wait`, and its `ms` runs from the first pull request to the resolving response, re-pulls and backoff included. The grace period of `auto` mode is not part of it, and the first auto wait on a pull only server pays it once. `codeAction` codes match against pulled diagnostics when the server never published for the document.
 
+### Waiting for idle
+
+Servers such as rust-analyzer load and index the workspace in the background after `initialized`. Requests sent meanwhile fail with `content modified` or answer from a partial model, so cold timings measure a placeholder. lsbench advertises `window.workDoneProgress` and tracks every work done progress token through `$/progress` begin and end, whether or not the server created it with `window/workDoneProgress/create`. It also advertises rust-analyzer's `experimental.serverStatusNotification` and tracks `experimental/serverStatus`. Verbose mode logs progress begin and end titles and status changes.
+
+`waitForIdle` resolves once the server is idle: no progress token is active and, if the server ever sent a server status, the latest one is `quiescent: true`. The server must stay idle for `quietMs` (default 100), counted from the later of the call and the moment it last became idle, so the wait does not resolve between back to back progress tokens. A server that never reports progress resolves after the quiet period. The result is:
+
+- `idle`: whether the server was idle when the wait resolved. On timeout it can be `true` when the quiet period was cut short
+- `timedOut`: `true` when the timeout fired before the server stayed idle for `quietMs`
+- `ms`: time from the call until the server last became idle, 0 when it already was. The quiet period is not included. On timeout, the time until the timeout
+
+Each wait is recorded as `server/idle`, with `result` `ok` or `timeout`. A token that never ends keeps the server busy, so the wait times out.
+
+```typescript
+export default async function (ctx: BenchContext) {
+  await ctx.waitForIdle(60_000); // let rust-analyzer load the workspace
+  await ctx.openDocument("src/main.rs");
+  await ctx.hover("src/main.rs", 10, 5);
+}
+```
+
+Pass `--wait-idle [ms]` to wait for idle after `initialized`, and after each restart with `--restart`, before the script runs (default 30000 ms). The wait is recorded as `lifecycle/idle`, and a timeout prints `Warning: server not idle after Nms`.
+
 ### Unsupported requests
 
 A timed request whose provider the server advertises neither statically nor through `client/registerCapability` is not sent. It returns `null` without a round trip and records a timing with `result: "skipped"` and `duration_ms: 0`, so it shows up in the report as skipped instead of as a fast failure. This covers the timed context methods above, including `willSaveWaitUntil`, and `request()` calls for the same LSP methods. Other `request()` methods are always sent. Pass `--no-skip-unsupported` (or `skipUnsupported: false`) to send them anyway. Verbose mode prints which requests the server supports right after startup, and logs dynamic registrations as they arrive. A server that registers a provider only after `initialized` gets it skipped until the registration arrives, so wait (for example with `waitForDiagnostics`) before the first request.
@@ -271,7 +294,8 @@ lsbench answers requests from the server so it doesn't get stuck waiting on a cl
 
 - `workspace/configuration` returns an empty object per item
 - `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`). lsbench advertises `workspace.didChangeWatchedFiles` with dynamic registration, as VS Code does, so servers leave file watching to the client; their watcher registrations are tracked, but lsbench never sends file events
-- `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) and `window/workDoneProgress/create` are acknowledged
+- `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) are acknowledged
+- `window/workDoneProgress/create` is acknowledged, the token is tracked for [`waitForIdle`](#waiting-for-idle)
 - `window/showMessageRequest` is dismissed with `null`
 - `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying the workspace using server-initiated requests
 
@@ -311,6 +335,8 @@ Options:
   --content-modified-retries <n>
                               Retry requests rejected with ContentModified (default: 3)
   --no-skip-unsupported       Send requests even when the server does not advertise their provider
+  --wait-idle [ms]            Wait up to ms for the server to become idle after initialized,
+                              and after each restart (default: 30000)
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -357,7 +383,7 @@ The JSON report contains:
 - **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/open`, `diagnostics/edit`) and pulled diagnostics (`diagnostics/pull/open`, `diagnostics/pull/edit`)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
-- **lifecycle**: Keep alive mode only. Spawn, initialize and final shutdown timings of the single server
+- **lifecycle**: Keep alive mode only. Spawn, initialize, idle and final shutdown timings of the single server
 - **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero
 
 Each request timing has a `result`:
@@ -367,19 +393,20 @@ Each request timing has a `result`:
 - `null`: a `null` result. A high `null_rate` usually means a position misses a symbol, so its fast timings mean little
 - `error`: the request failed, with the message in `error`
 - `skipped`: never sent, since the server does not advertise the provider (see [unsupported requests](#unsupported-requests))
-- `timeout`: a diagnostics wait ran out before a matching publish arrived (see [waiting for diagnostics](#waiting-for-diagnostics))
+- `timeout`: a diagnostics or idle wait ran out (see [waiting for diagnostics](#waiting-for-diagnostics) and [waiting for idle](#waiting-for-idle))
 
 `success` is kept for compatibility and is `false` exactly for `error`, `skipped` and `timeout`. `summary` aggregates `failure_rate`, `null_rate`, `empty_rate` and `timeout_rate` per method, and the printed table adds Null% and Empty% columns when any method has a nonzero rate, and a Tmout% column when any wait timed out. Timeouts are not failures, so they only count toward `timeout_rate`. `count` includes skipped requests, `skipped` counts them and `skip_rate` is their share. The rates cover only the requests actually sent, and the duration stats additionally leave out timeouts, so a fully skipped method has zero durations and a `failure_rate` of 0. The printed table adds a Skip% column when any request was skipped.
 
 Requests rejected with `ContentModified` (-32801), as servers do while loading or when an edit races a request, are retried up to `--content-modified-retries` times (default 3) with a short backoff. The timing records the count in `retries` and covers only the final attempt.
 
-Server lifecycle timings are recorded like methods, with a `result` of `ok` or `error`:
+Server lifecycle timings are recorded like methods, with a `result` of `ok` or `error` (`ok` or `timeout` for `lifecycle/idle`):
 
 - `lifecycle/spawn`: spawning the process until the OS reports it started
 - `lifecycle/initialize`: the `initialize` request until its response, which includes the server's own startup
+- `lifecycle/idle`: with `--wait-idle` only, `initialized` until the server became idle (see [waiting for idle](#waiting-for-idle)), the quiet period not included
 - `lifecycle/shutdown`: the `shutdown` request until its reply. It fails when the server exits first or does not reply within `--shutdown-timeout`
 
-With `--restart` each run's `requests` start with spawn and initialize and end with shutdown. Spawn and initialize count toward `total_ms`, shutdown happens after the iteration ends and does not. Without `--restart` the single server's timings belong to no iteration, so they go in the top level `lifecycle` list instead, and each appears once in `summary`.
+With `--restart` each run's `requests` start with spawn, initialize and idle and end with shutdown. Spawn, initialize and idle count toward `total_ms`, shutdown happens after the iteration ends and does not. Without `--restart` the single server's timings belong to no iteration, so they go in the top level `lifecycle` list instead, and each appears once in `summary`.
 
 ```json
 {
@@ -426,7 +453,7 @@ This can be leveraged by humans as well as agents to use the tool in a self-docu
 - **Warmup matters**: JIT compilation, caches, etc. need a few runs to stabilize (unless you want cold-start times). Use `--warmup 3-5` for reliable numbers once the server is warmed up.
 - **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks).
 - **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency. The wait itself is reported as `diagnostics/open` or `diagnostics/edit` (`diagnostics/pull/open` or `diagnostics/pull/edit` when pulled); check `timeout_rate` before reading its durations.
-- **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this.
+- **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this, or `--wait-idle` for servers that report progress, such as rust-analyzer.
 - **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace.
 
 ## Development

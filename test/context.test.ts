@@ -7,6 +7,8 @@ import type {
     DiagnosticsPublish,
     DocumentSyncState,
     EditOperation,
+    IdleWaitOptions,
+    IdleWaitResult,
     LspHarness,
     PublishWaitOptions,
     PublishWaitResult,
@@ -15,7 +17,7 @@ import type {
     ServerCapabilities,
     WaitForDiagnosticsResult,
 } from 'lsbench';
-import { addRegisteredLanguage, BenchContextImpl, classifyResult, DiagnosticsTracker } from 'lsbench';
+import { addRegisteredLanguage, BenchContextImpl, classifyResult, DiagnosticsTracker, ProgressTracker } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 interface SentRequest {
@@ -38,6 +40,8 @@ class FakeHarness {
     notifications: SentNotification[] = [];
     /** the real tracker, fed by sent notifications and simulated publishes */
     tracker = new DiagnosticsTracker((msg) => this.logs.push(msg));
+    /** the real progress tracker, fed by simulated $/progress notifications */
+    progress = new ProgressTracker();
     logs: string[] = [];
     /** methods that should reject when requested */
     failMethods = new Set<string>();
@@ -112,6 +116,10 @@ class FakeHarness {
 
     saveSyncOptions(): SaveSyncOptions {
         return { ...this.saveOptions };
+    }
+
+    waitForIdle(options: IdleWaitOptions): Promise<IdleWaitResult> {
+        return this.progress.waitForIdle(options);
     }
 }
 
@@ -1032,6 +1040,33 @@ describe('BenchContextImpl', () => {
             it('clamps a line past the end of the document to the end', async () => {
                 expect(await textAfter('ab\n', op(5, 0, 5, 0, 'z'))).toBe('ab\nz');
             });
+        });
+    });
+
+    describe('waitForIdle', () => {
+        it('resolves after the quiet period and records server/idle', async () => {
+            const result = await ctx.waitForIdle({ quietMs: 10 });
+            expect(result).toEqual({ idle: true, timedOut: false, ms: 0 });
+            expect(ctx.collectTimings()).toEqual([
+                { method: 'server/idle', duration_ms: 0, success: true, result: 'ok' },
+            ]);
+        });
+
+        it('waits for active progress to end', async () => {
+            harness.progress.progress({ token: 1, value: { kind: 'begin', title: 'Indexing' } });
+            setTimeout(() => harness.progress.progress({ token: 1, value: { kind: 'end' } }), 40);
+            const result = await ctx.waitForIdle({ timeout: 1000, quietMs: 10 });
+            expect(result.timedOut).toBe(false);
+            expect(result.ms).toBeGreaterThanOrEqual(30);
+        });
+
+        it('takes a bare timeout and records a timeout', async () => {
+            harness.progress.progress({ token: 1, value: { kind: 'begin', title: 'Indexing' } });
+            const result = await ctx.waitForIdle(30);
+            expect(result).toMatchObject({ idle: false, timedOut: true });
+            expect(ctx.collectTimings()).toEqual([
+                { method: 'server/idle', duration_ms: expect.any(Number), success: false, result: 'timeout' },
+            ]);
         });
     });
 

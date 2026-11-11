@@ -90,7 +90,7 @@ describe('lsbench CLI with --client-capabilities-file', () => {
             dynamicRegistration: true,
             relativePatternSupport: true,
         });
-        expect(received.experimental).toEqual({ custom: true });
+        expect(received.experimental).toEqual({ serverStatusNotification: true, custom: true });
     });
 
     it('rejects a missing file', () => {

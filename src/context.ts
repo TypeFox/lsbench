@@ -21,6 +21,8 @@ import type {
     ServerCapabilities,
     WaitForDiagnosticsOptions,
     WaitForDiagnosticsResult,
+    WaitForIdleOptions,
+    WaitForIdleResult,
 } from './types.js';
 
 /** JSON-RPC error code a server sends when a document change invalidated the result */
@@ -715,6 +717,23 @@ export class BenchContextImpl implements BenchContext {
             return pulled.diagnostics;
         }
         return this.harness.getDiagnostics(uri);
+    }
+
+    async waitForIdle(options: WaitForIdleOptions | number = {}): Promise<WaitForIdleResult> {
+        const { timeout = 30000, quietMs } = typeof options === 'number' ? { timeout: options } : options;
+        const result = await this.harness.waitForIdle({
+            timeoutMs: timeout,
+            ...(quietMs !== undefined ? { quietMs } : {}),
+        });
+        const timing: RequestTiming = {
+            method: 'server/idle',
+            duration_ms: Math.round(result.ms * 1000) / 1000, // 3 decimal places
+            success: !result.timedOut,
+            result: result.timedOut ? 'timeout' : 'ok',
+        };
+        this.timings.push(timing);
+        this.log(`server/idle: ${result.ms.toFixed(1)}ms ${timing.result}`);
+        return { ...result, ms: timing.duration_ms };
     }
 
     async sleep(ms: number): Promise<void> {
