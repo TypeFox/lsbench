@@ -12,6 +12,8 @@ export type {
     Diagnostic,
     DiagnosticsPublish,
     DocumentSyncState,
+    PublishWaitOptions,
+    PublishWaitResult,
     SaveSyncOptions,
     ServerExit,
 } from './harness.js';

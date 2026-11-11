@@ -185,21 +185,40 @@ export interface RequestError {
 
 /** Options for `BenchContext.waitForDiagnostics` */
 export interface WaitForDiagnosticsOptions {
-    /** give up after this many milliseconds (default 30000) */
+    /** give up after this many milliseconds (default 30000), caps settling too */
     timeout?: number;
+    /**
+     * resolve on the first current publish whose diagnostics pass this, e.g.
+     * `(d) => d.length > 0`; current publishes failing it are counted but do not resolve
+     */
+    until?: (diagnostics: Diagnostic[]) => boolean;
+    /**
+     * after the resolving publish (the first passing `until`, when given), keep waiting
+     * until no current publish arrived for this many milliseconds, then resolve with the
+     * latest one. `ms` stays the time to that publish, the quiet period is not included
+     */
+    settleMs?: number;
 }
 
 /** What a diagnostics wait resolved with */
 export interface WaitForDiagnosticsResult {
-    /** the diagnostics of the resolving publish, or the cached ones on timeout */
+    /**
+     * the diagnostics of the resolving publish (the latest one when settling), or on
+     * timeout those of the latest current publish, falling back to the cached ones
+     */
     diagnostics: Diagnostic[];
-    /** true when the timeout fired before a matching publish arrived */
+    /**
+     * true when the timeout fired before a current publish (passing `until`, when given)
+     * arrived. A timeout during the settle quiet period does not count
+     */
     timedOut: boolean;
-    /** how many publishes the wait accepted, 0 on timeout */
+    /** how many current publishes the wait saw, those failing `until` and a cached one included */
     publishes: number;
     /**
      * Milliseconds from the latest didOpen or didChange of the document to the resolving
-     * publish (or to the timeout). For a document that is not open, from the start of the wait
+     * publish (or to the timeout). With `settleMs` that is the latest publish before the
+     * quiet period, which is not included. For a document that is not open, from the
+     * start of the wait
      */
     ms: number;
 }

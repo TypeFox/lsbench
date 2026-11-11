@@ -7,6 +7,12 @@
 - `waitForDiagnostics` now resolves with `{ diagnostics, timedOut, publishes, ms }` instead of the diagnostics array. Scripts that used the array need `(await ctx.waitForDiagnostics(path)).diagnostics`. Its second argument may be an options object `{ timeout }`, and a bare timeout number still works.
 - A timed out wait is now reported (`timedOut: true`, result `timeout`) instead of silently resolving with the cached diagnostics. The timeout comes from the timer itself, never from elapsed time.
 
+### Wait predicates and settle windows
+
+- `waitForDiagnostics` options gain `until: (diagnostics) => boolean`, which resolves on the first current publish passing it (for example `(d) => d.length > 0` to skip the empty syntax pass of rust-analyzer or zls), and `settleMs`, which keeps waiting after the resolving publish until no current publish arrived for that long and resolves with the latest. `timeout` caps both.
+- `publishes` now counts every current publish the wait saw, including those failing `until`. On timeout, `diagnostics` are those of the latest current publish when one arrived, otherwise the cached ones.
+- With `settleMs`, `ms` is the time to the latest publish before the quiet period, the quiet period itself is not included. A timeout during the quiet period is not a timeout, the wait resolves with the latest publish.
+
 ### Close publishes
 
 - An empty, unversioned publish after a quick reopen is no longer dropped outright as the clearing publish of the close. It is held for the rest of a 1000 ms window after the `didClose`, superseded by any later publish, and otherwise accepted with its own receipt time. lsbench learns per server whether it publishes on close and then decides at once, so servers that never clear closed documents (such as Langium) no longer time out on every reopen of a clean file.

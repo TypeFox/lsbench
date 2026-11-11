@@ -643,4 +643,17 @@ describe('DiagnosticsTracker', () => {
         const listeners = (tracker as unknown as { listeners: Map<string, unknown> }).listeners;
         expect(listeners.size).toBe(0);
     });
+
+    it('unregisters a settling wait once its quiet period ends or the timeout cuts it', async () => {
+        const tracker = new DiagnosticsTracker();
+        const listeners = (tracker as unknown as { listeners: Map<string, unknown> }).listeners;
+        const settled = tracker.waitForPublishes(uri, () => true, { timeoutMs: 1000, settleMs: 10 });
+        tracker.receive({ uri, diagnostics: [] });
+        tracker.receive({ uri, diagnostics: [] });
+        expect(await settled).toMatchObject({ timedOut: false, publishes: 2 });
+        expect(listeners.size).toBe(0);
+        const cut = tracker.waitForPublishes(uri, () => true, { timeoutMs: 10, settleMs: 1000 });
+        expect(await cut).toMatchObject({ timedOut: false, publishes: 1 });
+        expect(listeners.size).toBe(0);
+    });
 });

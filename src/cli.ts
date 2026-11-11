@@ -339,11 +339,19 @@ Resolve  (timed, the item from the matching request is sent back as the params)
 
 Synchronization
   waitForDiagnostics(path, options?)      waits for the server's diagnostics. Call after open/edit before timing.
-                                          options is { timeout } or a bare timeout (default 30_000ms).
-                                          Resolves with { diagnostics, timedOut, publishes, ms }:
-                                          timedOut is true when the timer fired first (diagnostics are
-                                          then the cached ones), publishes is 1 (0 on timeout), ms is
-                                          the time from the latest didOpen/didChange to the publish.
+                                          options is { timeout, until, settleMs } or a bare timeout
+                                          (default 30_000ms). until: (diagnostics) => boolean resolves
+                                          on the first current publish passing it, e.g. d => d.length > 0
+                                          to skip an empty syntax pass. settleMs keeps waiting after that
+                                          publish until none arrived for settleMs, then takes the latest.
+                                          timeout caps both. Resolves with { diagnostics, timedOut,
+                                          publishes, ms }: timedOut is true when the timer fired before a
+                                          publish passed until (diagnostics are then the latest current
+                                          publish, or the cached ones), a timeout while settling is not
+                                          a timeout. publishes counts the current publishes seen, those
+                                          failing until included. ms is the time from the latest
+                                          didOpen/didChange to the resolving publish (with settleMs the
+                                          latest one, the quiet period is not included).
                                           Only publishes for the current version and open generation count,
                                           and one already received resolves at once. The first empty,
                                           unversioned publish after a reopen within 1000ms of the close
@@ -434,8 +442,8 @@ Example \`summary\` entry:
 
 Time to diagnostics appears in summary like methods too, one entry per
 waitForDiagnostics call:
-  - diagnostics/open   from didOpen to the matching publish
-  - diagnostics/edit   from the latest didChange to the matching publish
+  - diagnostics/open   from didOpen to the resolving publish
+  - diagnostics/edit   from the latest didChange to the resolving publish
   - diagnostics/wait   document not open, from the call to the next publish
 These timings carry the diagnostic count in \`diagnostics\`.
 

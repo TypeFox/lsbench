@@ -7,6 +7,8 @@ import type {
     DocumentSyncState,
     EditOperation,
     LspHarness,
+    PublishWaitOptions,
+    PublishWaitResult,
     Registration,
     SaveSyncOptions,
     ServerCapabilities,
@@ -81,12 +83,12 @@ class FakeHarness {
         return this.tracker.currentSeq();
     }
 
-    waitForPublish(
+    waitForPublishes(
         uri: string,
         accept: (publish: DiagnosticsPublish) => boolean,
-        timeoutMs: number,
-    ): Promise<DiagnosticsPublish | undefined> {
-        return this.tracker.waitFor(uri, accept, timeoutMs);
+        options: PublishWaitOptions,
+    ): Promise<PublishWaitResult> {
+        return this.tracker.waitForPublishes(uri, accept, options);
     }
 
     saveSyncOptions(): SaveSyncOptions {
@@ -1234,6 +1236,160 @@ describe('BenchContextImpl', () => {
                 expect(await settledWithin(wait)).toBe('pending');
                 harness.setDiagnostics(uri, [diag('next')]);
                 expect((await wait).diagnostics.map((d) => d.message)).toEqual(['next']);
+            });
+        });
+
+        describe('until and settleMs', () => {
+            let uri: string;
+            const diag = (message: string): Diagnostic => ({ range: {}, message });
+            const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            const messages = (r: WaitForDiagnosticsResult) => r.diagnostics.map((d) => d.message);
+            const nonEmpty = (d: Diagnostic[]) => d.length > 0;
+
+            beforeEach(() => {
+                uri = `file://${path.resolve(tmpDir, 'sample.ts')}`;
+            });
+
+            /** whether the wait is still pending after ms */
+            async function pendingAfter(wait: Promise<unknown>, ms = 20): Promise<boolean> {
+                const pending = Symbol('pending');
+                const winner = await Promise.race([wait, sleep(ms).then(() => pending)]);
+                return winner === pending;
+            }
+
+            it('skips an empty syntax pass and resolves on the semantic errors', async () => {
+                await ctx.openDocument('sample.ts');
+                const wait = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: nonEmpty });
+                // rust-analyzer: an empty publish from the syntax pass first
+                harness.setDiagnostics(uri, []);
+                expect(await pendingAfter(wait)).toBe(true);
+                harness.setDiagnostics(uri, [diag('mismatched types')]);
+                const result = await wait;
+                expect(messages(result)).toEqual(['mismatched types']);
+                expect(result).toMatchObject({ timedOut: false, publishes: 2 });
+                expect(ctx.collectTimings()).toMatchObject([
+                    { method: 'diagnostics/open', success: true, result: 'ok', diagnostics: 1 },
+                ]);
+            });
+
+            it('skips an empty versioned pass after an edit', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                harness.setDiagnostics(uri, [diag('old')], 1);
+                harness.setDiagnostics(uri, [], 2);
+                const wait = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: nonEmpty });
+                expect(await pendingAfter(wait)).toBe(true);
+                harness.setDiagnostics(uri, [diag('type error')], 2);
+                expect(await wait).toMatchObject({ timedOut: false, publishes: 2 });
+            });
+
+            it('resolves at once when the cached current publish satisfies until', async () => {
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, [diag('early')]);
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: nonEmpty });
+                expect(result).toMatchObject({ timedOut: false, publishes: 1 });
+            });
+
+            it('times out with the latest current publish when until is never satisfied', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                harness.setDiagnostics(uri, [diag('stale')], 1);
+                harness.setDiagnostics(uri, [], 2);
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 30, until: nonEmpty });
+                expect(result).toMatchObject({ diagnostics: [], timedOut: true, publishes: 1 });
+                expect(result.ms).toBeGreaterThanOrEqual(25);
+                expect(ctx.collectTimings()).toMatchObject([
+                    { method: 'diagnostics/edit', success: false, result: 'timeout', diagnostics: 0 },
+                ]);
+            });
+
+            it('falls back to the cached diagnostics when no current publish arrived', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                harness.setDiagnostics(uri, [diag('stale')], 1);
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 10, until: nonEmpty });
+                expect(messages(result)).toEqual(['stale']);
+                expect(result).toMatchObject({ timedOut: true, publishes: 0 });
+            });
+
+            it('settles on the latest publish of a burst, timing it without the quiet period', async () => {
+                await ctx.openDocument('sample.ts');
+                const start = Date.now();
+                const wait = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, settleMs: 60 });
+                harness.setDiagnostics(uri, [diag('a')]);
+                await sleep(20);
+                harness.setDiagnostics(uri, [diag('a'), diag('b')]);
+                await sleep(20);
+                harness.setDiagnostics(uri, [diag('c')]);
+                const result = await wait;
+                const elapsed = Date.now() - start;
+                expect(messages(result)).toEqual(['c']);
+                expect(result).toMatchObject({ timedOut: false, publishes: 3 });
+                expect(elapsed).toBeGreaterThanOrEqual(95);
+                expect(result.ms).toBeLessThan(elapsed - 50);
+            });
+
+            it('starts settling only once until is satisfied', async () => {
+                await ctx.openDocument('sample.ts');
+                const wait = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: nonEmpty, settleMs: 20 });
+                harness.setDiagnostics(uri, []);
+                expect(await pendingAfter(wait, 50)).toBe(true);
+                harness.setDiagnostics(uri, [diag('first')]);
+                await sleep(5);
+                harness.setDiagnostics(uri, [diag('first'), diag('second')]);
+                const result = await wait;
+                expect(messages(result)).toEqual(['first', 'second']);
+                expect(result).toMatchObject({ timedOut: false, publishes: 3 });
+            });
+
+            it('resolves with the latest publish, not timed out, when the timeout cuts the quiet period', async () => {
+                await ctx.openDocument('sample.ts');
+                const start = Date.now();
+                const wait = ctx.waitForDiagnostics('sample.ts', { timeout: 40, settleMs: 5000 });
+                harness.setDiagnostics(uri, [diag('only')]);
+                const result = await wait;
+                expect(Date.now() - start).toBeLessThan(1000);
+                expect(result).toMatchObject({ timedOut: false, publishes: 1 });
+                expect(ctx.collectTimings()).toMatchObject([{ result: 'ok', success: true }]);
+            });
+
+            it('counts the quiet period of a close window candidate from its receipt', async () => {
+                harness.tracker = new DiagnosticsTracker(() => {}, 60);
+                await ctx.openDocument('sample.ts');
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                // a clean file from a server that never publishes on close
+                harness.setDiagnostics(uri, []);
+                const start = Date.now();
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, settleMs: 30 });
+                // delivered at the end of the window, already quiet for longer than settleMs
+                expect(Date.now() - start).toBeLessThan(85);
+                expect(result).toMatchObject({ diagnostics: [], timedOut: false, publishes: 1 });
+                expect(result.ms).toBeLessThan(30);
+            });
+
+            it('does not count a superseded close window candidate', async () => {
+                await ctx.openDocument('sample.ts');
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, []);
+                const wait = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: nonEmpty, settleMs: 10 });
+                harness.setDiagnostics(uri, [diag('fresh')]);
+                const result = await wait;
+                expect(messages(result)).toEqual(['fresh']);
+                expect(result.publishes).toBe(1);
+            });
+
+            it('rejects when until throws', async () => {
+                await ctx.openDocument('sample.ts');
+                const wait = ctx.waitForDiagnostics('sample.ts', {
+                    timeout: 5000,
+                    until: () => {
+                        throw new Error('bad predicate');
+                    },
+                });
+                harness.setDiagnostics(uri, [diag('a')]);
+                await expect(wait).rejects.toThrow('bad predicate');
             });
         });
     });

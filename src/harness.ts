@@ -61,6 +61,26 @@ export interface DiagnosticsPublish {
     seq: number;
 }
 
+/** Options of DiagnosticsTracker.waitForPublishes */
+export interface PublishWaitOptions {
+    /** give up after this many milliseconds */
+    timeoutMs: number;
+    /** the first accepted publish passing this resolves the wait (or starts the quiet period) */
+    until?: (publish: DiagnosticsPublish) => boolean;
+    /** after the resolving publish, wait until no accepted publish arrived for this long */
+    settleMs?: number;
+}
+
+/** What DiagnosticsTracker.waitForPublishes resolved with */
+export interface PublishWaitResult {
+    /** the latest accepted publish, also on timeout, undefined when none arrived */
+    publish?: DiagnosticsPublish;
+    /** how many accepted publishes the wait saw, the cached one included */
+    publishes: number;
+    /** the timeout fired before an accepted publish passed `until` */
+    timedOut: boolean;
+}
+
 /** What the client last told the server about a document */
 export interface DocumentSyncState {
     /** bumps on each didOpen, 0 before the first */
@@ -223,36 +243,97 @@ export class DiagnosticsTracker {
      * undefined exactly when the timeout timer fires, so callers never infer a timeout from
      * elapsed time (timers can fire slightly early)
      */
-    waitFor(
+    async waitFor(
         uri: string,
         accept: (publish: DiagnosticsPublish) => boolean,
         timeoutMs: number,
     ): Promise<DiagnosticsPublish | undefined> {
-        const cached = this.latest.get(uri);
-        if (cached && accept(cached)) {
-            return Promise.resolve(cached);
-        }
-        return new Promise((resolve) => {
+        const result = await this.waitForPublishes(uri, accept, { timeoutMs });
+        return result.timedOut ? undefined : result.publish;
+    }
+
+    /**
+     * Wait on the publishes for uri that `accept` takes, the cached latest one included.
+     * Without options this resolves on the first of them. With `until`, accepted publishes
+     * failing it are counted but do not resolve. With `settleMs`, once a publish resolved
+     * the wait (passing `until`, when given), it keeps going until no accepted publish
+     * arrived for `settleMs`, then resolves with the latest. Quiet time counts from the
+     * receipt of the latest accepted publish, so a cached publish or a close window
+     * candidate delivered late has already been quiet for a while. The timeout caps the
+     * whole wait; it only counts as timed out when no publish resolved the wait, a timeout
+     * during the quiet period resolves with the latest accepted publish
+     */
+    waitForPublishes(
+        uri: string,
+        accept: (publish: DiagnosticsPublish) => boolean,
+        options: PublishWaitOptions,
+    ): Promise<PublishWaitResult> {
+        const { timeoutMs, until, settleMs } = options;
+        return new Promise((resolve, reject) => {
             let listeners = this.listeners.get(uri);
             if (!listeners) {
                 listeners = new Set();
                 this.listeners.set(uri, listeners);
             }
-            const done = (publish: DiagnosticsPublish | undefined) => {
+            let latest: DiagnosticsPublish | undefined;
+            let publishes = 0;
+            let satisfied = false;
+            let quietTimer: NodeJS.Timeout | undefined;
+            let finished = false;
+            const cleanup = () => {
+                finished = true;
                 clearTimeout(timer);
+                clearTimeout(quietTimer);
                 listeners.delete(listener);
                 if (listeners.size === 0 && this.listeners.get(uri) === listeners) {
                     this.listeners.delete(uri);
                 }
-                resolve(publish);
             };
+            const finish = (timedOut: boolean) => {
+                cleanup();
+                resolve({ publish: latest, publishes, timedOut });
+            };
+            // count an accepted publish, then resolve or (re)start the quiet period
+            const take = (publish: DiagnosticsPublish) => {
+                if (finished || !accept(publish)) {
+                    return;
+                }
+                publishes++;
+                latest = publish;
+                if (!satisfied) {
+                    if (until && !until(publish)) {
+                        return;
+                    }
+                    satisfied = true;
+                }
+                if (settleMs === undefined) {
+                    finish(false);
+                    return;
+                }
+                const quietMs = Number(process.hrtime.bigint() - publish.receivedAt) / 1_000_000;
+                clearTimeout(quietTimer);
+                quietTimer = setTimeout(() => finish(false), Math.max(0, settleMs - quietMs));
+            };
+            // a throwing accept or until rejects the wait instead of the publish handler
             const listener = (publish: DiagnosticsPublish) => {
-                if (accept(publish)) {
-                    done(publish);
+                try {
+                    take(publish);
+                } catch (err) {
+                    cleanup();
+                    reject(err);
                 }
             };
-            const timer = setTimeout(() => done(undefined), timeoutMs);
+            const timer = setTimeout(() => {
+                if (satisfied) {
+                    this.log(`Settle period for ${uri} cut short by the ${timeoutMs}ms timeout`);
+                }
+                finish(!satisfied);
+            }, timeoutMs);
             listeners.add(listener);
+            const cached = this.latest.get(uri);
+            if (cached) {
+                listener(cached);
+            }
         });
     }
 
@@ -703,15 +784,15 @@ export class LspHarness {
     }
 
     /**
-     * Wait for a publish on uri that `accept` takes, the cached latest one included.
-     * Resolves undefined on timeout
+     * Wait on the publishes for uri that `accept` takes, the cached latest one included,
+     * see DiagnosticsTracker.waitForPublishes
      */
-    waitForPublish(
+    waitForPublishes(
         uri: string,
         accept: (publish: DiagnosticsPublish) => boolean,
-        timeoutMs: number,
-    ): Promise<DiagnosticsPublish | undefined> {
-        return this.diagnostics.waitFor(uri, accept, timeoutMs);
+        options: PublishWaitOptions,
+    ): Promise<PublishWaitResult> {
+        return this.diagnostics.waitForPublishes(uri, accept, options);
     }
 
     /** Wait for the next diagnostics publication for a URI, falling back to the cached ones on timeout */

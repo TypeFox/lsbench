@@ -168,7 +168,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 
 | Method | Description |
 | --- | --- |
-| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version and time it (`options` is `{ timeout }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
+| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version and time it (`options` is `{ timeout, until, settleMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
 | `notify(method, params)` | Arbitrary LSP notification |
@@ -211,16 +211,25 @@ Publishes received while the document was closed, and publishes for other versio
 
 lsbench learns per server process which case applies. A publish for a closed document, or a superseded candidate, shows that the server publishes on close, and from then on such a publish is credited to the closed generation at once. A candidate accepted at the end of the window, or a close with no publish within it, shows that it does not, and the rule is turned off. A server that never publishes on close thus pays the window at most once. Verbose mode logs candidates and what was learned. For a document that is not open, the wait resolves on the next publish.
 
-The wait resolves with `{ diagnostics, timedOut, publishes, ms }`:
+The first matching publish is not always the final word. rust-analyzer and zls publish an empty syntax pass before the semantic diagnostics, and some servers publish in bursts. Two options shape what resolves the wait:
 
-- `diagnostics`: the diagnostics of the matching publish, or the cached ones on timeout
-- `timedOut`: `true` when the timeout fired before a matching publish arrived. This comes from the timer itself, never from comparing elapsed time against the timeout, since timers can fire slightly early
-- `publishes`: how many publishes the wait accepted, currently 1, or 0 on timeout
-- `ms`: time from the latest `didOpen` or `didChange` of the document to the matching publish (or to the timeout), so time to diagnostics is measured even when other work ran before the wait
+- `until: (diagnostics) => boolean`: resolve on the first matching publish whose diagnostics pass it. Matching publishes failing it are counted in `publishes` but do not resolve the wait
+- `settleMs`: after the resolving publish, keep waiting until no further matching publish arrived for `settleMs`, then resolve with the latest one. With `until`, the quiet period starts once `until` is satisfied, and later publishes no longer need to pass it. Quiet time counts from the receipt of a publish, so a cached publish, or a close window candidate accepted at the end of its window, may already have been quiet long enough
+
+`timeout` caps the whole wait, quiet period included. The wait resolves with `{ diagnostics, timedOut, publishes, ms }`:
+
+- `diagnostics`: the diagnostics of the resolving publish (the latest one with `settleMs`). On timeout, those of the latest matching publish when one arrived, otherwise the cached ones
+- `timedOut`: `true` when the timeout fired before a matching publish (passing `until`, when given) arrived. A timeout during the quiet period does not count, the wait then resolves with the latest publish. This comes from the timer itself, never from comparing elapsed time against the timeout, since timers can fire slightly early
+- `publishes`: how many matching publishes the wait saw, including a cached one and those failing `until`
+- `ms`: time from the latest `didOpen` or `didChange` of the document to the resolving publish (or to the timeout), so time to diagnostics is measured even when other work ran before the wait. With `settleMs` this is the time to the latest publish, the quiet period after it is not included
 
 ```typescript
-await ctx.openDocument("src/index.ts");
-const { diagnostics, timedOut, ms } = await ctx.waitForDiagnostics("src/index.ts", { timeout: 10_000 });
+await ctx.openDocument("src/main.rs");
+const { diagnostics, timedOut, ms } = await ctx.waitForDiagnostics("src/main.rs", {
+  timeout: 10_000,
+  until: (d) => d.length > 0, // skip the empty syntax pass
+  settleMs: 200, // and pick up a follow up publish
+});
 ```
 
 Each wait also records a timing, so time to diagnostics shows up in the report like any method:

@@ -455,31 +455,37 @@ export class BenchContextImpl implements BenchContext {
     /**
      * Wait for diagnostics matching the current state of the document. An open document
      * resolves at once when such a publish is already cached; a document that is not open
-     * waits for the next publish. On timeout the cached diagnostics are returned with
-     * `timedOut` set. Each wait records a timing labeled by what the latest sync was:
+     * waits for the next publish. `until` skips current publishes failing it, and
+     * `settleMs` keeps waiting after the resolving publish until no current publish arrived
+     * for that long, resolving with the latest. On timeout the latest current publish (or
+     * the cached diagnostics) is returned with `timedOut` set, unless `until` was already
+     * satisfied. Each wait records a timing labeled by what the latest sync was:
      * `diagnostics/open` or `diagnostics/edit`, timed from that didOpen or didChange to the
-     * resolving publish, or `diagnostics/wait`, timed from the call, for a document that
-     * is not open
+     * resolving publish (the latest one after settling, without the quiet period), or
+     * `diagnostics/wait`, timed from the call, for a document that is not open
      */
     async waitForDiagnostics(
         relativePath: string,
         options: WaitForDiagnosticsOptions | number = {},
     ): Promise<WaitForDiagnosticsResult> {
-        const timeout = (typeof options === 'number' ? options : options.timeout) ?? 30000;
+        const { timeout = 30000, until, settleMs } = typeof options === 'number' ? { timeout: options } : options;
         const uri = this.getUri(relativePath);
         const calledAt = process.hrtime.bigint();
         const after = this.harness.currentPublishSeq();
-        const publish = await this.harness.waitForPublish(
+        const { publish, publishes, timedOut } = await this.harness.waitForPublishes(
             uri,
             (p) => {
                 const doc = this.harness.documentState(uri);
                 return doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
             },
-            timeout,
+            {
+                timeoutMs: timeout,
+                ...(until ? { until: (p: DiagnosticsPublish) => until(p.diagnostics) } : {}),
+                ...(settleMs !== undefined ? { settleMs } : {}),
+            },
         );
         // only the timer firing means a timeout, elapsed time is never compared to it
-        const timedOut = publish === undefined;
-        const endedAt = publish?.receivedAt ?? process.hrtime.bigint();
+        const endedAt = publish && !timedOut ? publish.receivedAt : process.hrtime.bigint();
         const diagnostics = publish?.diagnostics ?? this.harness.getDiagnostics(uri);
 
         // the document state at resolution is what the accepted publish matched
@@ -500,9 +506,12 @@ export class BenchContextImpl implements BenchContext {
             diagnostics: diagnostics.length,
         };
         this.timings.push(timing);
-        this.log(`${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ${diagnostics.length} diagnostics`);
+        this.log(
+            `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
+                `${diagnostics.length} diagnostics, ${publishes} publishes`,
+        );
 
-        return { diagnostics, timedOut, publishes: timedOut ? 0 : 1, ms: timing.duration_ms };
+        return { diagnostics, timedOut, publishes, ms: timing.duration_ms };
     }
 
     async sleep(ms: number): Promise<void> {
