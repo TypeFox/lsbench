@@ -34,6 +34,8 @@ export interface BenchOptions {
     initializationOptions?: unknown;
     /** Verbose logging */
     verbose: boolean;
+    /** Milliseconds to wait for a shutdown reply before killing the server (default 5000) */
+    shutdownTimeout?: number;
 }
 
 // ── Timing & Results ────────────────────────────────────────────────────────
@@ -88,6 +90,16 @@ export interface BenchReport {
         max_ms: number;
     };
     runs: IterationResult[];
+    /** Server processes that crashed or exited unexpectedly, absent when none did */
+    abnormal_exits?: AbnormalExit[];
+}
+
+export interface AbnormalExit {
+    /** When the exit was seen, e.g. "iteration 3", "warmup 1" or "final teardown" */
+    during: string;
+    code: number | null;
+    signal: string | null;
+    reason: string;
 }
 
 // ── BenchContext: the API exposed to action scripts ─────────────────────────

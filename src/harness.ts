@@ -47,6 +47,19 @@ interface Registration {
 /** save related methods whose dynamic registrations we track */
 const SAVE_METHODS = new Set(['textDocument/didSave', 'textDocument/willSave', 'textDocument/willSaveWaitUntil']);
 
+/** default time to wait for a shutdown reply before giving up on the server */
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
+
+/** How the server process ended */
+export interface ServerExit {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    /** the server exited on its own before replying to shutdown, or with a failure after it */
+    abnormal: boolean;
+    /** human readable description of the exit */
+    reason: string;
+}
+
 /**
  * Manages a language server process and its JSON-RPC connection.
  */
@@ -59,6 +72,13 @@ export class LspHarness {
     /** dynamic save registrations by registration id */
     private saveRegistrations = new Map<string, Registration>();
     private verbose: boolean;
+    /** resolves once the server process has exited */
+    private exited: Promise<void> = Promise.resolve();
+    private _exit: ServerExit | null = null;
+    /** set once the server replies to shutdown, so a following exit is expected */
+    private shutdownReplied = false;
+    /** set once we signal the process, so the resulting exit is not abnormal */
+    private killRequested = false;
 
     constructor(
         private config: ServerConfig,
@@ -66,6 +86,11 @@ export class LspHarness {
         verbose = false,
     ) {
         this.verbose = verbose;
+    }
+
+    /** How the server process ended, or null while it is still running */
+    get exit(): ServerExit | null {
+        return this._exit;
     }
 
     get capabilities(): ServerCapabilities | null {
@@ -110,6 +135,19 @@ export class LspHarness {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: { ...process.env, ...env },
         });
+        this._exit = null;
+        this.shutdownReplied = false;
+        this.killRequested = false;
+        const child = this.process;
+        this.exited = new Promise((resolve) => {
+            child.once('exit', () => resolve());
+            // a process that failed to spawn never emits exit
+            child.once('error', () => {
+                if (child.pid === undefined) {
+                    resolve();
+                }
+            });
+        });
 
         // capture stderr, and retain the tail so we can report it if the server dies
         let stderrTail = '';
@@ -128,11 +166,15 @@ export class LspHarness {
         });
 
         this.process.on('error', (err) => {
+            if (child.pid === undefined) {
+                this._exit = { code: null, signal: null, abnormal: true, reason: `failed to spawn (${err.message})` };
+            }
             onEarlyExit(new Error(`Server process failed to spawn: ${err.message}`));
         });
 
         this.process.on('exit', (code, signal) => {
             this.log(`Server exited: code=${code} signal=${signal}`);
+            this._exit = this.describeExit(code, signal);
             onEarlyExit(
                 new Error(
                     `Server exited before initialize (code=${code} signal=${signal}).` +
@@ -249,45 +291,73 @@ export class LspHarness {
         this.log('Server initialized.');
     }
 
-    /** Gracefully shut down the server */
-    async stop(): Promise<void> {
-        if (!this.connection) {
-            return;
+    /**
+     * Shut down the server, always settling: the shutdown request is raced against
+     * the process exiting and a timeout, then the server is sent exit and killed if
+     * it is still running. Returns how the process ended.
+     */
+    async stop(timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS): Promise<ServerExit | null> {
+        const connection = this.connection;
+        const child = this.process;
+        if (!connection) {
+            return this._exit;
         }
 
-        try {
-            await this.connection.sendRequest('shutdown');
-            this.connection.sendNotification('exit');
-        } catch {
-            // Server may have already exited
+        if (!this._exit) {
+            const shutdown = connection.sendRequest('shutdown').then(
+                () => {
+                    this.shutdownReplied = true;
+                    return 'replied' as const;
+                },
+                () => 'failed' as const,
+            );
+            const outcome = await raceTimeout([shutdown, this.exited.then(() => 'exited' as const)], timeoutMs);
+            if (outcome === 'replied') {
+                try {
+                    await connection.sendNotification('exit');
+                } catch {
+                    // the server may have closed its input already
+                }
+                // give the server a moment to exit on its own before signaling it
+                await raceTimeout([this.exited], Math.min(timeoutMs, 1000));
+            } else if (outcome === 'timeout') {
+                this.log(`No shutdown reply within ${timeoutMs}ms, killing the server`);
+            }
         }
 
-        this.connection.dispose();
+        connection.dispose();
         this.connection = null;
 
-        // `killed` only reports that a signal was sent, so check whether the process
-        // actually exited; otherwise a server ignoring SIGTERM is never force killed
-        const child = this.process;
-        const hasExited = () => child !== null && (child.exitCode !== null || child.signalCode !== null);
-        if (child && !hasExited()) {
-            await new Promise<void>((resolve) => {
-                // give it a moment after SIGTERM, then force kill and wait for the exit
-                const timer = setTimeout(() => {
-                    if (!hasExited()) {
-                        child.kill('SIGKILL');
-                    }
-                }, 3000);
-                child.once('exit', () => {
-                    clearTimeout(timer);
-                    resolve();
-                });
-                child.kill('SIGTERM');
-            });
+        if (child && !this._exit) {
+            this.killRequested = true;
+            child.kill('SIGTERM');
+            // force kill a server that ignores SIGTERM, `killed` only reports that a
+            // signal was sent, so check the recorded exit instead
+            if ((await raceTimeout([this.exited], 3000)) === 'timeout') {
+                child.kill('SIGKILL');
+                await this.exited;
+            }
         }
         this.process = null;
         this.diagnosticsMap.clear();
         this.diagnosticsListeners.clear();
         this.saveRegistrations.clear();
+        return this._exit;
+    }
+
+    /** Classify a process exit, signals we sent and a clean exit after shutdown are normal */
+    private describeExit(code: number | null, signal: NodeJS.Signals | null): ServerExit {
+        const status = signal ? `signal ${signal}` : `code ${code}`;
+        if (this.killRequested) {
+            return { code, signal, abnormal: false, reason: `killed by lsbench (${status})` };
+        }
+        if (!this.shutdownReplied) {
+            return { code, signal, abnormal: true, reason: `exited unexpectedly (${status})` };
+        }
+        if (code !== 0) {
+            return { code, signal, abnormal: true, reason: `exited after shutdown with ${status}` };
+        }
+        return { code, signal, abnormal: false, reason: 'exited cleanly' };
     }
 
     /** Get cached diagnostics for a URI */
@@ -523,4 +593,17 @@ export function uriToPath(uri: string): string {
         return uri.slice(7);
     }
     return uri;
+}
+
+/** Resolve with the first promise to settle, or 'timeout' once timeoutMs has passed */
+async function raceTimeout<T>(promises: Array<Promise<T>>, timeoutMs: number): Promise<T | 'timeout'> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+    try {
+        return await Promise.race([...promises, timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
 }

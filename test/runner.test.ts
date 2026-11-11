@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadActionScript, resolveServerConfig } from 'lsbench';
+import type { BenchOptions } from 'lsbench';
+import { loadActionScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 describe('resolveServerConfig', () => {
@@ -76,4 +77,70 @@ describe('loadActionScript', () => {
         const file = writeScript('not-a-fn.ts', `export default 42;`);
         await expect(loadActionScript(file)).rejects.toThrow(/must have a default-exported function/);
     });
+});
+
+/** a fake server that exits on shutdown without replying */
+const crashOnShutdownServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
+conn.onRequest('textDocument/hover', () => null);
+conn.onRequest('shutdown', () => process.exit(3));
+conn.listen();
+`;
+
+describe('runBenchmark with a server crashing at shutdown', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-crash-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function options(restart: boolean, output: string): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', crashOnShutdownServer],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output,
+            restart,
+            verbose: false,
+        };
+    }
+
+    for (const restart of [false, true]) {
+        it(`still writes the report and surfaces the exit (${restart ? 'restart' : 'keep alive'})`, async () => {
+            const output = path.join(tmpDir, `report-${restart}.json`);
+            const report = await runBenchmark(options(restart, output));
+
+            expect(report.runs).toHaveLength(2);
+            const expected = restart ? ['warmup 1', 'iteration 1', 'iteration 2'] : ['final teardown'];
+            expect(report.abnormal_exits?.map((e) => e.during)).toEqual(expected);
+            for (const exit of report.abnormal_exits ?? []) {
+                expect(exit).toMatchObject({ code: 3, signal: null });
+            }
+
+            const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+            expect(written.runs).toHaveLength(2);
+            expect(written.abnormal_exits).toHaveLength(expected.length);
+        });
+    }
 });

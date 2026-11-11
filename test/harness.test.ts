@@ -106,7 +106,82 @@ conn.listen();
 setInterval(() => {}, 1000);
 `;
 
+/** a fake server whose shutdown behavior is picked by argv: crash, hang or clean */
+const shutdownServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const mode = process.argv[1];
+conn.onRequest('initialize', () => ({ capabilities: {} }));
+conn.onRequest('shutdown', () => {
+    if (mode === 'crash') {
+        process.exit(3);
+    }
+    if (mode === 'hang') {
+        return new Promise(() => {});
+    }
+    return null;
+});
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+function shutdownHarness(mode: 'crash' | 'hang' | 'clean'): LspHarness {
+    return new LspHarness(
+        { command: process.execPath, args: ['--input-type=module', '-e', shutdownServer, mode] },
+        process.cwd(),
+    );
+}
+
 describe('LspHarness.stop', () => {
+    it('settles and reports the exit code when the server exits on shutdown without replying', async () => {
+        const harness = shutdownHarness('crash');
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ code: 3, signal: null, abnormal: true });
+        expect(exit?.reason).toMatch(/unexpectedly \(code 3\)/);
+        expect(harness.exit).toBe(exit);
+    });
+
+    it('reports a server that crashed before stop was called', async () => {
+        const harness = shutdownHarness('crash');
+        await harness.start();
+        // crash the server out of band, by asking it to shut down directly
+        harness.sendRequest('shutdown', null).catch(() => {});
+        await new Promise<void>((resolve) => {
+            const poll = setInterval(() => {
+                if (harness.exit) {
+                    clearInterval(poll);
+                    resolve();
+                }
+            }, 10);
+        });
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ code: 3, abnormal: true });
+    });
+
+    it('kills a server that never replies to shutdown once the timeout passes', async () => {
+        const harness = shutdownHarness('hang');
+        await harness.start();
+        const started = Date.now();
+        const exit = await harness.stop(200);
+        expect(Date.now() - started).toBeLessThan(3000);
+        expect(exit).toMatchObject({ signal: 'SIGTERM', abnormal: false });
+    });
+
+    it('reports a clean exit after shutdown and exit', async () => {
+        const harness = shutdownHarness('clean');
+        await harness.start();
+        expect(await harness.stop()).toMatchObject({
+            code: 0,
+            signal: null,
+            abnormal: false,
+            reason: 'exited cleanly',
+        });
+    });
+
     it('force kills a server that ignores SIGTERM', async () => {
         const harness = new LspHarness(
             { command: process.execPath, args: ['--input-type=module', '-e', stubbornServer] },

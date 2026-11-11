@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { Command } from 'commander';
 import { runBenchmark } from './runner.js';
 import type { BenchOptions } from './types.js';
@@ -38,6 +37,7 @@ program
     .option('-o, --output <path>', 'Output file for JSON report', '')
     .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
+    .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
@@ -68,6 +68,7 @@ program
             output: rawOpts.output as string,
             restart: rawOpts.restart as boolean,
             verbose: rawOpts.verbose as boolean,
+            shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
         };
@@ -97,17 +98,23 @@ program
             console.error('Error: --warmup must be a non-negative integer');
             process.exit(1);
         }
+        if (Number.isNaN(opts.shutdownTimeout) || (opts.shutdownTimeout ?? 0) < 1) {
+            console.error('Error: --shutdown-timeout must be a positive integer');
+            process.exit(1);
+        }
 
         try {
+            // the runner writes the report itself, before the final server teardown
             const report = await runBenchmark(opts);
 
-            // Write JSON report
-            if (opts.output) {
-                const outPath = path.resolve(opts.output);
-                fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
-                console.log(`  Report written to: ${outPath}\n`);
+            // still exit non zero when the server crashed, so callers notice
+            if (report.abnormal_exits) {
+                for (const exit of report.abnormal_exits) {
+                    const status = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.code}`;
+                    console.error(`Error: server exited abnormally during ${exit.during} (${status}): ${exit.reason}`);
+                }
+                process.exit(1);
             }
-
             process.exit(0);
         } catch (err: unknown) {
             console.error('\nFatal error:', err instanceof Error ? err.message : err);
@@ -318,6 +325,7 @@ lsbench answers these so a server never stalls waiting on a client:
       -o, --output <path>          Write the JSON report to this file
           --init-options-file <p>  JSON file with LSP initializationOptions
           --restart                Restart the server each iteration (cold start)   (default: false)
+          --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
       -v, --verbose                Verbose logging                                  (default: false)
       -V, --version                Print version
       -h, --help                   Print help
@@ -332,6 +340,8 @@ The JSON report (and the printed summary) contains:
   - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms, failure_rate
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
+  - abnormal_exits     servers that crashed or exited unexpectedly (only when any did,
+                       lsbench then exits non zero but still writes the report)
 
 Example \`summary\` entry:
 

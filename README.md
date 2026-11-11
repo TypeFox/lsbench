@@ -224,6 +224,7 @@ Options:
   -o, --output <path>         JSON report output file
   --init-options-file <path>  JSON file with LSP initializationOptions
   --restart                   Restart the server between iterations
+  --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -257,6 +258,7 @@ The JSON report contains:
 - **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
+- **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero
 
 ```json
 {
