@@ -27,6 +27,8 @@ describe('computeMethodStats', () => {
             failure_rate: 0,
             null_rate: 0,
             empty_rate: 0,
+            skipped: 0,
+            skip_rate: 0,
         });
     });
 
@@ -94,6 +96,29 @@ describe('computeMethodStats', () => {
         expect(stats.failure_rate).toBe(0.2);
         expect(stats.null_rate).toBe(0.4);
         expect(stats.empty_rate).toBe(0.2);
+    });
+
+    it('counts skipped requests but keeps them out of durations and the other rates', () => {
+        const skipped = timing({ duration_ms: 0, success: false, result: 'skipped' });
+        const stats = computeMethodStats([
+            timing({ duration_ms: 10 }),
+            timing({ duration_ms: 30, success: false, result: 'error' }),
+            skipped,
+            skipped,
+        ]);
+        expect(stats).toMatchObject({
+            count: 4,
+            skipped: 2,
+            skip_rate: 0.5,
+            avg_ms: 20,
+            min_ms: 10,
+            failure_rate: 0.5,
+        });
+    });
+
+    it('reports a fully skipped method with zero durations and a skip rate of 1', () => {
+        const stats = computeMethodStats([timing({ duration_ms: 0, success: false, result: 'skipped' })]);
+        expect(stats).toMatchObject({ count: 1, skipped: 1, skip_rate: 1, avg_ms: 0, failure_rate: 0 });
     });
 });
 
@@ -238,6 +263,13 @@ describe('printSummary', () => {
     it('adds the null and empty columns when any method has such results', () => {
         expect(header([timing(), timing({ method: 'completionItem/resolve', result: 'null' })])).toMatch(
             /Fail%\s+Null%\s+Empty%/,
+        );
+    });
+
+    it('adds the skip column only when some request was skipped', () => {
+        expect(header([timing()])).not.toMatch(/Skip%/);
+        expect(header([timing(), timing({ method: 'textDocument/definition', result: 'skipped' })])).toMatch(
+            /Fail%\s+Skip%/,
         );
     });
 });

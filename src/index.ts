@@ -3,6 +3,8 @@
 // drive a language server session directly, or get type information for
 // authoring action scripts.
 
+export type { ProviderRequirement } from './capabilities.js';
+export { METHOD_PROVIDERS, summarizeSupport, supportsMethod } from './capabilities.js';
 export type { BenchContextOptions } from './context.js';
 export { addRegisteredLanguage, BenchContextImpl, classifyResult } from './context.js';
 export type { Diagnostic, SaveSyncOptions, ServerExit } from './harness.js';
@@ -23,8 +25,10 @@ export type {
     OpenDocumentOptions,
     Position,
     Range,
+    Registration,
     RequestError,
     RequestResult,
     RequestTiming,
+    ServerCapabilities,
     ServerConfig,
 } from './types.js';

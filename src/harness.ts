@@ -1,13 +1,9 @@
 import * as cp from 'node:child_process';
 import * as path from 'node:path';
 import * as rpc from 'vscode-jsonrpc/node';
-import type { RequestTiming, ServerConfig } from './types.js';
+import type { Registration, RequestTiming, ServerCapabilities, ServerConfig } from './types.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
-interface ServerCapabilities {
-    [key: string]: unknown;
-}
-
 interface InitializeResult {
     capabilities: ServerCapabilities;
 }
@@ -38,15 +34,6 @@ export interface SaveSyncOptions {
     willSaveWaitUntil: boolean;
 }
 
-interface Registration {
-    id: string;
-    method: string;
-    registerOptions?: unknown;
-}
-
-/** save related methods whose dynamic registrations we track */
-const SAVE_METHODS = new Set(['textDocument/didSave', 'textDocument/willSave', 'textDocument/willSaveWaitUntil']);
-
 /** default time to wait for a shutdown reply before giving up on the server */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 
@@ -69,8 +56,8 @@ export class LspHarness {
     private diagnosticsMap = new Map<string, Diagnostic[]>();
     private diagnosticsListeners = new Map<string, Array<(diags: Diagnostic[]) => void>>();
     private _capabilities: ServerCapabilities | null = null;
-    /** dynamic save registrations by registration id */
-    private saveRegistrations = new Map<string, Registration>();
+    /** dynamic registrations by registration id */
+    private _registrations = new Map<string, Registration>();
     private verbose: boolean;
     /** resolves once the server process has exited */
     private exited: Promise<void> = Promise.resolve();
@@ -99,10 +86,15 @@ export class LspHarness {
         return this._capabilities;
     }
 
+    /** The dynamic registrations the server currently holds */
+    get registrations(): Registration[] {
+        return [...this._registrations.values()];
+    }
+
     /** Save related sync options, merging the static textDocumentSync capability with dynamic registrations */
     saveSyncOptions(): SaveSyncOptions {
         const options = staticSaveSyncOptions(this._capabilities?.textDocumentSync);
-        for (const reg of this.saveRegistrations.values()) {
+        for (const reg of this._registrations.values()) {
             if (reg.method === 'textDocument/didSave') {
                 options.didSave = true;
                 if (hasIncludeText(reg.registerOptions)) {
@@ -247,19 +239,18 @@ export class LspHarness {
             this.connection.onRequest(method, () => null);
         }
 
-        // accept all dynamic registrations, remembering save related ones
+        // accept and remember all dynamic registrations
         this.connection.onRequest('client/registerCapability', (params: { registrations?: Registration[] }) => {
             for (const reg of params.registrations ?? []) {
-                if (SAVE_METHODS.has(reg.method)) {
-                    this.saveRegistrations.set(reg.id, reg);
-                }
+                this._registrations.set(reg.id, reg);
+                this.log(`Registered ${reg.method}`);
             }
         });
 
         // the LSP spec really does spell this field 'unregisterations'
         this.connection.onRequest('client/unregisterCapability', (params: { unregisterations?: Registration[] }) => {
             for (const reg of params.unregisterations ?? []) {
-                this.saveRegistrations.delete(reg.id);
+                this._registrations.delete(reg.id);
             }
         });
 
@@ -378,7 +369,7 @@ export class LspHarness {
         this.process = null;
         this.diagnosticsMap.clear();
         this.diagnosticsListeners.clear();
-        this.saveRegistrations.clear();
+        this._registrations.clear();
         return this._exit;
     }
 

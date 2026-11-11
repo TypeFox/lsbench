@@ -39,6 +39,7 @@ program
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
+    .option('--no-skip-unsupported', 'Send requests even when the server does not advertise their provider')
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
@@ -71,6 +72,7 @@ program
             verbose: rawOpts.verbose as boolean,
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
+            skipUnsupported: rawOpts.skipUnsupported as boolean,
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
         };
@@ -231,6 +233,20 @@ a failure apart from a null result:
     const res = await ctx.definition('src/index.ts', 10, 5);
     if (ctx.lastError) { console.error(ctx.lastError.message); }
 
+ctx.capabilities is the capabilities object of the initialize result, and
+ctx.registrations the dynamic registrations ({ id, method, registerOptions? })
+the server holds. ctx.supports(method) checks both for the provider behind an
+LSP request method (including options such as resolveProvider); methods
+lsbench has no mapping for count as supported.
+
+Unsupported requests: a timed request whose provider the server advertises
+neither statically nor dynamically is not sent. It returns null at once and
+records result "skipped" with duration_ms 0. This applies to the wrappers
+below, willSaveWaitUntil, and request() calls for the same methods; other
+request() methods are always sent. --no-skip-unsupported sends them anyway.
+Providers registered dynamically after initialized are skipped until the
+registration arrives, so wait (e.g. waitForDiagnostics) before the first request.
+
 Document lifecycle  (all but openDocument/closeDocument throw if the document is not open)
   openDocument(path)                      textDocument/didOpen, call before requests on a file
   closeDocument(path)                     textDocument/didClose
@@ -241,7 +257,8 @@ Document lifecycle  (all but openDocument/closeDocument throw if the document is
   saveDocument(path)                      textDocument/didSave, only if the server asks for it, with the
                                           tracked text when it wants includeText
   willSave(path, reason?)                 textDocument/willSave, only if the server asks for it (reason default 1, Manual)
-  willSaveWaitUntil(path, reason?)        textDocument/willSaveWaitUntil (timed, always sent, reason default 1)
+  willSaveWaitUntil(path, reason?)        textDocument/willSaveWaitUntil (timed, skipped unless the server asks for it,
+                                          reason default 1)
 
   Save options come from the static textDocumentSync capability and from dynamic
   didSave/willSave/willSaveWaitUntil registrations. A bare TextDocumentSyncKind
@@ -299,7 +316,7 @@ Resolve  (timed, the item from the matching request is sent back as the params)
   documentLinkResolve(link)               documentLink/resolve
   workspaceSymbolResolve(symbol)          workspaceSymbol/resolve
 
-  Only answered when the provider advertises resolveProvider: true. lsbench
+  Skipped unless the provider advertises resolveProvider: true. lsbench
   advertises resolveSupport for completion items, code actions, inlay hints and
   workspace symbols, so some servers defer work from the request to resolve.
 
@@ -319,7 +336,7 @@ Property
 
 lsbench answers these so a server never stalls waiting on a client:
   workspace/configuration                 an empty object per item
-  client/(un)registerCapability           accepted, save related registrations are tracked
+  client/(un)registerCapability           accepted, all registrations are tracked (ctx.registrations)
   workspace/*/refresh, workDoneProgress   acknowledged
   window/showMessageRequest               dismissed with null
   workspace/applyEdit                     declined, lsbench never modifies the workspace
@@ -342,6 +359,7 @@ lsbench answers these so a server never stalls waiting on a client:
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
+          --no-skip-unsupported    Send requests the server does not advertise
       -v, --verbose                Verbose logging                                  (default: false)
       -V, --version                Print version
       -h, --help                   Print help
@@ -354,7 +372,7 @@ Anything after \`--\` is passed through as extra args to the server command.
 
 The JSON report (and the printed summary) contains:
   - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms,
-                       failure_rate, null_rate, empty_rate
+                       failure_rate, null_rate, empty_rate, skipped, skip_rate
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
   - lifecycle          keep alive mode only: spawn, initialize and final shutdown
@@ -375,12 +393,15 @@ Example \`summary\` entry:
     "textDocument/hover": {
       "count": 50, "avg_ms": 12.4, "median_ms": 11.2, "p95_ms": 22.1,
       "p99_ms": 34.5, "min_ms": 8.1, "max_ms": 42.3, "stddev_ms": 5.2,
-      "failure_rate": 0, "null_rate": 0, "empty_rate": 0
+      "failure_rate": 0, "null_rate": 0, "empty_rate": 0,
+      "skipped": 0, "skip_rate": 0
     }
 
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
-such as a CompletionList with no items), null, or error (with \`error\` set).
-\`success\` is kept and is false exactly for errors. A high null_rate usually
+such as a CompletionList with no items), null, error (with \`error\` set), or
+skipped (not sent, the server lacks the provider). \`success\` is kept and is
+false exactly for errors and skips. count and skipped include skips; durations
+and the other rates cover only requests actually sent. A high null_rate usually
 means a position misses a symbol, so its fast timings mean little.
 Requests rejected with ContentModified (-32801) are retried with a short
 backoff; \`retries\` records how often, and only the final attempt is timed.

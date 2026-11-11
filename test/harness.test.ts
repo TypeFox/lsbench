@@ -353,4 +353,23 @@ describe('LspHarness.saveSyncOptions', () => {
             expect(harness.saveSyncOptions()).toEqual({ ...none, willSave: true });
         });
     });
+
+    it('tracks every dynamic registration, not only save related ones', async () => {
+        await withSyncServer(null, async (harness) => {
+            expect(harness.capabilities).toEqual({});
+            const hover = { id: 'hover', method: 'textDocument/hover', registerOptions: { documentSelector: [] } };
+            await harness.sendRequest('test/forward', [
+                'client/registerCapability',
+                { registrations: [hover, { id: 'save', method: 'textDocument/didSave' }] },
+            ]);
+            expect(harness.registrations.map((r) => r.id)).toEqual(['hover', 'save']);
+            expect(harness.registrations[0]).toEqual(hover);
+
+            await harness.sendRequest('test/forward', [
+                'client/unregisterCapability',
+                { unregisterations: [{ id: 'hover', method: 'textDocument/hover' }] },
+            ]);
+            expect(harness.registrations.map((r) => r.id)).toEqual(['save']);
+        });
+    });
 });

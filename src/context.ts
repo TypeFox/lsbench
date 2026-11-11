@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { supportsMethod } from './capabilities.js';
 import { type Diagnostic, type LspHarness, pathToUri } from './harness.js';
 import type {
     BenchContext,
@@ -7,9 +8,11 @@ import type {
     OpenDocumentOptions,
     Position,
     Range,
+    Registration,
     RequestError,
     RequestResult,
     RequestTiming,
+    ServerCapabilities,
 } from './types.js';
 
 /** JSON-RPC error code a server sends when a document change invalidated the result */
@@ -20,6 +23,8 @@ export interface BenchContextOptions {
     contentModifiedRetries?: number;
     /** Wait before retry n is n times this many milliseconds (default 20) */
     retryBackoffMs?: number;
+    /** Skip requests whose provider the server does not advertise, recording them as skipped (default true) */
+    skipUnsupported?: boolean;
 }
 
 /**
@@ -35,6 +40,7 @@ export class BenchContextImpl implements BenchContext {
     private verbose: boolean;
     private contentModifiedRetries: number;
     private retryBackoffMs: number;
+    private skipUnsupported: boolean;
     private _lastError: RequestError | undefined;
 
     constructor(harness: LspHarness, workspaceRoot: string, verbose = false, options: BenchContextOptions = {}) {
@@ -43,10 +49,23 @@ export class BenchContextImpl implements BenchContext {
         this.verbose = verbose;
         this.contentModifiedRetries = options.contentModifiedRetries ?? 3;
         this.retryBackoffMs = options.retryBackoffMs ?? 20;
+        this.skipUnsupported = options.skipUnsupported ?? true;
     }
 
     get lastError(): RequestError | undefined {
         return this._lastError;
+    }
+
+    get capabilities(): Readonly<ServerCapabilities> | null {
+        return this.harness.capabilities;
+    }
+
+    get registrations(): readonly Registration[] {
+        return this.harness.registrations;
+    }
+
+    supports(method: string): boolean {
+        return supportsMethod(this.harness.capabilities, this.harness.registrations, method);
     }
 
     /** Drain and return all collected timings, resetting for the next iteration */
@@ -141,7 +160,6 @@ export class BenchContextImpl implements BenchContext {
         });
     }
 
-    // always sent, since the caller explicitly asked for it to be timed
     async willSaveWaitUntil(relativePath: string, reason = 1): Promise<unknown | null> {
         const doc = this.getOpenDocument(relativePath);
         return this.timedRequest('textDocument/willSaveWaitUntil', {
@@ -467,10 +485,16 @@ export class BenchContextImpl implements BenchContext {
     /**
      * Send a request and record its timing and result. A ContentModified rejection is retried
      * after a short backoff, and only the final attempt is timed, since the earlier ones and
-     * the backoff measure the edit race rather than the request itself
+     * the backoff measure the edit race rather than the request itself. A request whose
+     * provider the server does not advertise is not sent but recorded as skipped
      */
     private async timedRequest<R>(method: string, params: unknown, label?: string): Promise<R> {
         this._lastError = undefined;
+        if (this.skipUnsupported && !this.supports(method)) {
+            this.timings.push({ method, label, duration_ms: 0, success: false, result: 'skipped' });
+            this.log(`${method}${label ? ` [${label}]` : ''}: skipped, the server does not advertise it`);
+            return null as R;
+        }
         let retries = 0;
         for (;;) {
             const start = process.hrtime.bigint();
@@ -538,7 +562,7 @@ function toRequestError(method: string, err: unknown): RequestError {
  * and SemanticTokensDelta (`edits`). Since `data` is also the opaque payload of resolvable
  * items, `data` and `edits` only count on objects with no keys besides `resultId`
  */
-export function classifyResult(result: unknown): Exclude<RequestResult, 'error'> {
+export function classifyResult(result: unknown): Exclude<RequestResult, 'error' | 'skipped'> {
     if (result === null || result === undefined) {
         return 'null';
     }

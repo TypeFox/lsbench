@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { summarizeSupport } from './capabilities.js';
 import { BenchContextImpl } from './context.js';
 import { LspHarness } from './harness.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
@@ -95,14 +96,24 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     let harness: LspHarness | null = null;
     let ctx: BenchContextImpl | null = null;
     // keep alive spawn, initialize and final shutdown timings, which belong to no iteration
-    const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries };
+    const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries, skipUnsupported: opts.skipUnsupported };
     let lifecycle: RequestTiming[] | undefined;
+    // in verbose mode, summarize capabilities once, after the first server is up
+    let capabilitiesLogged = !opts.verbose;
+    const logCapabilities = (h: LspHarness) => {
+        if (capabilitiesLogged) {
+            return;
+        }
+        capabilitiesLogged = true;
+        printCapabilitySummary(h, opts.skipUnsupported ?? true);
+    };
 
     // Start server if we're keeping it alive across iterations
     if (!opts.restart) {
         harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
         await harness.start();
         lifecycle = harness.takeLifecycleTimings();
+        logCapabilities(harness);
         ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
     }
 
@@ -125,6 +136,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             try {
                 await harness.start();
                 startTimings = harness.takeLifecycleTimings();
+                logCapabilities(harness);
             } catch (err: unknown) {
                 // without collected runs there is nothing to keep, so fail as before
                 if (runs.length === 0) {
@@ -223,6 +235,18 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     }
 
     return report;
+}
+
+/** Print which context request methods the server supports statically, dynamic registrations are logged as they arrive */
+function printCapabilitySummary(harness: LspHarness, skipUnsupported: boolean): void {
+    const { supported, unsupported } = summarizeSupport(harness.capabilities, harness.registrations);
+    console.error(
+        `[lsbench] Server supports ${supported.length} of ${supported.length + unsupported.length} mapped requests`,
+    );
+    if (unsupported.length > 0) {
+        const action = skipUnsupported ? 'skipped' : 'sent anyway (--no-skip-unsupported)';
+        console.error(`[lsbench] Unsupported, ${action} unless registered later: ${unsupported.join(', ')}`);
+    }
 }
 
 /** Write a report as JSON to the given path */

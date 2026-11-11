@@ -86,6 +86,14 @@ if (ctx.lastError) {
 }
 ```
 
+`ctx.capabilities` holds the `capabilities` of the server's `initialize` result, and `ctx.registrations` the dynamic registrations it currently holds (`{ id, method, registerOptions? }`). `ctx.supports(method)` checks both for the provider behind an LSP request method, including options such as `resolveProvider` or `semanticTokensProvider.full.delta`. Methods lsbench has no provider mapping for count as supported.
+
+```ts
+if (ctx.supports("textDocument/diagnostic")) {
+  await ctx.documentDiagnostic("src/index.ts");
+}
+```
+
 **Document lifecycle** (all but `openDocument` and `closeDocument` require an open document)
 
 | Method | Description |
@@ -95,7 +103,7 @@ if (ctx.lastError) {
 | `edit(path, edits)` | Send `textDocument/didChange` and apply the edits to the tracked text, in order |
 | `saveDocument(path)` | Send `textDocument/didSave` only if the server asks for it, with the tracked text when it wants `includeText` |
 | `willSave(path, reason?)` | Send `textDocument/willSave` only if the server asks for it. `reason` defaults to 1 (Manual) |
-| `willSaveWaitUntil(path, reason?)` | `textDocument/willSaveWaitUntil` (timed, always sent). `reason` defaults to 1 (Manual) |
+| `willSaveWaitUntil(path, reason?)` | `textDocument/willSaveWaitUntil` (timed, skipped unless the server asks for it). `reason` defaults to 1 (Manual) |
 
 **Navigation and editing** (timed)
 
@@ -175,7 +183,7 @@ if (items && items.length > 0) {
 }
 ```
 
-Resolve requests take an item returned by the matching request. The server only answers when its provider advertises `resolveProvider: true`:
+Resolve requests take an item returned by the matching request. The server only answers when its provider advertises `resolveProvider: true`, otherwise lsbench skips them:
 
 ```ts
 const list = (await ctx.completion("src/index.ts", 15, 10)) as { items: unknown[] } | unknown[] | null;
@@ -189,16 +197,20 @@ lsbench advertises `resolveSupport` for completion items, code actions, inlay hi
 
 `documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability, since some servers would then stop pushing diagnostics and break `waitForDiagnostics`.
 
+### Unsupported requests
+
+A timed request whose provider the server advertises neither statically nor through `client/registerCapability` is not sent. It returns `null` without a round trip and records a timing with `result: "skipped"` and `duration_ms: 0`, so it shows up in the report as skipped instead of as a fast failure. This covers the timed context methods above, including `willSaveWaitUntil`, and `request()` calls for the same LSP methods. Other `request()` methods are always sent. Pass `--no-skip-unsupported` (or `skipUnsupported: false`) to send them anyway. Verbose mode prints which requests the server supports right after startup, and logs dynamic registrations as they arrive. A server that registers a provider only after `initialized` gets it skipped until the registration arrives, so wait (for example with `waitForDiagnostics`) before the first request.
+
 ### Save sync
 
-`saveDocument` and `willSave` follow the server's save options, read from the static `textDocumentSync` capability and from dynamic registrations of `textDocument/didSave`, `textDocument/willSave`, and `textDocument/willSaveWaitUntil`. A bare `TextDocumentSyncKind` number implies `didSave` without text, matching `vscode-languageclient`. When the server does not ask for a notification it is skipped and logged in verbose mode. `willSaveWaitUntil` is always sent so it can be timed.
+`saveDocument` and `willSave` follow the server's save options, read from the static `textDocumentSync` capability and from dynamic registrations of `textDocument/didSave`, `textDocument/willSave`, and `textDocument/willSaveWaitUntil`. A bare `TextDocumentSyncKind` number implies `didSave` without text, matching `vscode-languageclient`. When the server does not ask for a notification it is skipped and logged in verbose mode. `willSaveWaitUntil` is a request, so it follows the [unsupported requests](#unsupported-requests) rule and is recorded as skipped.
 
 ### Server to client requests
 
 lsbench answers requests from the server so it doesn't get stuck waiting on a client:
 
 - `workspace/configuration` returns an empty object per item
-- `client/registerCapability` and `client/unregisterCapability` are accepted (save related registrations are tracked)
+- `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`)
 - `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) and `window/workDoneProgress/create` are acknowledged
 - `window/showMessageRequest` is dismissed with `null`
 - `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying the workspace using server-initiated requests
@@ -236,6 +248,7 @@ Options:
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
   --content-modified-retries <n>
                               Retry requests rejected with ContentModified (default: 3)
+  --no-skip-unsupported       Send requests even when the server does not advertise their provider
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -266,7 +279,7 @@ See [`examples/init-options.json`](examples/init-options.json) for a sample. For
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate), including the server lifecycle (see below)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, skipped), including the server lifecycle (see below)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize and final shutdown timings of the single server
@@ -278,8 +291,9 @@ Each request timing has a `result`:
 - `empty`: an empty list, or a list wrapper with an empty list (a `CompletionList` or diagnostic report with no `items`, `SemanticTokens` with no `data`)
 - `null`: a `null` result. A high `null_rate` usually means a position misses a symbol, so its fast timings mean little
 - `error`: the request failed, with the message in `error`
+- `skipped`: never sent, since the server does not advertise the provider (see [unsupported requests](#unsupported-requests))
 
-`success` is kept for compatibility and is `false` exactly for `error`. `summary` aggregates `failure_rate`, `null_rate` and `empty_rate` per method, and the printed table adds Null% and Empty% columns when any method has a nonzero rate.
+`success` is kept for compatibility and is `false` exactly for `error` and `skipped`. `summary` aggregates `failure_rate`, `null_rate` and `empty_rate` per method, and the printed table adds Null% and Empty% columns when any method has a nonzero rate. `count` includes skipped requests, `skipped` counts them and `skip_rate` is their share. Every other stat covers only the requests actually sent, so a fully skipped method has zero durations and a `failure_rate` of 0. The printed table adds a Skip% column when any request was skipped.
 
 Requests rejected with `ContentModified` (-32801), as servers do while loading or when an edit races a request, are retried up to `--content-modified-retries` times (default 3) with a short backoff. The timing records the count in `retries` and covers only the final attempt.
 
@@ -308,7 +322,9 @@ With `--restart` each run's `requests` start with spawn and initialize and end w
       "stddev_ms": 5.2,
       "failure_rate": 0,
       "null_rate": 0,
-      "empty_rate": 0
+      "empty_rate": 0,
+      "skipped": 0,
+      "skip_rate": 0
     }
   },
   "runs": [

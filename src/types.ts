@@ -38,6 +38,8 @@ export interface BenchOptions {
     shutdownTimeout?: number;
     /** How often a request rejected with ContentModified (-32801) is retried (default 3) */
     contentModifiedRetries?: number;
+    /** Skip requests whose provider the server does not advertise, recording them as skipped (default true) */
+    skipUnsupported?: boolean;
 }
 
 // ── Timing & Results ────────────────────────────────────────────────────────
@@ -45,18 +47,19 @@ export interface BenchOptions {
 /**
  * Outcome of a request: `ok` for a non empty result, `empty` for an empty list
  * (or a list wrapper such as a CompletionList with no items), `null` for a null
- * result and `error` for a rejected request
+ * result, `error` for a rejected request and `skipped` for a request never sent
+ * because the server does not advertise its provider
  */
-export type RequestResult = 'ok' | 'empty' | 'null' | 'error';
+export type RequestResult = 'ok' | 'empty' | 'null' | 'error' | 'skipped';
 
 export interface RequestTiming {
     /** LSP method name, e.g. "textDocument/hover" */
     method: string;
     /** Human label (optional, from the script) */
     label?: string;
-    /** Duration in milliseconds (high-resolution) */
+    /** Duration in milliseconds (high-resolution), 0 when skipped */
     duration_ms: number;
-    /** Whether the request succeeded, false exactly when `result` is `error` */
+    /** Whether the request succeeded, false exactly when `result` is `error` or `skipped` */
     success: boolean;
     /** What the request returned */
     result: RequestResult;
@@ -73,6 +76,10 @@ export interface IterationResult {
     total_ms: number;
 }
 
+/**
+ * Per method aggregates. `count` and `skipped` include skipped requests, every other
+ * field covers only the requests actually sent
+ */
 export interface MethodStats {
     count: number;
     avg_ms: number;
@@ -87,6 +94,10 @@ export interface MethodStats {
     null_rate: number;
     /** Share of requests that returned an empty list */
     empty_rate: number;
+    /** Requests skipped because the server does not advertise their provider */
+    skipped: number;
+    /** Share of all requests that were skipped */
+    skip_rate: number;
 }
 
 export interface BenchReport {
@@ -141,6 +152,18 @@ export interface EditOperation {
     text: string;
 }
 
+/** The `capabilities` of the server's initialize result */
+export interface ServerCapabilities {
+    [key: string]: unknown;
+}
+
+/** A dynamic registration received through client/registerCapability */
+export interface Registration {
+    id: string;
+    method: string;
+    registerOptions?: unknown;
+}
+
 /** The error of a rejected request, see `BenchContext.lastError` */
 export interface RequestError {
     method: string;
@@ -167,6 +190,15 @@ export interface BenchContext {
      * Tells a failed request apart from a null result, since both return null
      */
     readonly lastError: RequestError | undefined;
+    /** The capabilities of the server's initialize result, null before initialize */
+    readonly capabilities: Readonly<ServerCapabilities> | null;
+    /** The dynamic registrations the server currently holds */
+    readonly registrations: readonly Registration[];
+    /**
+     * Whether the server answers an LSP request method, from its static capabilities or a
+     * dynamic registration. Methods lsbench has no provider mapping for count as supported
+     */
+    supports(method: string): boolean;
 
     // ── Document lifecycle ──────────────────────────────────────────────
     /** Sends didOpen, with the languageId detected from the extension unless `options.languageId` is given */
@@ -176,7 +208,7 @@ export interface BenchContext {
     saveDocument(relativePath: string): Promise<void>;
     /** Sends willSave only if the server asked for it. `reason` is a TextDocumentSaveReason, default 1 (Manual) */
     willSave(relativePath: string, reason?: number): Promise<void>;
-    /** Timed willSaveWaitUntil request, always sent. `reason` defaults to 1 (Manual) */
+    /** Timed willSaveWaitUntil request, skipped like other requests when the server does not ask for it. `reason` defaults to 1 (Manual) */
     willSaveWaitUntil(relativePath: string, reason?: number): Promise<unknown | null>;
 
     // ── Timed LSP requests ──────────────────────────────────────────────

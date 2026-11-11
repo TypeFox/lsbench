@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addRegisteredLanguage, BenchContextImpl, LspHarness, type RequestTiming } from 'lsbench';
+import { addRegisteredLanguage, BenchContextImpl, LspHarness, pathToUri, type RequestTiming } from 'lsbench';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // End-to-end test against Langium's own grammar language server, which registers
@@ -446,10 +446,24 @@ describe('langium grammar language server (integration)', () => {
         expect(ctx.collectTimings()).toHaveLength(0);
     });
 
-    it('times willSaveWaitUntil even though the server does not advertise it', async () => {
+    it('records willSaveWaitUntil as skipped since the server does not ask for it', async () => {
+        const sendRequest = vi.spyOn(harness, 'sendRequest');
+        try {
+            expect(await ctx.willSaveWaitUntil(FILE)).toBeNull();
+            expect(sendRequest).not.toHaveBeenCalled();
+        } finally {
+            sendRequest.mockRestore();
+        }
+        expect(timingFor(ctx, 'textDocument/willSaveWaitUntil')?.result).toBe('skipped');
+    });
+
+    it('still times willSaveWaitUntil with skipUnsupported off', async () => {
+        // a second context over the same server, sending without reopening the document
+        const eager = new BenchContextImpl(harness, workspaceDir, false, { skipUnsupported: false });
+        const uri = pathToUri(path.join(workspaceDir, FILE));
         // Langium answers with no edits when it has no willSaveWaitUntil handler
-        const edits = await ctx.willSaveWaitUntil(FILE);
-        expectTimedSuccess(ctx, 'textDocument/willSaveWaitUntil');
+        const edits = await eager.request('textDocument/willSaveWaitUntil', { textDocument: { uri }, reason: 1 });
+        expectTimedSuccess(eager, 'textDocument/willSaveWaitUntil');
         expect(edits).toEqual([]);
 
         const highlights = (await ctx.documentHighlight(FILE, 11, 12)) as unknown[] | null;
@@ -472,6 +486,29 @@ describe('langium grammar language server (integration)', () => {
 
     // these methods are not advertised by the grammar server, so they are skipped
     // rather than asserting on "Unhandled method" errors or unadvertised handlers
+    it('records requests to unadvertised providers as skipped, without a round trip', async () => {
+        ctx.collectTimings();
+        const sendRequest = vi.spyOn(harness, 'sendRequest');
+        try {
+            const range = { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } };
+            expect(await ctx.declaration(FILE, 11, 12)).toBeNull();
+            await ctx.signatureHelp(FILE, 11, 12);
+            await ctx.inlayHint(FILE, range);
+            await ctx.documentDiagnostic(FILE);
+            await ctx.completionItemResolve({ label: 'x' });
+            await ctx.codeActionResolve({ title: 'x' });
+            await ctx.semanticTokensDelta(FILE, '1');
+            expect(sendRequest).not.toHaveBeenCalled();
+        } finally {
+            sendRequest.mockRestore();
+        }
+        const timings = ctx.collectTimings();
+        expect(timings.length).toBeGreaterThan(0);
+        for (const timing of timings) {
+            expect(timing, timing.method).toMatchObject({ result: 'skipped', duration_ms: 0 });
+        }
+    });
+
     it('does not advertise the providers whose tests are skipped below', () => {
         const caps = harness.capabilities as Record<string, unknown> | null;
         // if any of these start being advertised, un-skip the matching test below

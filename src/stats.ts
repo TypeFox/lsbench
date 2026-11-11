@@ -20,13 +20,19 @@ function round(value: number, decimals = 3): number {
     return Math.round(value * f) / f;
 }
 
-/** Compute aggregate statistics for a set of durations */
+/** Compute aggregate statistics for a set of timings, skipped ones only count toward skipped and skip_rate */
 export function computeMethodStats(timings: RequestTiming[]): MethodStats {
-    const durations = sorted(timings.map((t) => t.duration_ms));
+    const durations: number[] = [];
     let failures = 0;
     let nulls = 0;
     let empties = 0;
+    let skipped = 0;
     for (const t of timings) {
+        if (t.result === 'skipped') {
+            skipped++;
+            continue;
+        }
+        durations.push(t.duration_ms);
         if (!t.success) {
             failures++;
         }
@@ -36,11 +42,14 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
             empties++;
         }
     }
+    sorted(durations);
     const n = durations.length;
+    const count = timings.length;
+    const skip_rate = count === 0 ? 0 : round(skipped / count, 4);
 
     if (n === 0) {
         return {
-            count: 0,
+            count,
             avg_ms: 0,
             median_ms: 0,
             p95_ms: 0,
@@ -51,6 +60,8 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
             failure_rate: 0,
             null_rate: 0,
             empty_rate: 0,
+            skipped,
+            skip_rate,
         };
     }
 
@@ -59,7 +70,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     const variance = durations.reduce((acc, d) => acc + (d - avg) ** 2, 0) / n;
 
     return {
-        count: n,
+        count,
         avg_ms: round(avg),
         median_ms: round(percentile(durations, 50)),
         p95_ms: round(percentile(durations, 95)),
@@ -70,6 +81,8 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         failure_rate: round(failures / n, 4),
         null_rate: round(nulls / n, 4),
         empty_rate: round(empties / n, 4),
+        skipped,
+        skip_rate,
     };
 }
 
@@ -183,13 +196,16 @@ export function printSummary(report: BenchReport): void {
 
     // Column widths
     const nameWidth = Math.max(20, ...methods.map((m) => m.length)) + 2;
-    // null and empty columns only when some method has any, keeping the common table narrow
+    // null, empty and skip columns only when some method has any, keeping the common table narrow
     let showResults = false;
+    let showSkipped = false;
     for (const method of methods) {
         const s = report.summary[method];
         if (s.null_rate > 0 || s.empty_rate > 0) {
             showResults = true;
-            break;
+        }
+        if (s.skipped > 0) {
+            showSkipped = true;
         }
     }
     const percent = (rate: number) => `${(rate * 100).toFixed(1)}%`.padStart(8);
@@ -205,7 +221,8 @@ export function printSummary(report: BenchReport): void {
         'Max'.padStart(10) +
         'Stddev'.padStart(10) +
         'Fail%'.padStart(8) +
-        (showResults ? 'Null%'.padStart(8) + 'Empty%'.padStart(8) : '');
+        (showResults ? 'Null%'.padStart(8) + 'Empty%'.padStart(8) : '') +
+        (showSkipped ? 'Skip%'.padStart(8) : '');
 
     console.log(header);
     console.log(`  ${'─'.repeat(header.length - 2)}`);
@@ -223,7 +240,8 @@ export function printSummary(report: BenchReport): void {
             `${s.max_ms}`.padStart(10) +
             `${s.stddev_ms}`.padStart(10) +
             percent(s.failure_rate) +
-            (showResults ? percent(s.null_rate) + percent(s.empty_rate) : '');
+            (showResults ? percent(s.null_rate) + percent(s.empty_rate) : '') +
+            (showSkipped ? percent(s.skip_rate) : '');
         console.log(row);
     }
 

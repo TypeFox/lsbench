@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Diagnostic, EditOperation, LspHarness, SaveSyncOptions } from 'lsbench';
+import type { Diagnostic, EditOperation, LspHarness, Registration, SaveSyncOptions, ServerCapabilities } from 'lsbench';
 import { addRegisteredLanguage, BenchContextImpl, classifyResult } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -32,6 +32,9 @@ class FakeHarness {
 
     /** errors thrown by the next requests, in order, before any canned response */
     rejections: unknown[] = [];
+    /** null like before initialize, so every request counts as supported */
+    capabilities: ServerCapabilities | null = null;
+    registrations: Registration[] = [];
 
     async sendRequest<R>(method: string, params: unknown): Promise<R> {
         this.requests.push({ method, params });
@@ -227,8 +230,7 @@ describe('BenchContextImpl', () => {
             expect(harness.requests).toHaveLength(0);
         });
 
-        it('willSaveWaitUntil issues a timed request even when the server does not advertise it', async () => {
-            harness.saveOptions.willSaveWaitUntil = false;
+        it('willSaveWaitUntil issues a timed request', async () => {
             await ctx.openDocument('sample.ts');
             const res = await ctx.willSaveWaitUntil('sample.ts', 3);
 
@@ -781,6 +783,74 @@ describe('BenchContextImpl', () => {
             await ctx.hover('sample.ts', 0, 0);
             expect(harness.requests).toHaveLength(1);
             expect(ctx.collectTimings()[0].retries).toBeUndefined();
+        });
+    });
+
+    describe('unsupported requests', () => {
+        beforeEach(() => {
+            harness.capabilities = { hoverProvider: true, textDocumentSync: 2 };
+        });
+
+        it('exposes the capabilities and registrations of the harness', () => {
+            harness.registrations = [{ id: 'r', method: 'textDocument/references' }];
+            expect(ctx.capabilities).toEqual({ hoverProvider: true, textDocumentSync: 2 });
+            expect(ctx.registrations).toEqual([{ id: 'r', method: 'textDocument/references' }]);
+            expect(ctx.supports('textDocument/hover')).toBe(true);
+            expect(ctx.supports('textDocument/references')).toBe(true);
+            expect(ctx.supports('textDocument/definition')).toBe(false);
+        });
+
+        it('skips a request without a provider, recording a skipped timing without a round trip', async () => {
+            harness.rejections.push(new Error('earlier failure'));
+            await ctx.hover('sample.ts', 0, 0);
+            expect(ctx.lastError).toBeDefined();
+            ctx.collectTimings();
+
+            expect(await ctx.definition('sample.ts', 0, 6)).toBeNull();
+            expect(harness.requests.map((r) => r.method)).toEqual(['textDocument/hover']);
+            expect(ctx.lastError).toBeUndefined();
+            expect(ctx.collectTimings()).toEqual([
+                {
+                    method: 'textDocument/definition',
+                    label: undefined,
+                    duration_ms: 0,
+                    success: false,
+                    result: 'skipped',
+                },
+            ]);
+        });
+
+        it('sends a request the server registered dynamically', async () => {
+            harness.registrations = [{ id: 'd', method: 'textDocument/definition' }];
+            await ctx.definition('sample.ts', 0, 6);
+            expect(harness.requests.map((r) => r.method)).toEqual(['textDocument/definition']);
+            expect(ctx.collectTimings()[0].result).toBe('ok');
+        });
+
+        it('skips willSaveWaitUntil when the server does not ask for it', async () => {
+            await ctx.openDocument('sample.ts');
+            expect(await ctx.willSaveWaitUntil('sample.ts')).toBeNull();
+            expect(harness.requests).toHaveLength(0);
+            expect(ctx.collectTimings()[0].result).toBe('skipped');
+        });
+
+        it('skips mapped methods sent through request(), keeping the label, but always sends unmapped ones', async () => {
+            await ctx.request('completionItem/resolve', { label: 'x' }, 'resolve');
+            await ctx.request('custom/ping', {});
+            expect(harness.requests.map((r) => r.method)).toEqual(['custom/ping']);
+            const timings = ctx.collectTimings();
+            expect(timings.map((t) => [t.method, t.label, t.result])).toEqual([
+                ['completionItem/resolve', 'resolve', 'skipped'],
+                ['custom/ping', undefined, 'ok'],
+            ]);
+        });
+
+        it('sends unsupported requests when skipUnsupported is false', async () => {
+            ctx = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { skipUnsupported: false });
+            harness.failMethods.add('textDocument/definition');
+            await ctx.definition('sample.ts', 0, 6);
+            expect(harness.requests).toHaveLength(1);
+            expect(ctx.collectTimings()[0].result).toBe('error');
         });
     });
 

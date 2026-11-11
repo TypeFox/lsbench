@@ -1,7 +1,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { addRegisteredLanguage, BenchContextImpl, LspHarness, type RequestTiming, type ServerConfig } from 'lsbench';
+import {
+    addRegisteredLanguage,
+    BenchContextImpl,
+    LspHarness,
+    pathToUri,
+    type RequestTiming,
+    type ServerConfig,
+} from 'lsbench';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { examplesDir, serverEntry } from './minilogo.js';
 
@@ -220,10 +227,24 @@ describe('minilogo language server (integration)', () => {
         await expect(ctx.willSaveWaitUntil('not-open.logo')).rejects.toThrow(/not open/);
     });
 
-    it('times willSaveWaitUntil even though the server does not advertise it', async () => {
+    it('records willSaveWaitUntil as skipped since the server does not ask for it', async () => {
+        const sendRequest = vi.spyOn(harness, 'sendRequest');
+        try {
+            expect(await ctx.willSaveWaitUntil('test.logo')).toBeNull();
+            expect(sendRequest).not.toHaveBeenCalled();
+        } finally {
+            sendRequest.mockRestore();
+        }
+        expect(timingFor(ctx, 'textDocument/willSaveWaitUntil')?.result).toBe('skipped');
+    });
+
+    it('still times willSaveWaitUntil with skipUnsupported off', async () => {
+        // a second context over the same server, sending without reopening the document
+        const eager = new BenchContextImpl(harness, examplesDir, false, { skipUnsupported: false });
+        const uri = pathToUri(path.join(examplesDir, 'test.logo'));
         // Langium answers with no edits when it has no willSaveWaitUntil handler
-        const edits = await ctx.willSaveWaitUntil('test.logo');
-        expectTimedSuccess(ctx, 'textDocument/willSaveWaitUntil');
+        const edits = await eager.request('textDocument/willSaveWaitUntil', { textDocument: { uri }, reason: 1 });
+        expectTimedSuccess(eager, 'textDocument/willSaveWaitUntil');
         expect(edits).toEqual([]);
 
         const highlights = (await ctx.documentHighlight('test.logo', 24, 2)) as unknown[] | null;
@@ -233,6 +254,29 @@ describe('minilogo language server (integration)', () => {
     // the following methods are not advertised by minilogo (Langium 4.3 minilogo only
     // registers the providers listed in its initialize result), so they are skipped
     // rather than asserting on "Unhandled method" errors
+    it('records requests to unadvertised providers as skipped, without a round trip', async () => {
+        ctx.collectTimings();
+        const sendRequest = vi.spyOn(harness, 'sendRequest');
+        try {
+            const range = { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } };
+            expect(await ctx.declaration('test.logo', 24, 2)).toBeNull();
+            await ctx.codeLens('test.logo');
+            await ctx.inlayHint('test.logo', range);
+            await ctx.semanticTokensFull('test.logo');
+            await ctx.prepareCallHierarchy('test.logo', 24, 2);
+            await ctx.documentDiagnostic('test.logo');
+            await ctx.workspaceDiagnostic();
+            expect(sendRequest).not.toHaveBeenCalled();
+        } finally {
+            sendRequest.mockRestore();
+        }
+        const timings = ctx.collectTimings();
+        expect(timings.length).toBeGreaterThan(0);
+        for (const timing of timings) {
+            expect(timing, timing.method).toMatchObject({ result: 'skipped', duration_ms: 0 });
+        }
+    });
+
     it('does not advertise the providers whose tests are skipped below', () => {
         const caps = harness.capabilities as Record<string, unknown> | null;
         // if any of these start being advertised, un-skip the matching test below
@@ -295,6 +339,8 @@ export default async function (ctx: BenchContext) {
     await ctx.waitForDiagnostics('test.logo', 30_000);
     await ctx.documentSymbol('test.logo');
     await ctx.definition('test.logo', 24, 0);
+    // minilogo has no declarationProvider
+    await ctx.declaration('test.logo', 24, 0);
     await ctx.closeDocument('test.logo');
 }
 `,
@@ -328,5 +374,36 @@ export default async function (ctx: BenchContext) {
         expect(symbolStats).toBeTruthy();
         expect(symbolStats.count).toBe(2);
         expect(symbolStats.failure_rate).toBe(0);
+        // the unadvertised declaration request is skipped, not failed
+        expect(report.summary['textDocument/declaration']).toMatchObject({
+            count: 2,
+            skipped: 2,
+            skip_rate: 1,
+            failure_rate: 0,
+            avg_ms: 0,
+        });
+        expect(symbolStats.skipped).toBe(0);
+    });
+
+    it('sends unadvertised requests when skipUnsupported is off', async () => {
+        const { runBenchmark } = await import('lsbench');
+
+        const report = await runBenchmark({
+            server: `node ${serverEntry} --stdio`,
+            workspace: examplesDir,
+            script: scriptPath,
+            iterations: 1,
+            warmup: 0,
+            output: '',
+            restart: false,
+            verbose: false,
+            skipUnsupported: false,
+        });
+
+        // the request reaches the server, whatever it answers
+        expect(report.summary['textDocument/declaration']).toMatchObject({ count: 1, skipped: 0, skip_rate: 0 });
+        const declaration = report.runs[0].requests.find((r) => r.method === 'textDocument/declaration');
+        expect(declaration?.result).not.toBe('skipped');
+        expect(declaration?.duration_ms).toBeGreaterThan(0);
     });
 });
