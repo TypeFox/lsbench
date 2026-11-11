@@ -144,3 +144,91 @@ describe('runBenchmark with a server crashing at shutdown', () => {
         });
     }
 });
+
+/** a fake server that replies to shutdown and exits cleanly */
+const cleanServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
+conn.onRequest('textDocument/hover', () => null);
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('runBenchmark lifecycle timings', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-lifecycle-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function options(restart: boolean, output: string): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', cleanServer],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output,
+            restart,
+            verbose: false,
+        };
+    }
+
+    const lifecycleMethods = ['lifecycle/spawn', 'lifecycle/initialize', 'lifecycle/shutdown'];
+
+    it('attributes spawn, initialize and shutdown to every run with restart', async () => {
+        const output = path.join(tmpDir, 'report-restart.json');
+        const report = await runBenchmark(options(true, output));
+
+        expect(report.lifecycle).toBeUndefined();
+        for (const run of report.runs) {
+            expect(run.requests.map((r) => r.method)).toEqual([
+                'lifecycle/spawn',
+                'lifecycle/initialize',
+                'textDocument/hover',
+                'lifecycle/shutdown',
+            ]);
+        }
+        for (const method of lifecycleMethods) {
+            expect(report.summary[method]).toMatchObject({ count: 2, failure_rate: 0 });
+        }
+        const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(written.summary['lifecycle/shutdown'].count).toBe(2);
+    });
+
+    it('keeps lifecycle timings in a separate section in keep alive mode, including the final shutdown', async () => {
+        const output = path.join(tmpDir, 'report-keep-alive.json');
+        const report = await runBenchmark(options(false, output));
+
+        expect(report.lifecycle?.map((t) => t.method)).toEqual(lifecycleMethods);
+        for (const run of report.runs) {
+            expect(run.requests.map((r) => r.method)).toEqual(['textDocument/hover']);
+        }
+        for (const method of lifecycleMethods) {
+            expect(report.summary[method]).toMatchObject({ count: 1, failure_rate: 0 });
+        }
+        // the report rewritten after the final teardown carries the shutdown timing
+        const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(written.lifecycle).toHaveLength(3);
+        expect(written.summary['lifecycle/shutdown'].count).toBe(1);
+    });
+});

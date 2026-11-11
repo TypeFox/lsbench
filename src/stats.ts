@@ -74,26 +74,51 @@ function computeIterationSummary(runs: IterationResult[]) {
     };
 }
 
-/** Build the final report from collected iteration results */
-export function buildReport(opts: BenchOptions, runs: IterationResult[], totalDuration: number): BenchReport {
-    // Group all timings by method across all runs
+/**
+ * Compute per-method stats across all runs plus any keep alive lifecycle timings.
+ * lifecycle/* methods are listed first, the rest in order of first appearance
+ */
+export function summarizeMethods(
+    runs: IterationResult[],
+    lifecycle: RequestTiming[] = [],
+): Record<string, MethodStats> {
+    // group all timings by method
     const byMethod = new Map<string, RequestTiming[]>();
+    const add = (req: RequestTiming) => {
+        const key = req.label ? `${req.method} (${req.label})` : req.method;
+        if (!byMethod.has(key)) {
+            byMethod.set(key, []);
+        }
+        byMethod.get(key)?.push(req);
+    };
+    for (const req of lifecycle) {
+        add(req);
+    }
     for (const run of runs) {
         for (const req of run.requests) {
-            const key = req.label ? `${req.method} (${req.label})` : req.method;
-            if (!byMethod.has(key)) {
-                byMethod.set(key, []);
-            }
-            byMethod.get(key)?.push(req);
+            add(req);
         }
     }
 
     const summary: Record<string, MethodStats> = {};
-    for (const [method, timings] of byMethod) {
-        summary[method] = computeMethodStats(timings);
+    for (const firstPass of [true, false]) {
+        for (const [method, timings] of byMethod) {
+            if (method.startsWith('lifecycle/') === firstPass) {
+                summary[method] = computeMethodStats(timings);
+            }
+        }
     }
+    return summary;
+}
 
-    return {
+/** Build the final report from collected iteration results and optional keep alive lifecycle timings */
+export function buildReport(
+    opts: BenchOptions,
+    runs: IterationResult[],
+    totalDuration: number,
+    lifecycle?: RequestTiming[],
+): BenchReport {
+    const report: BenchReport = {
         server: opts.server,
         workspace: opts.workspace,
         script: opts.script,
@@ -102,10 +127,14 @@ export function buildReport(opts: BenchOptions, runs: IterationResult[], totalDu
         restart_between_iterations: opts.restart,
         timestamp: new Date().toISOString(),
         total_duration_ms: round(totalDuration),
-        summary,
+        summary: summarizeMethods(runs, lifecycle),
         iteration_summary: computeIterationSummary(runs),
         runs,
     };
+    if (lifecycle) {
+        report.lifecycle = lifecycle;
+    }
+    return report;
 }
 
 /** Pretty-print a summary table to the console */

@@ -90,6 +90,11 @@ export interface BenchReport {
         max_ms: number;
     };
     runs: IterationResult[];
+    /**
+     * Keep alive mode only: spawn, initialize and final shutdown timings of the single
+     * server, which belong to no iteration. With restart they are in each run's requests
+     */
+    lifecycle?: RequestTiming[];
     /** Server processes that crashed or exited unexpectedly, absent when none did */
     abnormal_exits?: AbnormalExit[];
 }

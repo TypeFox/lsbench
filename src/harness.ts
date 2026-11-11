@@ -1,7 +1,7 @@
 import * as cp from 'node:child_process';
 import * as path from 'node:path';
 import * as rpc from 'vscode-jsonrpc/node';
-import type { ServerConfig } from './types.js';
+import type { RequestTiming, ServerConfig } from './types.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
 interface ServerCapabilities {
@@ -79,6 +79,8 @@ export class LspHarness {
     private shutdownReplied = false;
     /** set once we signal the process, so the resulting exit is not abnormal */
     private killRequested = false;
+    /** lifecycle timings (spawn, initialize, shutdown) not yet taken by the runner */
+    private lifecycleTimings: RequestTiming[] = [];
 
     constructor(
         private config: ServerConfig,
@@ -115,6 +117,13 @@ export class LspHarness {
         return options;
     }
 
+    /** Drain and return the recorded lifecycle/spawn, lifecycle/initialize and lifecycle/shutdown timings */
+    takeLifecycleTimings(): RequestTiming[] {
+        const result = this.lifecycleTimings;
+        this.lifecycleTimings = [];
+        return result;
+    }
+
     get conn(): rpc.MessageConnection {
         if (!this.connection) {
             throw new Error('LSP connection not initialized');
@@ -127,6 +136,7 @@ export class LspHarness {
         const { command, args = [], env } = this.config;
 
         this.log(`Spawning: ${command} ${args.join(' ')}`);
+        const spawnStart = process.hrtime.bigint();
 
         // spawn from the current working directory, not the workspace: the server
         // command may be a path relative to cwd, while the workspace is communicated
@@ -139,6 +149,7 @@ export class LspHarness {
         this.shutdownReplied = false;
         this.killRequested = false;
         const child = this.process;
+        const spawned = new Promise<void>((resolve) => child.once('spawn', () => resolve()));
         this.exited = new Promise((resolve) => {
             child.once('exit', () => resolve());
             // a process that failed to spawn never emits exit
@@ -264,6 +275,15 @@ export class LspHarness {
             return { applied: false, failureReason: 'lsbench does not apply workspace edits' };
         });
 
+        // time spawn up to the OS reporting the process as started
+        try {
+            await Promise.race([spawned, earlyExit]);
+            this.recordLifecycle('lifecycle/spawn', spawnStart);
+        } catch (err: unknown) {
+            this.recordLifecycle('lifecycle/spawn', spawnStart, err);
+            throw err;
+        }
+
         // Perform LSP initialize
         const workspaceUri = pathToUri(this.workspaceRoot);
 
@@ -280,10 +300,18 @@ export class LspHarness {
         // race the handshake against an early process exit so a server that dies
         // (bad command, missing module, crash on startup) surfaces as a rejection
         // instead of hanging on a response that will never come
-        const result = (await Promise.race([
-            this.connection.sendRequest('initialize', initParams),
-            earlyExit,
-        ])) as InitializeResult;
+        const initStart = process.hrtime.bigint();
+        let result: InitializeResult;
+        try {
+            result = (await Promise.race([
+                this.connection.sendRequest('initialize', initParams),
+                earlyExit,
+            ])) as InitializeResult;
+            this.recordLifecycle('lifecycle/initialize', initStart);
+        } catch (err: unknown) {
+            this.recordLifecycle('lifecycle/initialize', initStart, err);
+            throw err;
+        }
         this._capabilities = result.capabilities;
 
         // Send initialized notification
@@ -304,6 +332,7 @@ export class LspHarness {
         }
 
         if (!this._exit) {
+            const shutdownStart = process.hrtime.bigint();
             const shutdown = connection.sendRequest('shutdown').then(
                 () => {
                     this.shutdownReplied = true;
@@ -312,6 +341,14 @@ export class LspHarness {
                 () => 'failed' as const,
             );
             const outcome = await raceTimeout([shutdown, this.exited.then(() => 'exited' as const)], timeoutMs);
+            // time shutdown from request to reply, or to however it failed
+            const shutdownErrors = {
+                replied: undefined,
+                failed: new Error('shutdown request failed'),
+                exited: new Error('server exited before replying to shutdown'),
+                timeout: new Error(`no shutdown reply within ${timeoutMs}ms`),
+            };
+            this.recordLifecycle('lifecycle/shutdown', shutdownStart, shutdownErrors[outcome]);
             if (outcome === 'replied') {
                 try {
                     await connection.sendNotification('exit');
@@ -343,6 +380,20 @@ export class LspHarness {
         this.diagnosticsListeners.clear();
         this.saveRegistrations.clear();
         return this._exit;
+    }
+
+    /** Record a lifecycle timing from startNs to now, failed when error is given */
+    private recordLifecycle(method: string, startNs: bigint, error?: unknown): void {
+        const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
+        const timing: RequestTiming = {
+            method,
+            duration_ms: Math.round(ms * 1000) / 1000,
+            success: error === undefined,
+        };
+        if (error !== undefined) {
+            timing.error = (error instanceof Error ? error.message : String(error)).split('\n')[0];
+        }
+        this.lifecycleTimings.push(timing);
     }
 
     /** Classify a process exit, signals we sent and a clean exit after shutdown are normal */

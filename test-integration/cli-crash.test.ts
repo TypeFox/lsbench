@@ -65,6 +65,10 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
         );
         expect(result.status).toBe(1);
         expect(result.stderr).toMatch(/exited abnormally during final teardown \(exit code 3\)/);
-        expect(JSON.parse(fs.readFileSync(output, 'utf-8')).runs).toHaveLength(1);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.runs).toHaveLength(1);
+        // the crash at shutdown is kept as a failed lifecycle/shutdown timing
+        expect(report.summary['lifecycle/shutdown']).toMatchObject({ count: 1, failure_rate: 1 });
+        expect(report.summary['lifecycle/initialize']).toMatchObject({ count: 1, failure_rate: 0 });
     });
 });

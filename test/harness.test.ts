@@ -182,6 +182,60 @@ describe('LspHarness.stop', () => {
         });
     });
 
+    it('records spawn, initialize and shutdown timings', async () => {
+        const harness = shutdownHarness('clean');
+        await harness.start();
+        const startTimings = harness.takeLifecycleTimings();
+        expect(startTimings.map((t) => [t.method, t.success])).toEqual([
+            ['lifecycle/spawn', true],
+            ['lifecycle/initialize', true],
+        ]);
+        expect(harness.takeLifecycleTimings()).toEqual([]);
+        await harness.stop();
+        const [shutdown, ...rest] = harness.takeLifecycleTimings();
+        expect(rest).toEqual([]);
+        expect(shutdown).toMatchObject({ method: 'lifecycle/shutdown', success: true });
+        expect(shutdown.duration_ms).toBeGreaterThan(0);
+    });
+
+    it('records a failed shutdown timing when the server never replies', async () => {
+        const crash = shutdownHarness('crash');
+        await crash.start();
+        crash.takeLifecycleTimings();
+        await crash.stop();
+        expect(crash.takeLifecycleTimings()).toEqual([
+            expect.objectContaining({
+                method: 'lifecycle/shutdown',
+                success: false,
+                error: expect.stringMatching(/exited before replying/),
+            }),
+        ]);
+
+        const hang = shutdownHarness('hang');
+        await hang.start();
+        hang.takeLifecycleTimings();
+        await hang.stop(200);
+        expect(hang.takeLifecycleTimings()).toEqual([
+            expect.objectContaining({
+                method: 'lifecycle/shutdown',
+                success: false,
+                error: 'no shutdown reply within 200ms',
+            }),
+        ]);
+    });
+
+    it('records a failed spawn timing when the command does not exist', async () => {
+        const harness = new LspHarness({ command: 'lsbench-no-such-server' }, process.cwd());
+        await expect(harness.start()).rejects.toThrow(/failed to spawn/);
+        expect(harness.takeLifecycleTimings()).toEqual([
+            expect.objectContaining({
+                method: 'lifecycle/spawn',
+                success: false,
+                error: expect.stringMatching(/ENOENT/),
+            }),
+        ]);
+    });
+
     it('force kills a server that ignores SIGTERM', async () => {
         const harness = new LspHarness(
             { command: process.execPath, args: ['--input-type=module', '-e', stubbornServer] },

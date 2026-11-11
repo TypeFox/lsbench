@@ -3,8 +3,16 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BenchContextImpl } from './context.js';
 import { LspHarness } from './harness.js';
-import { buildReport, printSummary } from './stats.js';
-import type { AbnormalExit, ActionScript, BenchOptions, BenchReport, IterationResult, ServerConfig } from './types.js';
+import { buildReport, printSummary, summarizeMethods } from './stats.js';
+import type {
+    AbnormalExit,
+    ActionScript,
+    BenchOptions,
+    BenchReport,
+    IterationResult,
+    RequestTiming,
+    ServerConfig,
+} from './types.js';
 
 /**
  * Resolve a server config from the CLI --server command string.
@@ -86,11 +94,14 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
     let harness: LspHarness | null = null;
     let ctx: BenchContextImpl | null = null;
+    // keep alive spawn, initialize and final shutdown timings, which belong to no iteration
+    let lifecycle: RequestTiming[] | undefined;
 
     // Start server if we're keeping it alive across iterations
     if (!opts.restart) {
         harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose);
         await harness.start();
+        lifecycle = harness.takeLifecycleTimings();
         ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose);
     }
 
@@ -102,6 +113,8 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         process.stdout.write(`  Running iteration ${iterNum}...`);
 
         const iterStart = process.hrtime.bigint();
+        // with restart, this iteration's spawn and initialize timings
+        let startTimings: RequestTiming[] = [];
 
         // If restarting, create fresh harness each time (inside timed section
         // so cold-start benchmarks capture server spawn + initialize time)
@@ -110,6 +123,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose);
             try {
                 await harness.start();
+                startTimings = harness.takeLifecycleTimings();
             } catch (err: unknown) {
                 // without collected runs there is nothing to keep, so fail as before
                 if (runs.length === 0) {
@@ -147,12 +161,14 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // biome-ignore lint/style/noNonNullAssertion: ctx is always set at this point
         const timings = ctx!.collectTimings();
 
+        let run: IterationResult | null = null;
         if (!isWarmup) {
-            runs.push({
+            run = {
                 iteration: i - opts.warmup + 1,
-                requests: timings,
+                requests: [...startTimings, ...timings],
                 total_ms: Math.round(iterMs * 1000) / 1000,
-            });
+            };
+            runs.push(run);
         }
 
         console.log(` ${iterMs.toFixed(0)}ms${isWarmup ? ' (warmup)' : ''}`);
@@ -162,9 +178,11 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             await ctx?.resetDocuments();
         }
 
-        // If restarting, stop the server, keeping collected runs if teardown fails
+        // If restarting, stop the server, keeping collected runs if teardown fails.
+        // shutdown falls outside total_ms but is still attributed to this run
         if (opts.restart && harness) {
             await teardown(harness, during);
+            run?.requests.push(...harness.takeLifecycleTimings());
             harness = null;
             ctx = null;
         }
@@ -175,26 +193,29 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
     // build and write the report before the final teardown, so a server
     // crashing at shutdown cannot lose the collected runs
-    const report = buildReport(opts, runs, totalMs);
+    const report = buildReport(opts, runs, totalMs, lifecycle);
     if (abnormalExits.length > 0) {
         report.abnormal_exits = abnormalExits;
     }
-    printSummary(report);
     if (opts.output) {
         writeReport(report, opts.output);
     }
 
-    // Stop the persistent server, rewriting the report if it exited abnormally
-    if (!opts.restart && harness) {
-        const before = abnormalExits.length;
+    // stop the persistent server, then rewrite the report with the shutdown
+    // timing and any abnormal exit
+    if (!opts.restart && harness && lifecycle) {
         await teardown(harness, 'final teardown');
-        if (abnormalExits.length > before) {
+        lifecycle.push(...harness.takeLifecycleTimings());
+        report.summary = summarizeMethods(runs, lifecycle);
+        if (abnormalExits.length > 0) {
             report.abnormal_exits = abnormalExits;
-            if (opts.output) {
-                writeReport(report, opts.output);
-            }
+        }
+        if (opts.output) {
+            writeReport(report, opts.output);
         }
     }
+
+    printSummary(report);
 
     if (opts.output) {
         console.log(`  Report written to: ${path.resolve(opts.output)}\n`);

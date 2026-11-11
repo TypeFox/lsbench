@@ -255,10 +255,19 @@ See [`examples/init-options.json`](examples/init-options.json) for a sample. For
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate), including the server lifecycle (see below)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
+- **lifecycle**: Keep alive mode only. Spawn, initialize and final shutdown timings of the single server
 - **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero
+
+Server lifecycle timings are recorded like methods:
+
+- `lifecycle/spawn`: spawning the process until the OS reports it started
+- `lifecycle/initialize`: the `initialize` request until its response, which includes the server's own startup
+- `lifecycle/shutdown`: the `shutdown` request until its reply. It fails when the server exits first or does not reply within `--shutdown-timeout`
+
+With `--restart` each run's `requests` start with spawn and initialize and end with shutdown. Spawn and initialize count toward `total_ms`, shutdown happens after the iteration ends and does not. Without `--restart` the single server's timings belong to no iteration, so they go in the top level `lifecycle` list instead, and each appears once in `summary`.
 
 ```json
 {
@@ -298,7 +307,7 @@ This can be leveraged by humans as well as agents to use the tool in a self-docu
 ## Tips
 
 - **Warmup matters**: JIT compilation, caches, etc. need a few runs to stabilize (unless you want cold-start times). Use `--warmup 3-5` for reliable numbers once the server is warmed up.
-- **Cold start**: Use `--restart` to measure initialization time. Without it, the server stays alive across iterations (warm benchmarks).
+- **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks).
 - **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency.
 - **Large workspaces**: The first iteration may be much slower due to indexing. Use enough warmup to account for this.
 - **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace.

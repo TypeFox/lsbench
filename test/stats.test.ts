@@ -156,4 +156,30 @@ describe('buildReport', () => {
         expect(report.iteration_summary.min_ms).toBe(100);
         expect(report.iteration_summary.max_ms).toBe(300);
     });
+    it('lists lifecycle methods first when they come from runs', () => {
+        const runs = [
+            run(1, [
+                timing({ method: 'lifecycle/spawn', duration_ms: 5 }),
+                timing({ method: 'textDocument/hover', duration_ms: 10 }),
+                timing({ method: 'lifecycle/shutdown', duration_ms: 7 }),
+            ]),
+        ];
+        const report = buildReport(opts, runs, 22);
+        expect(Object.keys(report.summary)).toEqual(['lifecycle/spawn', 'lifecycle/shutdown', 'textDocument/hover']);
+        expect(report.lifecycle).toBeUndefined();
+    });
+
+    it('includes keep alive lifecycle timings in the summary and on the report', () => {
+        const lifecycle = [
+            timing({ method: 'lifecycle/spawn', duration_ms: 5 }),
+            timing({ method: 'lifecycle/initialize', duration_ms: 50 }),
+        ];
+        const runs = [run(1, [timing({ duration_ms: 10 })]), run(2, [timing({ duration_ms: 30 })])];
+        const report = buildReport(opts, runs, 100, lifecycle);
+        expect(Object.keys(report.summary)).toEqual(['lifecycle/spawn', 'lifecycle/initialize', 'textDocument/hover']);
+        expect(report.summary['lifecycle/initialize']).toMatchObject({ count: 1, avg_ms: 50 });
+        expect(report.lifecycle).toBe(lifecycle);
+        // lifecycle timings stay out of the iteration totals
+        expect(report.iteration_summary.avg_ms).toBe(20);
+    });
 });

@@ -166,7 +166,8 @@ workspace?".
 
 By default the server is kept alive across iterations (warm benchmark). With
 \`--restart\` a fresh server is spawned inside each timed iteration, so the timing
-captures spawn + initialize (cold start).
+captures spawn + initialize (cold start). Either way, spawn, initialize and
+shutdown are also reported as lifecycle/* methods (see Output format).
 
 ## Quick start
 
@@ -340,8 +341,18 @@ The JSON report (and the printed summary) contains:
   - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms, failure_rate
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
+  - lifecycle          keep alive mode only: spawn, initialize and final shutdown
+                       timings of the single server
   - abnormal_exits     servers that crashed or exited unexpectedly (only when any did,
                        lsbench then exits non zero but still writes the report)
+
+Server lifecycle timings appear in summary like methods:
+  - lifecycle/spawn       spawning the process until the OS reports it started
+  - lifecycle/initialize  initialize request until its response (includes server startup)
+  - lifecycle/shutdown    shutdown request until its reply, failed when the server
+                          exits first or does not reply within --shutdown-timeout
+With --restart they are in each run's requests (shutdown comes after the
+iteration and is not part of total_ms). Without it they go in \`lifecycle\`.
 
 Example \`summary\` entry:
 
@@ -359,7 +370,8 @@ Example \`summary\` entry:
   - Point positions at real symbols in your workspace, or requests return null.
   - Large workspaces: the first iteration is often much slower due to indexing —
     warmup absorbs this.
-  - Cold start: use --restart to measure spawn + initialize time.
+  - Cold start: use --restart to measure spawn + initialize time per iteration
+    (lifecycle/spawn, lifecycle/initialize).
   - Compare servers: run the same script/workspace against different servers
     (e.g. typescript-language-server vs vtsls).
 `;
