@@ -43,6 +43,12 @@ describe('resolveServerConfig', () => {
         const cfg = resolveServerConfig('cmd', undefined, undefined, caps);
         expect(cfg.clientCapabilities).toBe(caps);
     });
+
+    it('passes settings through untouched', () => {
+        const settings = { html: { format: { enable: true } } };
+        const cfg = resolveServerConfig('cmd', undefined, undefined, undefined, settings);
+        expect(cfg.settings).toBe(settings);
+    });
 });
 
 describe('loadActionScript', () => {

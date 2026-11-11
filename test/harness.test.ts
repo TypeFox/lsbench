@@ -3,10 +3,12 @@ import type { DiagnosticsPublish } from 'lsbench';
 import {
     DiagnosticsTracker,
     defaultClientCapabilities,
+    expandSettings,
     LspHarness,
     mergeCapabilities,
     ProgressTracker,
     pathToUri,
+    resolveConfigurationSection,
     uriToPath,
 } from 'lsbench';
 import { describe, expect, it } from 'vitest';
@@ -518,6 +520,168 @@ describe('LspHarness client capabilities', () => {
         } finally {
             await harness.stop();
         }
+    });
+});
+
+describe('expandSettings', () => {
+    it('expands dotted keys into nested objects', () => {
+        expect(expandSettings({ 'html.format.enable': true, 'js/ts': { checkJs: true } })).toEqual({
+            html: { format: { enable: true } },
+            'js/ts': { checkJs: true },
+        });
+    });
+
+    it('expands dotted keys below nested objects', () => {
+        expect(expandSettings({ json: { 'schemas.enable': false } })).toEqual({ json: { schemas: { enable: false } } });
+    });
+
+    it('deep merges dotted keys with nested objects at the same path', () => {
+        expect(
+            expandSettings({
+                html: { format: { enable: true }, suggest: { html5: true } },
+                'html.format': { wrapLineLength: 80 },
+                'html.validate.scripts': false,
+            }),
+        ).toEqual({
+            html: {
+                format: { enable: true, wrapLineLength: 80 },
+                suggest: { html5: true },
+                validate: { scripts: false },
+            },
+        });
+    });
+
+    it('lets a key without dots win a conflict over a dotted one, regardless of order', () => {
+        expect(expandSettings({ a: { b: 'nested' }, 'a.b': 'flat' })).toEqual({ a: { b: 'nested' } });
+        expect(expandSettings({ 'a.b': 'flat', a: { b: 'nested' } })).toEqual({ a: { b: 'nested' } });
+        expect(expandSettings({ 'a.b': 1, a: 2 })).toEqual({ a: 2 });
+    });
+
+    it('does not mutate the input', () => {
+        const settings = { html: { format: { enable: true } }, 'html.format': { wrapLineLength: 80 } };
+        const copy = structuredClone(settings);
+        expandSettings(settings);
+        expect(settings).toEqual(copy);
+    });
+});
+
+describe('resolveConfigurationSection', () => {
+    const settings = expandSettings({
+        html: { format: { enable: true }, suggest: { html5: true } },
+        'js/ts': { implicitProjectConfig: { checkJs: true } },
+        'css.lint': { emptyRules: 'warning' },
+        off: null,
+    });
+
+    it('resolves a dotted path into nested objects', () => {
+        expect(resolveConfigurationSection(settings, 'html')).toEqual({
+            format: { enable: true },
+            suggest: { html5: true },
+        });
+        expect(resolveConfigurationSection(settings, 'html.format')).toEqual({ enable: true });
+        expect(resolveConfigurationSection(settings, 'html.format.enable')).toBe(true);
+    });
+
+    it('resolves section keys without dots as a single key', () => {
+        expect(resolveConfigurationSection(settings, 'js/ts')).toEqual({ implicitProjectConfig: { checkJs: true } });
+        expect(resolveConfigurationSection(settings, 'js/ts.implicitProjectConfig.checkJs')).toBe(true);
+    });
+
+    it('resolves sections given as flat dotted keys, and their parents', () => {
+        expect(resolveConfigurationSection(settings, 'css.lint')).toEqual({ emptyRules: 'warning' });
+        expect(resolveConfigurationSection(settings, 'css')).toEqual({ lint: { emptyRules: 'warning' } });
+    });
+
+    it('returns null for unknown sections', () => {
+        expect(resolveConfigurationSection(settings, 'python')).toBeNull();
+        expect(resolveConfigurationSection(settings, 'html.missing')).toBeNull();
+        expect(resolveConfigurationSection(settings, 'html.format.enable.deeper')).toBeNull();
+        expect(resolveConfigurationSection(settings, 'off')).toBeNull();
+        expect(resolveConfigurationSection(settings, 'toString')).toBeNull();
+    });
+
+    it('returns the whole settings without a section', () => {
+        expect(resolveConfigurationSection(settings)).toBe(settings);
+        expect(resolveConfigurationSection(settings, null)).toBe(settings);
+        expect(resolveConfigurationSection(settings, '')).toBe(settings);
+    });
+});
+
+/**
+ * A fake server that, after initialized, requests the configuration items given in
+ * argv and records any didChangeConfiguration, both reported back by test/dump.
+ */
+const settingsServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const items = JSON.parse(process.argv[1]);
+const dump = { configuration: undefined, didChangeConfiguration: [] };
+conn.onRequest('initialize', () => ({ capabilities: {} }));
+conn.onNotification('initialized', async () => {
+    dump.configuration = await conn.sendRequest('workspace/configuration', { items });
+});
+conn.onNotification('workspace/didChangeConfiguration', (params) => {
+    dump.didChangeConfiguration.push(params);
+});
+conn.onRequest('test/dump', () => dump);
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('LspHarness settings', () => {
+    const items = [{ section: 'html.format' }, { section: 'html' }, { section: 'js/ts' }, { section: 'python' }, {}];
+
+    interface SettingsDump {
+        configuration?: unknown[];
+        didChangeConfiguration: unknown[];
+    }
+
+    async function dumpWith(settings?: Record<string, unknown>): Promise<SettingsDump> {
+        const harness = new LspHarness(
+            {
+                command: process.execPath,
+                args: ['--input-type=module', '-e', settingsServer, JSON.stringify(items)],
+                settings,
+            },
+            process.cwd(),
+        );
+        try {
+            await harness.start();
+            let dump: SettingsDump = { didChangeConfiguration: [] };
+            await expect
+                .poll(async () => {
+                    dump = await harness.sendRequest<SettingsDump>('test/dump', null);
+                    return dump.configuration !== undefined;
+                })
+                .toBe(true);
+            return dump;
+        } finally {
+            await harness.stop();
+        }
+    }
+
+    it('answers an empty object per item and sends no didChangeConfiguration without settings', async () => {
+        const dump = await dumpWith();
+        expect(dump.configuration).toEqual([{}, {}, {}, {}, {}]);
+        expect(dump.didChangeConfiguration).toEqual([]);
+    });
+
+    it('resolves each item section and sends the expanded settings once after initialized', async () => {
+        const expanded = {
+            html: { format: { enable: true }, suggest: { html5: true } },
+            'js/ts': { implicitProjectConfig: { checkJs: true } },
+        };
+        const dump = await dumpWith({
+            'html.format.enable': true,
+            html: { suggest: { html5: true } },
+            'js/ts': { implicitProjectConfig: { checkJs: true } },
+        });
+        expect(dump.configuration).toEqual([{ enable: true }, expanded.html, expanded['js/ts'], null, expanded]);
+        expect(dump.didChangeConfiguration).toEqual([{ settings: expanded }]);
     });
 });
 

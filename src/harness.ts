@@ -666,6 +666,8 @@ export class LspHarness {
     private killRequested = false;
     /** lifecycle timings (spawn, initialize, shutdown) not yet taken by the runner */
     private lifecycleTimings: RequestTiming[] = [];
+    /** ServerConfig.settings with dotted keys expanded, undefined when none are given */
+    private settings: Record<string, unknown> | undefined;
 
     constructor(
         private config: ServerConfig,
@@ -673,6 +675,7 @@ export class LspHarness {
         verbose = false,
     ) {
         this.verbose = verbose;
+        this.settings = config.settings ? expandSettings(config.settings) : undefined;
         this.diagnostics = new DiagnosticsTracker((msg) => this.log(msg));
         this.progress = new ProgressTracker((msg) => this.log(msg));
     }
@@ -810,9 +813,15 @@ export class LspHarness {
             this.log(`[server msg] ${params.message}`);
         });
 
-        // Handle workspace/configuration requests (many servers need this)
-        this.connection.onRequest('workspace/configuration', (params: { items: unknown[] }) => {
-            return params.items.map(() => ({}));
+        // answer workspace/configuration from the settings, or {} per item when none are given
+        this.connection.onRequest('workspace/configuration', (params: { items: Array<{ section?: string }> }) => {
+            const settings = this.settings;
+            return params.items.map((item) => {
+                if (!settings) {
+                    return {};
+                }
+                return resolveConfigurationSection(settings, item.section);
+            });
         });
 
         // acknowledge pull diagnostic refresh requests, we never cache pulled results
@@ -912,6 +921,11 @@ export class LspHarness {
         // Send initialized notification
         this.connection.sendNotification('initialized', {});
         this.log('Server initialized.');
+
+        // push the settings once, for servers that read them from didChangeConfiguration
+        if (this.settings) {
+            this.connection.sendNotification('workspace/didChangeConfiguration', { settings: this.settings });
+        }
     }
 
     /**
@@ -1276,6 +1290,60 @@ export function mergeCapabilities(
         }
     }
     return result;
+}
+
+/**
+ * Expands dotted keys into nested objects at every level, as VS Code does for
+ * settings.json: { "html.format": { "enable": true } } becomes { html: { format: { enable: true } } }.
+ * Keys meeting at the same path deep merge; on a conflict a key without dots wins
+ * over a dotted one. The input is not mutated.
+ */
+export function expandSettings(settings: Record<string, unknown>): Record<string, unknown> {
+    const dotted: Array<[string, unknown]> = [];
+    const plain: Array<[string, unknown]> = [];
+    for (const entry of Object.entries(settings)) {
+        (entry[0].includes('.') ? dotted : plain).push(entry);
+    }
+    // dotted keys go in first so plain keys merge over them
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of [...dotted, ...plain]) {
+        const segments = key.split('.');
+        const last = segments.pop() as string;
+        let target = result;
+        for (const segment of segments) {
+            if (!isPlainObject(target[segment])) {
+                target[segment] = {};
+            }
+            target = target[segment] as Record<string, unknown>;
+        }
+        const expanded = isPlainObject(value) ? expandSettings(value) : value;
+        const current = target[last];
+        if (isPlainObject(current) && isPlainObject(expanded)) {
+            target[last] = mergeCapabilities(current, expanded);
+        } else {
+            target[last] = expanded;
+        }
+    }
+    return result;
+}
+
+/**
+ * Resolves a workspace/configuration section as a dotted path into settings already
+ * expanded by expandSettings. Returns the whole settings for no section, and null for
+ * an unknown one, as the spec allows.
+ */
+export function resolveConfigurationSection(settings: Record<string, unknown>, section?: string | null): unknown {
+    if (!section) {
+        return settings;
+    }
+    let value: unknown = settings;
+    for (const segment of section.split('.')) {
+        if (!isPlainObject(value) || !Object.hasOwn(value, segment)) {
+            return null;
+        }
+        value = value[segment];
+    }
+    return value === undefined ? null : value;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

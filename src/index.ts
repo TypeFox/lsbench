@@ -27,10 +27,12 @@ export {
     DEFAULT_IDLE_QUIET_MS,
     DiagnosticsTracker,
     defaultClientCapabilities,
+    expandSettings,
     LspHarness,
     mergeCapabilities,
     pathToUri,
     ProgressTracker,
+    resolveConfigurationSection,
     uriToPath,
 } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';

@@ -40,6 +40,7 @@ program
     .option('-o, --output <path>', 'Output file for JSON report', '')
     .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
     .option('--client-capabilities-file <path>', 'Path to a JSON file deep merged over the default client capabilities')
+    .option('--settings-file <path>', 'Path to a JSON file with client settings keyed by section')
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
@@ -52,19 +53,13 @@ program
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
         const serverArgs = command.args.slice(1);
-        // load initializationOptions and client capabilities from JSON files if provided
+        // load initializationOptions, client capabilities and settings from JSON files if provided
         const initializationOptions = readJsonFile(rawOpts.initOptionsFile as string | undefined, 'Init options');
-        const clientCapabilities = readJsonFile(
+        const clientCapabilities = readJsonObjectFile(
             rawOpts.clientCapabilitiesFile as string | undefined,
             'Client capabilities',
         );
-        if (
-            clientCapabilities !== undefined &&
-            (typeof clientCapabilities !== 'object' || clientCapabilities === null || Array.isArray(clientCapabilities))
-        ) {
-            console.error('Error: Client capabilities file must contain a JSON object');
-            process.exit(1);
-        }
+        const settings = readJsonObjectFile(rawOpts.settingsFile as string | undefined, 'Settings');
 
         const opts: BenchOptions = {
             server,
@@ -81,7 +76,8 @@ program
             waitIdle: parseWaitIdle(rawOpts.waitIdle as string | boolean | undefined),
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
-            clientCapabilities: clientCapabilities as Record<string, unknown> | undefined,
+            clientCapabilities,
+            settings,
         };
 
         // Validate inputs
@@ -180,6 +176,16 @@ function readJsonFile(file: string | undefined, what: string): unknown {
         console.error(`Error: Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
         process.exit(1);
     }
+}
+
+/** reads a JSON file like readJsonFile, exiting unless it holds a JSON object */
+function readJsonObjectFile(file: string | undefined, what: string): Record<string, unknown> | undefined {
+    const value = readJsonFile(file, what);
+    if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) {
+        console.error(`Error: ${what} file must contain a JSON object`);
+        process.exit(1);
+    }
+    return value as Record<string, unknown> | undefined;
 }
 
 // ── Primer ──────────────────────────────────────────────────────────────────
@@ -428,7 +434,11 @@ Property
 ## Server to client requests
 
 lsbench answers these so a server never stalls waiting on a client:
-  workspace/configuration                 an empty object per item
+  workspace/configuration                 with --settings-file, each item's section resolved as a dotted
+                                          path into the settings, null for unknown sections, the whole
+                                          settings without a section. Dotted keys in the file are expanded
+                                          into nested objects first, as VS Code does. Without settings, an
+                                          empty object per item
   client/(un)registerCapability           accepted, all registrations are tracked (ctx.registrations)
                                           (didChangeWatchedFiles is advertised, but no file events are sent)
   workspace/*/refresh                     acknowledged
@@ -456,6 +466,9 @@ experimental/serverStatus (verbose mode logs progress titles).
           --init-options-file <p>  JSON file with LSP initializationOptions
           --client-capabilities-file <p>
                                    JSON file deep merged over the client capabilities
+          --settings-file <p>      JSON file with client settings keyed by section,
+                                   dotted keys expanded, for workspace/configuration and
+                                   sent once via workspace/didChangeConfiguration
           --restart                Restart the server each iteration (cold start)   (default: false)
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
           --content-modified-retries <n>

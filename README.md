@@ -292,7 +292,7 @@ A timed request whose provider the server advertises neither statically nor thro
 
 lsbench answers requests from the server so it doesn't get stuck waiting on a client:
 
-- `workspace/configuration` returns an empty object per item
+- `workspace/configuration` resolves each item's section against the [settings file](#server-configuration), or returns an empty object per item when no settings are given
 - `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`). lsbench advertises `workspace.didChangeWatchedFiles` with dynamic registration, as VS Code does, so servers leave file watching to the client; their watcher registrations are tracked, but lsbench never sends file events
 - `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) are acknowledged
 - `window/workDoneProgress/create` is acknowledged, the token is tracked for [`waitForIdle`](#waiting-for-idle)
@@ -330,6 +330,7 @@ Options:
   --init-options-file <path>  JSON file with LSP initializationOptions
   --client-capabilities-file <path>
                               JSON file deep merged over the default client capabilities
+  --settings-file <path>      JSON file with client settings keyed by section
   --restart                   Restart the server between iterations
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
   --content-modified-retries <n>
@@ -374,7 +375,23 @@ lsbench "typescript-language-server --stdio" -w ./project -s ./actions.ts \
 { "textDocument": { "completion": { "completionItem": { "snippetSupport": false } } } }
 ```
 
-For full control over `command`, `args`, `env`, `initializationOptions` and `clientCapabilities`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults.
+Give the server client settings with a JSON file keyed by section, like VS Code's `settings.json`:
+
+```bash
+lsbench "vscode-html-language-server --stdio" -w ./project -s ./actions.ts \
+  --settings-file ./settings.json
+```
+
+```json
+{
+  "js/ts": { "implicitProjectConfig": { "checkJs": true } },
+  "html.format": { "enable": true }
+}
+```
+
+Like VS Code, lsbench first expands dotted keys into nested objects, at every level, so the example above becomes `{ "js/ts": { ... }, "html": { "format": { "enable": true } } }`. Keys that meet at the same path deep merge, and on a conflict a key without dots wins over a dotted one. Each `workspace/configuration` item's `section` is then resolved as a dotted path into the expanded settings: `html` gets `{ "format": { "enable": true } }` and `html.format.enable` gets `true`. An unknown section gets `null`, and an item without a section gets the whole settings object. After `initialized`, the expanded settings are also sent once with `workspace/didChangeConfiguration` as `{ settings }`, and again after each restart. Without a settings file, every item gets `{}` and no `didChangeConfiguration` is sent.
+
+For full control over `command`, `args`, `env`, `initializationOptions`, `clientCapabilities` and `settings`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults, and `expandSettings()` shows how settings are expanded.
 
 ## Output format
 

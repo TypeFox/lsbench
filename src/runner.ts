@@ -18,19 +18,20 @@ import type {
 /**
  * Resolve a server config from the CLI --server command string.
  * The argument is always a plain command like "typescript-language-server --stdio";
- * structured options (initializationOptions, clientCapabilities) are supplied separately via CLI flags.
+ * structured options (initializationOptions, clientCapabilities, settings) are supplied separately via CLI flags.
  */
 export function resolveServerConfig(
     serverArg: string,
     extraArgs?: string[],
     initializationOptions?: unknown,
     clientCapabilities?: Record<string, unknown>,
+    settings?: Record<string, unknown>,
 ): ServerConfig {
     const parts = serverArg.split(/\s+/).filter(Boolean);
     const command = parts[0];
     const args = [...parts.slice(1), ...(extraArgs ?? [])];
 
-    return { command, args, initializationOptions, clientCapabilities };
+    return { command, args, initializationOptions, clientCapabilities, settings };
 }
 
 /**
@@ -66,6 +67,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         opts.serverArgs,
         opts.initializationOptions,
         opts.clientCapabilities,
+        opts.settings,
     );
     const actionFn = await loadActionScript(opts.script);
 

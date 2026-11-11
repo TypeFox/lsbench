@@ -13,6 +13,12 @@ export interface ServerConfig {
     initializationOptions?: unknown;
     /** Client capabilities deep merged over the defaults: objects merge recursively, arrays and scalars replace */
     clientCapabilities?: Record<string, unknown>;
+    /**
+     * Client settings keyed by section, answering workspace/configuration and sent once via
+     * workspace/didChangeConfiguration after initialized. Dotted keys ("html.format") are expanded
+     * into nested objects first, as VS Code does
+     */
+    settings?: Record<string, unknown>;
 }
 
 // ── CLI Options ─────────────────────────────────────────────────────────────
@@ -38,6 +44,8 @@ export interface BenchOptions {
     initializationOptions?: unknown;
     /** Client capabilities deep merged over the defaults sent during initialize */
     clientCapabilities?: Record<string, unknown>;
+    /** Client settings keyed by section, see ServerConfig.settings */
+    settings?: Record<string, unknown>;
     /** Verbose logging */
     verbose: boolean;
     /** Milliseconds to wait for a shutdown reply before killing the server (default 5000) */
