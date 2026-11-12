@@ -90,8 +90,16 @@ class FakeHarness {
         return this.tracker.delivery;
     }
 
-    markPullOnly(reason: string): void {
-        this.tracker.markPullOnly(reason);
+    diagnosticsDeliveryTentative(): boolean {
+        return this.tracker.deliveryTentative;
+    }
+
+    markPullOnly(reason: string, tentative = false): void {
+        this.tracker.markPullOnly(reason, tentative);
+    }
+
+    onDiagnosticsDeliveryChange(listener: (delivery: DiagnosticsDelivery) => void): () => void {
+        return this.tracker.onDeliveryChange(listener);
     }
 
     latestPublish(uri: string): DiagnosticsPublish | undefined {
@@ -1577,15 +1585,106 @@ describe('BenchContextImpl', () => {
                 expect(pulls()).toHaveLength(1);
             });
 
-            it('auto: does not learn pull only when a push arrived during the fallback pull', async () => {
+            it('auto: waits for pushes instead when a push arrived during the fallback pull', async () => {
                 servePulls(async () => {
                     harness.setDiagnostics(uri, []);
                     return full('1');
                 });
                 await ctx.openDocument('sample.ts');
                 const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
-                expect(result.source).toBe('pull');
+                expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
                 expect(harness.diagnosticsDelivery()).toBe('push');
+                // the abandoned pull records no timing, the push is timed from didOpen
+                expect(ctx.collectTimings()).toMatchObject([{ method: 'diagnostics/open', success: true }]);
+            });
+
+            it('auto: rust-analyzer cold start, empty pull early, push later, no wait times out', async () => {
+                // advertises diagnosticProvider, answers pulls with an empty placeholder while
+                // loading, and starts pushing once loaded
+                servePulls(full('1'));
+                await ctx.openDocument('sample.ts');
+                const opened = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(opened).toMatchObject({ timedOut: false, source: 'pull', diagnostics: [], tentative: true });
+                // the empty pull does not settle delivery as pull
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                expect(harness.tracker.deliveryTentative).toBe(true);
+                expect(harness.logs.some((l) => l.includes('tentatively pull only'))).toBe(true);
+
+                // the edit's wait pulls at once and keeps re-pulling the placeholder, until the
+                // server pushes: the wait switches to pushes instead of running into its timeout
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const start = Date.now();
+                const edited = ctx.waitForDiagnostics('sample.ts', {
+                    timeout: 5000,
+                    pullAfterMs: 10,
+                    until: (d) => d.length > 0,
+                });
+                await new Promise((r) => setTimeout(r, 60));
+                expect(pulls().length).toBeGreaterThan(1);
+                harness.setDiagnostics(uri, [diag('expected i32, found String')], 2);
+                const editResult = await edited;
+                expect(Date.now() - start).toBeLessThan(1000);
+                expect(messages(editResult)).toEqual(['expected i32, found String']);
+                expect(editResult).toMatchObject({ timedOut: false, source: 'push', pulls: 0, publishes: 1 });
+                expect(editResult.tentative).toBeUndefined();
+                expect(harness.diagnosticsDelivery()).toBe('push');
+                expect(harness.tracker.deliveryTentative).toBe(false);
+                const pullCount = pulls().length;
+
+                // the fix edit is waited on for pushes
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const fixed = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                await new Promise((r) => setTimeout(r, 20));
+                harness.setDiagnostics(uri, [], 3);
+                expect(await fixed).toMatchObject({ timedOut: false, source: 'push', diagnostics: [] });
+                expect(pulls()).toHaveLength(pullCount);
+
+                const timings = ctx.collectTimings();
+                expect(timings).toMatchObject([
+                    { method: 'diagnostics/pull/open', success: true, result: 'empty', tentative: true },
+                    { method: 'diagnostics/edit', success: true, result: 'ok' },
+                    { method: 'diagnostics/edit', success: true, result: 'empty' },
+                ]);
+                expect(timings[1].tentative).toBeUndefined();
+                expect(timings.some((t) => t.result === 'timeout')).toBe(false);
+            });
+
+            it('auto: a push during a pull the server holds switches the wait to pushes', async () => {
+                servePulls(full('1'));
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(harness.tracker.deliveryTentative).toBe(true);
+                // the server holds the next pull until it is done loading, and pushes first
+                harness.respond = () => new Promise(() => {});
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const edited = ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                await new Promise((r) => setTimeout(r, 20));
+                expect(pulls()).toHaveLength(2);
+                harness.setDiagnostics(uri, [diag('pushed')], 2);
+                const result = await edited;
+                expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
+                expect(messages(result)).toEqual(['pushed']);
+                expect(ctx.collectTimings()).toMatchObject([
+                    { method: 'diagnostics/pull/open', tentative: true },
+                    { method: 'diagnostics/edit', success: true },
+                ]);
+            });
+
+            it('auto: a pull returning diagnostics settles a tentative pull only server', async () => {
+                servePulls(full('1'), full('2', diag('a')));
+                await ctx.openDocument('sample.ts');
+                const opened = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(opened.tentative).toBe(true);
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const edited = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(edited).toMatchObject({ source: 'pull', pulls: 1 });
+                expect(edited.tentative).toBeUndefined();
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                expect(harness.tracker.deliveryTentative).toBe(false);
+                expect(harness.logs.some((l) => l.includes('only answers pulls'))).toBe(true);
+                const timings = ctx.collectTimings();
+                expect(timings[0].tentative).toBe(true);
+                expect(timings[1].tentative).toBeUndefined();
             });
 
             it('auto: does not learn pull only from a pull that timed out', async () => {
@@ -1664,6 +1763,9 @@ describe('BenchContextImpl', () => {
                 const result = await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
                 expect(Date.now() - start).toBeLessThan(100);
                 expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
+                // pull mode learns nothing, so nothing is tentative
+                expect(result.tentative).toBeUndefined();
+                expect(harness.diagnosticsDelivery()).toBe('unknown');
                 expect(ctx.collectTimings()).toMatchObject([{ method: 'diagnostics/pull/edit', result: 'ok' }]);
             });
 

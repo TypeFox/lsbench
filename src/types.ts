@@ -94,6 +94,13 @@ export interface RequestTiming {
     retries?: number;
     /** Diagnostics waits only: how many diagnostics the wait resolved with */
     diagnostics?: number;
+    /**
+     * Auto mode diagnostics pulls only: true when the server's delivery was not settled when
+     * the pull resolved (unknown, or pull learned only from empty pulls). A server that is
+     * still loading may answer pulls with an empty placeholder and push later, so such a
+     * result may not measure real diagnostics. Absent otherwise
+     */
+    tentative?: true;
 }
 
 export interface IterationResult {
@@ -222,7 +229,9 @@ export interface WaitForDiagnosticsOptions {
      * `pull` sends textDocument/diagnostic. `auto` waits for pushes unless the server
      * advertises diagnosticProvider and has not been seen pushing: an unknown server is
      * pulled when it sent no publish within `pullAfterMs`, one learned to be pull only is
-     * pulled at once. Any publish from the server makes later auto waits wait for pushes
+     * pulled at once. Any publish for an opened document makes later auto waits wait for
+     * pushes, and switches an auto wait that is pulling to wait for pushes for the rest of
+     * its timeout
      */
     mode?: DiagnosticsMode;
     /**
@@ -253,6 +262,11 @@ export interface WaitForDiagnosticsResult {
     source: 'push' | 'pull';
     /** how many textDocument/diagnostic requests the wait sent, 0 for push */
     pulls: number;
+    /**
+     * auto mode pulls only: true when the server's delivery was not settled, the pulled
+     * diagnostics may be a placeholder of a server still loading, see RequestTiming.tentative
+     */
+    tentative?: true;
     /**
      * Milliseconds from the latest didOpen or didChange of the document to the resolving
      * publish (or to the timeout). With `settleMs` that is the latest publish before the

@@ -849,6 +849,43 @@ describe('DiagnosticsTracker', () => {
         expect(tracker.delivery).toBe('unknown');
     });
 
+    it('learns pull only tentatively from empty pulls, a push or a non tentative learn overturns it', () => {
+        const logs: string[] = [];
+        const changes: string[] = [];
+        const tracker = new DiagnosticsTracker((msg) => logs.push(msg));
+        const unsubscribe = tracker.onDeliveryChange((delivery) => changes.push(delivery));
+        expect(tracker.deliveryTentative).toBe(false);
+        tracker.markPullOnly('empty pull', true);
+        expect(tracker.delivery).toBe('pull');
+        expect(tracker.deliveryTentative).toBe(true);
+        // a further empty pull changes nothing and logs nothing
+        tracker.markPullOnly('empty pull', true);
+        expect(logs.filter((l) => l.includes('tentatively pull only'))).toHaveLength(1);
+        // a pull with diagnostics settles it
+        tracker.markPullOnly('pull with diagnostics');
+        expect(tracker.delivery).toBe('pull');
+        expect(tracker.deliveryTentative).toBe(false);
+        expect(logs.some((l) => l.includes('only answers pulls'))).toBe(true);
+        // a settled pull is not made tentative again
+        tracker.markPullOnly('empty pull', true);
+        expect(tracker.deliveryTentative).toBe(false);
+        expect(changes).toEqual(['pull']);
+
+        tracker.clear();
+        expect(changes).toEqual(['pull', 'unknown']);
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.receive({ uri, diagnostics: [] });
+        expect(tracker.delivery).toBe('push');
+        expect(tracker.deliveryTentative).toBe(false);
+        expect(changes).toEqual(['pull', 'unknown', 'pull', 'push']);
+        // no change, no call
+        tracker.receive({ uri, diagnostics: [] });
+        unsubscribe();
+        tracker.clear();
+        expect(changes).toEqual(['pull', 'unknown', 'pull', 'push']);
+    });
+
     it('learns push only from publishes for documents the client opened', () => {
         const logs: string[] = [];
         const statuses: PublishStatus[] = [];

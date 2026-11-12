@@ -6,6 +6,7 @@ import {
     type DiagnosticsPublish,
     type DocumentSyncState,
     type LspHarness,
+    type PublishWaitResult,
     pathToUri,
 } from './harness.js';
 import type {
@@ -43,8 +44,11 @@ interface DocumentDiagnosticReport {
     items?: Diagnostic[];
 }
 
-/** How a pulling wait ended: resolved, failed, ran out of time, or not sent at all */
-type PullOutcome = 'ok' | 'error' | 'timeout' | 'skipped';
+/**
+ * How a pulling wait ended: resolved, failed, ran out of time, not sent at all, or (auto
+ * mode) stopped because the server was learned to push meanwhile
+ */
+type PullOutcome = 'ok' | 'error' | 'timeout' | 'skipped' | 'push';
 
 /** The latest pulled report of a document, with unchanged reports resolved */
 interface PulledDiagnostics {
@@ -497,7 +501,10 @@ export class BenchContextImpl implements BenchContext {
      * a server seen pushing is waited on for pushes, a pull only one is pulled at once, and
      * an unknown one is waited on for a push up to `pullAfterMs` (half the timeout when that
      * is not shorter), then pulled. A pull resolving without any push in the meantime marks
-     * the server pull only
+     * the server pull only, but only tentatively when it returned no diagnostics: a server
+     * still loading may answer with an empty placeholder and push later, so such pulls are
+     * marked `tentative` until a pull returns diagnostics. A publish teaching push while a
+     * pull is in flight switches the wait to waiting for pushes for the rest of its timeout
      */
     async waitForDiagnostics(
         relativePath: string,
@@ -518,50 +525,61 @@ export class BenchContextImpl implements BenchContext {
 
         // auto mode pulls only from a server that advertises diagnosticProvider, depending on
         // what the harness learned about it: never once it pushed, at once when it only answers
-        // pulls, and after a grace period without any publish while unknown
-        const abort = new AbortController();
-        let graceTimer: NodeJS.Timeout | undefined;
-        let graceMs = 0;
-        if (mode === 'auto' && this.harness.capabilities !== null && this.supports('textDocument/diagnostic')) {
-            const delivery = this.harness.diagnosticsDelivery();
-            if (delivery === 'pull') {
-                return (await this.pullDiagnostics(relativePath, uri, timeout, until)).result;
+        // pulls, and after a grace period without any publish while unknown. When the server is
+        // learned to push while a pull is in flight, the wait goes on waiting for pushes
+        const auto = mode === 'auto' && this.harness.capabilities !== null && this.supports('textDocument/diagnostic');
+        const remainingMs = () => Math.max(0, timeout - Number(process.hrtime.bigint() - calledAt) / 1_000_000);
+        let pullReason: string | undefined;
+        let wait: PublishWaitResult;
+        for (;;) {
+            const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
+            if (pullReason === undefined && delivery === 'pull') {
+                pullReason = `a pull for ${relativePath}`;
             }
+            if (pullReason !== undefined && delivery !== 'push') {
+                const pulled = await this.pullDiagnostics(relativePath, uri, remainingMs(), until, pullReason);
+                if (pulled.outcome !== 'push') {
+                    return pulled.result;
+                }
+                pullReason = undefined;
+                continue;
+            }
+            const abort = new AbortController();
+            let graceTimer: NodeJS.Timeout | undefined;
+            let graceMs = 0;
             if (delivery === 'unknown') {
                 graceMs = timeout <= pullAfterMs ? timeout / 2 : pullAfterMs;
-                graceTimer = setTimeout(() => {
-                    if (this.harness.diagnosticsDelivery() === 'unknown') {
-                        abort.abort();
-                    }
-                }, graceMs);
+                graceTimer = setTimeout(
+                    () => {
+                        if (this.harness.diagnosticsDelivery() === 'unknown') {
+                            abort.abort();
+                        }
+                    },
+                    Math.min(graceMs, remainingMs()),
+                );
             }
-        }
-
-        const after = this.harness.currentPublishSeq();
-        const { publish, publishes, timedOut, aborted } = await this.harness.waitForPublishes(
-            uri,
-            (p) => {
-                const doc = this.harness.documentState(uri);
-                return doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
-            },
-            {
-                timeoutMs: timeout,
-                signal: abort.signal,
-                ...(until ? { until: (p: DiagnosticsPublish) => until(p.diagnostics) } : {}),
-                ...(settleMs !== undefined ? { settleMs } : {}),
-            },
-        );
-        clearTimeout(graceTimer);
-        if (aborted) {
+            const after = this.harness.currentPublishSeq();
+            wait = await this.harness.waitForPublishes(
+                uri,
+                (p) => {
+                    const doc = this.harness.documentState(uri);
+                    return doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
+                },
+                {
+                    timeoutMs: remainingMs(),
+                    signal: abort.signal,
+                    ...(until ? { until: (p: DiagnosticsPublish) => until(p.diagnostics) } : {}),
+                    ...(settleMs !== undefined ? { settleMs } : {}),
+                },
+            );
+            clearTimeout(graceTimer);
+            if (!wait.aborted) {
+                break;
+            }
             this.log(`No publish from the server within ${graceMs}ms, pulling diagnostics for ${relativePath}`);
-            const elapsedMs = Number(process.hrtime.bigint() - calledAt) / 1_000_000;
-            const pulled = await this.pullDiagnostics(relativePath, uri, Math.max(0, timeout - elapsedMs), until);
-            // ignored by the harness when a push arrived in the meantime
-            if (pulled.outcome === 'ok') {
-                this.harness.markPullOnly(`a pull for ${relativePath} resolved after ${graceMs}ms without a push`);
-            }
-            return pulled.result;
+            pullReason = `a pull for ${relativePath} resolved after ${graceMs}ms without a push`;
         }
+        const { publish, publishes, timedOut } = wait;
 
         // only the timer firing means a timeout, elapsed time is never compared to it
         const endedAt = publish && !timedOut ? publish.receivedAt : process.hrtime.bigint();
@@ -601,13 +619,19 @@ export class BenchContextImpl implements BenchContext {
      * like a failing `until`, other rejections end the wait as an error. The timing is
      * labeled `diagnostics/pull/open`, `diagnostics/pull/edit` or `diagnostics/pull/wait`
      * and runs from the first request to the resolving response, since a pull has no server
-     * debounce and is not comparable with time to a push
+     * debounce and is not comparable with time to a push.
+     *
+     * An auto mode pull passes `learnReason`: a resolving pull teaches the harness the server
+     * is pull only, tentatively when it returned no diagnostics, and the timing is marked
+     * tentative while that is not settled. A publish teaching push during the pull stops it
+     * with outcome `push` and records nothing, the caller then waits for pushes
      */
     private async pullDiagnostics(
         relativePath: string,
         uri: string,
         timeoutMs: number,
         until: ((diagnostics: Diagnostic[]) => boolean) | undefined,
+        learnReason?: string,
     ): Promise<{ result: WaitForDiagnosticsResult; outcome: PullOutcome }> {
         this._lastError = undefined;
         if (this.skipUnsupported && !this.supports('textDocument/diagnostic')) {
@@ -630,16 +654,33 @@ export class BenchContextImpl implements BenchContext {
         let outcome: Exclude<PullOutcome, 'skipped'> = 'timeout';
         let endedAt: bigint | undefined;
         let backoffMs = PULL_BACKOFF_MS;
+        // in auto mode, a publish teaching push cuts the pending request or backoff short
+        let pushed = false;
+        let onPushed = () => {};
+        const pushedSignal = new Promise<null>((resolve) => {
+            onPushed = () => resolve(null);
+        });
+        const unsubscribe =
+            learnReason === undefined
+                ? () => {}
+                : this.harness.onDiagnosticsDeliveryChange((delivery) => {
+                      if (delivery === 'push') {
+                          pushed = true;
+                          onPushed();
+                      }
+                  });
         while (remainingMs() > 0) {
             const previous = this.pulled.get(uri);
             pulls++;
-            const response = await raceDeadline(
-                this.harness.sendRequest<DocumentDiagnosticReport | null>('textDocument/diagnostic', {
-                    textDocument: { uri },
-                    ...(previous?.resultId !== undefined ? { previousResultId: previous.resultId } : {}),
-                }),
-                remainingMs(),
-            );
+            const request = this.harness.sendRequest<DocumentDiagnosticReport | null>('textDocument/diagnostic', {
+                textDocument: { uri },
+                ...(previous?.resultId !== undefined ? { previousResultId: previous.resultId } : {}),
+            });
+            const response = await raceDeadline(Promise.race([request, pushedSignal]), remainingMs());
+            if (pushed) {
+                outcome = 'push';
+                break;
+            }
             if (!response) {
                 break;
             }
@@ -659,8 +700,24 @@ export class BenchContextImpl implements BenchContext {
                     break;
                 }
             }
-            await this.sleep(Math.max(0, Math.min(backoffMs, remainingMs())));
+            await Promise.race([this.sleep(Math.max(0, Math.min(backoffMs, remainingMs()))), pushedSignal]);
+            if (pushed) {
+                outcome = 'push';
+                break;
+            }
             backoffMs = Math.min(backoffMs * 2, PULL_MAX_BACKOFF_MS);
+        }
+        unsubscribe();
+        if (outcome === 'push') {
+            this.log(
+                `Server pushed diagnostics while pulling them for ${relativePath} (${pulls} pulls), ` +
+                    'waiting for pushes instead',
+            );
+            const diagnostics = this.harness.getDiagnostics(uri);
+            return {
+                result: { diagnostics, timedOut: false, publishes: 0, source: 'pull', pulls, ms: 0 },
+                outcome,
+            };
         }
 
         const timedOut = outcome === 'timeout';
@@ -668,6 +725,12 @@ export class BenchContextImpl implements BenchContext {
             endedAt = process.hrtime.bigint();
         }
         const result = diagnostics ?? this.diagnosticsFor(uri);
+        // an empty answer may be the placeholder of a server still loading, it does not settle pull
+        let tentative = false;
+        if (learnReason !== undefined && outcome === 'ok') {
+            this.harness.markPullOnly(learnReason, result.length === 0);
+            tentative = this.harness.diagnosticsDelivery() !== 'pull' || this.harness.diagnosticsDeliveryTentative();
+        }
         const method = pullTimingMethod(this.harness.documentState(uri));
         const ms = Number(endedAt - startedAt) / 1_000_000; // nanoseconds → milliseconds
         const timing: RequestTiming = {
@@ -677,18 +740,30 @@ export class BenchContextImpl implements BenchContext {
             result: outcome === 'ok' ? classifyResult(result) : outcome,
             diagnostics: result.length,
         };
+        if (tentative) {
+            timing.tentative = true;
+        }
         if (failure) {
             timing.error = failure.message;
             this._lastError = failure;
         }
         this.timings.push(timing);
         this.log(
-            `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
+            `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}` +
+                `${tentative ? ' (tentative, the server may still push)' : ''}, ` +
                 `${result.length} diagnostics, ${pulls} pulls${failure ? ` ERROR: ${failure.message}` : ''}`,
         );
 
         return {
-            result: { diagnostics: result, timedOut, publishes: 0, source: 'pull', pulls, ms: timing.duration_ms },
+            result: {
+                diagnostics: result,
+                timedOut,
+                publishes: 0,
+                source: 'pull',
+                pulls,
+                ms: timing.duration_ms,
+                ...(tentative ? { tentative: true as const } : {}),
+            },
             outcome,
         };
     }
@@ -849,7 +924,7 @@ async function raceDeadline<T>(
 ): Promise<{ value: T } | { error: unknown } | undefined> {
     let timer: NodeJS.Timeout | undefined;
     const deadline = new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), ms);
+        timer = setTimeout(() => resolve(undefined), Math.max(0, ms));
     });
     try {
         return await Promise.race([

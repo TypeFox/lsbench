@@ -49,9 +49,11 @@ export const CLOSE_PUBLISH_WINDOW_MS = 1000;
 export type ClosePublishBehavior = 'unknown' | 'publishes' | 'silent';
 
 /**
- * How a tracker has learned its server delivers diagnostics: `push` once any publish arrived,
- * `pull` once a pull fell back to after waiting for a push resolved without one, `unknown`
- * until either happened. A publish always flips it to `push`
+ * How a tracker has learned its server delivers diagnostics: `push` once a publish for an
+ * opened document arrived, `pull` once an auto mode pull resolved without a push in the
+ * meantime, `unknown` until either happened. A pull that resolved empty only learns `pull`
+ * tentatively (see DiagnosticsTracker.deliveryTentative), since a server still loading may
+ * answer pulls with an empty placeholder and push later. A publish always flips it to `push`
  */
 export type DiagnosticsDelivery = 'unknown' | 'push' | 'pull';
 
@@ -149,6 +151,8 @@ export class DiagnosticsTracker {
     private seq = 0;
     private _closeBehavior: ClosePublishBehavior = 'unknown';
     private _delivery: DiagnosticsDelivery = 'unknown';
+    private _deliveryTentative = false;
+    private deliveryListeners = new Set<(delivery: DiagnosticsDelivery) => void>();
 
     constructor(
         private log: (msg: string) => void = () => {},
@@ -241,7 +245,7 @@ export class DiagnosticsTracker {
         // A stale one (outdated version) counts, a held close window candidate does not
         if (this._delivery !== 'push' && (status === 'current' || status === 'closed' || status === 'stale')) {
             this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
-            this._delivery = 'push';
+            this.setDelivery('push', false);
         }
         this.onPublish(publish, status);
         if (tentative && doc) {
@@ -262,13 +266,38 @@ export class DiagnosticsTracker {
         return this._delivery;
     }
 
-    /** Learn that the server answers pulls but does not push, ignored once a publish was seen */
-    markPullOnly(reason: string): void {
-        if (this._delivery !== 'unknown') {
+    /**
+     * Whether `pull` was learned only from empty pulls, which a server still loading may
+     * answer with a placeholder before it starts pushing. False for `push` and `unknown`
+     */
+    get deliveryTentative(): boolean {
+        return this._deliveryTentative;
+    }
+
+    /**
+     * Learn that the server answers pulls but does not push, ignored once a publish was seen.
+     * A tentative learn (from an empty pull) does not settle it: a later non tentative one
+     * does, and a publish still flips it to `push` either way
+     */
+    markPullOnly(reason: string, tentative = false): void {
+        if (this._delivery === 'push' || (this._delivery === 'pull' && (tentative || !this._deliveryTentative))) {
             return;
         }
-        this._delivery = 'pull';
-        this.log(`Server only answers pulls (${reason}), auto waits pull at once`);
+        if (tentative) {
+            this.log(
+                `Server answered a pull with no diagnostics (${reason}), tentatively pull only: ` +
+                    'auto waits pull at once, pulls are marked tentative until the server pushes or returns diagnostics',
+            );
+        } else {
+            this.log(`Server only answers pulls (${reason}), auto waits pull at once`);
+        }
+        this.setDelivery('pull', tentative);
+    }
+
+    /** Call `listener` whenever the learned delivery changes, returns a function removing it */
+    onDeliveryChange(listener: (delivery: DiagnosticsDelivery) => void): () => void {
+        this.deliveryListeners.add(listener);
+        return () => this.deliveryListeners.delete(listener);
     }
 
     /** The state of a document, from the notifications sent for it */
@@ -407,10 +436,21 @@ export class DiagnosticsTracker {
             clearTimeout(doc.closeTimer);
         }
         this._closeBehavior = 'unknown';
-        this._delivery = 'unknown';
+        this.setDelivery('unknown', false);
         this.documents.clear();
         this.latest.clear();
         this.listeners.clear();
+    }
+
+    private setDelivery(delivery: DiagnosticsDelivery, tentative: boolean): void {
+        const changed = delivery !== this._delivery;
+        this._delivery = delivery;
+        this._deliveryTentative = tentative;
+        if (changed) {
+            for (const listener of this.deliveryListeners) {
+                listener(delivery);
+            }
+        }
     }
 
     /** Make a publish the latest for its URI and hand it to the listeners */
@@ -1087,9 +1127,19 @@ export class LspHarness {
         return this.diagnostics.delivery;
     }
 
+    /** Whether `pull` delivery was learned only tentatively, see DiagnosticsTracker.deliveryTentative */
+    diagnosticsDeliveryTentative(): boolean {
+        return this.diagnostics.deliveryTentative;
+    }
+
     /** Learn that the server answers pulls but does not push, see DiagnosticsTracker.markPullOnly */
-    markPullOnly(reason: string): void {
-        this.diagnostics.markPullOnly(reason);
+    markPullOnly(reason: string, tentative = false): void {
+        this.diagnostics.markPullOnly(reason, tentative);
+    }
+
+    /** Call `listener` whenever the learned delivery changes, see DiagnosticsTracker.onDeliveryChange */
+    onDiagnosticsDeliveryChange(listener: (delivery: DiagnosticsDelivery) => void): () => void {
+        return this.diagnostics.onDeliveryChange(listener);
     }
 
     /** The current publish sequence number, a publish received after now has a larger seq */
