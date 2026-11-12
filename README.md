@@ -168,7 +168,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 
 | Method | Description |
 | --- | --- |
-| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version, or pull them, and time it (`options` is `{ timeout, until, settleMs, mode, pullAfterMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }`, see [Waiting for diagnostics](#waiting-for-diagnostics) |
+| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version, or pull them, and time it (`options` is `{ timeout, until, settleMs, mode, pullAfterMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }`, plus `tentative: true` for an auto mode pull of a server whose delivery is not settled, see [Waiting for diagnostics](#waiting-for-diagnostics) |
 | `waitForIdle(options?)` | Wait until the server finished background work such as loading the workspace (`options` is `{ timeout, quietMs }` or a bare timeout, default 30000 ms). Resolves with `{ idle, timedOut, ms }`, see [Waiting for idle](#waiting-for-idle) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
@@ -210,7 +210,7 @@ Publishes received while the document was closed, and publishes for other versio
 - if another publish for the document arrives before the window ends, it supersedes the candidate, which was the close publish
 - otherwise the candidate is accepted when the window ends, and `ms` still counts to its own receipt
 
-lsbench learns per server process which case applies. A publish for a closed document, or a superseded candidate, shows that the server publishes on close, and from then on such a publish is credited to the closed generation at once. A candidate accepted at the end of the window, or a close with no publish within it, shows that it does not, and the rule is turned off. A server that never publishes on close thus pays the window at most once. Verbose mode logs candidates and what was learned. For a document that is not open, the wait resolves on the next publish.
+lsbench learns per server process which case applies. A publish for a closed document, or a superseded candidate, shows that the server publishes on close, and from then on such a publish is credited to the closed generation at once. A candidate accepted at the end of the window, or a close with no publish within it, shows that it does not, and the rule is turned off. A server that never publishes on close thus pays the window at most once. Some servers clear a closed document more than once (rust-analyzer sends two or three empty publishes), so once the server is known to publish on close, a further empty, unversioned publish within the window is credited to the close as well when the server sends versions with its publishes for open documents, and held as a candidate otherwise. Such a candidate accepted at the end of the window does not turn the rule off. Verbose mode logs candidates and what was learned. For a document that is not open, the wait resolves on the next publish.
 
 The first matching publish is not always the final word. rust-analyzer and zls publish an empty syntax pass before the semantic diagnostics, and some servers publish in bursts. Two options shape what resolves the wait:
 
@@ -246,17 +246,17 @@ The timing's `duration_ms` is `ms`, and `diagnostics` holds the diagnostic count
 Some servers advertise `diagnosticProvider` and never push (ts7, for example), so a push wait would always run into its timeout. The `mode` option picks where diagnostics come from:
 
 - `auto` (default): a server without `diagnosticProvider` (neither static nor dynamically registered) is only ever waited on for pushes. For one with it, lsbench learns per server process how it delivers diagnostics:
-  - unknown, no publish seen yet: wait for a push up to `pullAfterMs` (default 1000 ms), then pull. When `timeout` is not longer than `pullAfterMs`, pulling starts at half the timeout. Any publish from the server in the meantime, for any document, keeps the wait on push
-  - push: once the server sent any `publishDiagnostics`, for any document, auto waits only wait for pushes. Servers that push and also advertise `diagnosticProvider`, such as rust-analyzer, are thus measured by their pushes even when their debounce is longer than the grace period
-  - pull only: once an auto wait fell back to pulling and the pull resolved with no publish arriving in the meantime, later auto waits pull at once. A later publish flips the server back to push
+  - unknown, no push seen yet: wait for a push up to `pullAfterMs` (default 1000 ms), then pull. When `timeout` is not longer than `pullAfterMs`, pulling starts at half the timeout
+  - push: once the server published for a document the client opened (a `current`, `closed` or `stale` publish, see [verbose output](#verbose-output)), auto waits only wait for pushes. Publishes for documents never opened, such as ts7 clearing `tsconfig.json`, and close window candidates teach nothing
+  - pull only: once an auto wait fell back to pulling and the pull resolved with no push in the meantime, later auto waits pull at once. A pull that returned no diagnostics learns this only tentatively, since a server still loading (a cold rust-analyzer, for example) may answer with an empty placeholder and push later. Until a pull returns diagnostics, pulled timings and results are marked `tentative: true`, and verbose mode adds `(tentative, the server may still push)`
 
-  Verbose mode logs what was learned
+  A push flips the server to push at any time. A pull in flight then stops, records no timing, and the wait goes on waiting for pushes for the rest of its timeout, so a server that both pushes and advertises `diagnosticProvider`, such as rust-analyzer, is measured by its pushes from its first publish on. Before that, it may be measured by tentative pulls: wait for idle first (see [warmup and readiness](#warmup-and-readiness)), or pass `mode: "push"`. Verbose mode logs what was learned
 - `push`: only wait for pushes
 - `pull`: send `textDocument/diagnostic` at once. A server without `diagnosticProvider` gets the wait recorded as `skipped`, like other unsupported requests
 
 A pull resolves on the first report passing `until` (any report without it). Otherwise lsbench pulls again with a backoff from 25 ms doubling up to 250 ms, until `until` passes or the remaining `timeout` runs out. Each pull sends the `resultId` of the previous report for the document as `previousResultId`, and an `unchanged` report resolves to the diagnostics of that previous report. Closing the document forgets its `resultId`. A request rejected with ContentModified or ServerCancelled is pulled again, any other error ends the wait with `result: "error"`. `settleMs` does not apply, a report is the server's complete answer.
 
-The result's `source` is `push` or `pull`, telling which one resolved the wait, and `pulls` counts the requests sent (0 for push, `publishes` is 0 for pull). A pull has no server debounce, so its timing is not comparable with time to a push. It is recorded under its own methods, `diagnostics/pull/open`, `diagnostics/pull/edit` and `diagnostics/pull/wait`, and its `ms` runs from the first pull request to the resolving response, re-pulls and backoff included. The grace period of `auto` mode is not part of it, and the first auto wait on a pull only server pays it once. `codeAction` codes match against pulled diagnostics when the server never published for the document.
+The result's `source` is `push` or `pull`, telling which one resolved the wait, and `pulls` counts the requests sent (0 for push, `publishes` is 0 for pull). A pull has no server debounce, so its timing is not comparable with time to a push. It is recorded under its own methods, `diagnostics/pull/open`, `diagnostics/pull/edit` and `diagnostics/pull/wait`, and its `ms` runs from the first pull request to the resolving response, re-pulls and backoff included. The grace period of `auto` mode is not part of it, and the first auto wait on a pull only server pays it once. A `tentative` pull may have measured a placeholder rather than real diagnostics, so leave such timings out or wait for idle first. `codeAction` codes match against pulled diagnostics when the server never published for the document.
 
 ### Waiting for idle
 
@@ -313,6 +313,15 @@ addRegisteredLanguage('mylanguage', '.dsl');
 
 This will ensure that opening a document with the extension `.dsl` will have an associated language ID of `mylanguage`, to invoke the correct language server.
 
+`detectLanguageId(path)` returns the language ID `openDocument` sends for a path, matching the extension case-insensitively and falling back to `plaintext`:
+
+```ts
+import { detectLanguageId } from 'lsbench';
+
+detectLanguageId('src/index.TS'); // 'typescript'
+detectLanguageId('model.dsl'); // 'mylanguage' after the call above, 'plaintext' otherwise
+```
+
 To override the language ID of a single document instead, pass it when opening:
 
 ```ts
@@ -359,7 +368,7 @@ Commands:
 
 ### Verbose output
 
-With `-v`, lsbench's own lines start with `[lsbench]`, request timings with `[lsbench:ctx]`. Each `textDocument/publishDiagnostics` is logged as one line: the workspace relative path (the URI outside the workspace), the version or `-`, the diagnostic count, how the diagnostics tracker classified it, and the first message truncated to 100 characters:
+With `-v`, lsbench's own lines start with `[lsbench]`, request timings with `[lsbench:ctx]`. The `Running iteration N...` progress line ends there, and the iteration time follows the iteration's log lines as `Iteration N: Xms`. Each `textDocument/publishDiagnostics` is logged as one line: the workspace relative path (the URI outside the workspace), the version or `-`, the diagnostic count, how the diagnostics tracker classified it, and the first message truncated to 100 characters:
 
 ```text
 [lsbench] Publish src/config.yaml v=1 n=2 current: Incorrect type. Expected "string".
@@ -430,11 +439,11 @@ For full control over `command`, `args`, `env`, `initializationOptions`, `client
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, null rate, empty rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/*` and `diagnostics/pull/*`, see [waiting for diagnostics](#waiting-for-diagnostics)) and idle waits (`server/idle`)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, null rate, empty rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/*` and `diagnostics/pull/*`, see [waiting for diagnostics](#waiting-for-diagnostics)) and idle waits (`lifecycle/idle` for `--wait-idle`, `server/idle` for `ctx.waitForIdle`)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize, idle and final shutdown timings of the single server
-- **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero
+- **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero. Each exit's `during` is `iteration N` or `warmup N` for a server that exited during an iteration, `teardown of iteration N` or `teardown of warmup N` for one that exited while being stopped under `--restart`, and `final teardown` for the single server without it
 - **tolerated_exits**: Servers that replied to `shutdown` and then exited with a code allowed by `--allow-exit-code` (`ServerConfig.allowExitCodes`), only present when any did. They have the same shape as `abnormal_exits` but do not make lsbench exit non zero. Use this for servers known to exit non zero after `exit`, such as TypeScript 7 exiting 1. A server that exits without replying to `shutdown` stays in `abnormal_exits` whatever its code
 
 Each request timing has a `result`:
@@ -498,10 +507,11 @@ With `--restart` each run's `requests` start with spawn, initialize and idle and
 
 Time to diagnostics measures when a server publishes, which is often not how long it took to check the file. Keep these in mind before comparing servers:
 
-- **Debounce**: some servers wait on purpose before computing diagnostics, the VS Code JSON server for example. Your results will reflect that delay as a flat floor in the timings, with a min that sits at the delay. Compare such servers against their debounce, not against servers without one.
-- **Silent servers**: some servers never publish for a clean file, or skip some classes of errors, so the wait runs into its timeout and `timeout_rate` means "no diagnostics", not "slow". Give such waits an explicit, short `timeout` so they cost little. When you do expect diagnostics, `until: (d) => d.length > 0` makes the wait ignore empty publishes, and `settleMs` picks up diagnostics that arrive in a later publish.
-- **Push vs pull**: a push timing (`diagnostics/open`, `diagnostics/edit`) includes the server's debounce, a pull timing (`diagnostics/pull/*`) is a request without one, so the two are not comparable. In `auto` mode lsbench [learns per server](#pull-diagnostics) which one applies, so check which methods show up in the report, or pass `mode: "push"` or `mode: "pull"` to compare like with like.
-- **Intermediate publishes**: some servers publish in stages, rust-analyzer for example sends an empty syntax pass before the semantic diagnostics. Version aware waits already ignore publishes for older versions and closed documents, but such a pass belongs to the current state and resolves a plain wait early. Use `until` to skip it, and `settleMs` when a server publishes in bursts. `-v` logs every publish, which shows what a server sends.
+- **Debounce**: some servers wait on purpose before computing diagnostics. The VS Code servers (JSON, CSS, HTML and others from `vscode-langservers-extracted`) wait about 500 ms, pyright about 250 ms. Their timings then mostly measure that delay: a flat floor with a min that sits at the delay. Compare such servers against their debounce, not against servers without one.
+- **Silent servers**: some servers never publish for a clean file, or skip some classes of errors. lua-language-server is silent on clean files, and the HTML server does not report markup errors. The wait then runs into its timeout, and `timeout_rate` means "no diagnostics", not "slow". Give such waits an explicit, short `timeout` so they cost little. When you do expect diagnostics, `until: (d) => d.length > 0` makes the wait ignore empty publishes, and `settleMs` picks up diagnostics that arrive in a later publish.
+- **Reopens**: some servers do not republish a clean file when it is reopened, rust-analyzer for example. Its publishes on close are credited to the closed document, so a `diagnostics/open` wait after a reopen has nothing to resolve on and measures nothing but its timeout. Use `until` or a short `timeout` for such waits. Verbose mode logs a hint when a reopen wait times out having seen only the publishes clearing the close.
+- **Push vs pull**: a push timing (`diagnostics/open`, `diagnostics/edit`) includes the server's debounce, a pull timing (`diagnostics/pull/*`) is a request without one, so the two are not comparable. In `auto` mode lsbench [learns per server](#pull-diagnostics) which one applies, so check which methods show up in the report, and whether pulled timings are `tentative`, or pass `mode: "push"` or `mode: "pull"` to compare like with like.
+- **Intermediate publishes**: some servers publish in stages: rust-analyzer and zls send an empty syntax pass before the semantic diagnostics. Version aware waits already ignore publishes for older versions and closed documents, but such a pass belongs to the current state and resolves a plain wait early. Use `until` to skip it, and `settleMs` when a server publishes in bursts. `-v` logs every publish, which shows what a server sends.
 
 ## Warmup and readiness
 

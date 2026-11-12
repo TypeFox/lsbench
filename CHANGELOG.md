@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## v0.3.0-next.1 (preview)
+
+Fixes found re-testing next.0 against real servers: auto mode no longer locks pull only servers into push or measures placeholder pulls of servers still loading, reopen waits no longer resolve on a late close publish, known exit codes can be tolerated, and fully timed out methods no longer report 0 ms. Action scripts may also be JavaScript.
+
+### Breaking changes
+
+- `MethodStats` latency fields (`avg_ms`, `median_ms`, `p95_ms`, `p99_ms`, `min_ms`, `max_ms`, `stddev_ms`) are `number | null`. They are `null`, printed `n/a`, when no durations remain because every call timed out or was skipped, where next.0 reported 0, which read as instant. Code reading them needs a `null` check, as `examples/compare-servers.ts` now does.
+
+### Pull diagnostics in waits
+
+- Auto mode learns push only from a publish for a document the client opened (`current`, `closed` or `stale`). In next.0 any publish taught push for the rest of the session, so ts7, which clears `tsconfig.json` right after the first `didOpen`, was locked into push and every wait timed out. Publishes for unopened documents and close window candidates now teach nothing.
+- A pull that resolves with no diagnostics learns pull only tentatively, since a server still loading may answer with an empty placeholder and push later. A pull returning diagnostics settles it, and a publish still flips the server to push. Pulls resolving while delivery is not settled are marked `tentative: true` in the timing and in the `waitForDiagnostics` result, and logged as tentative. This corrects next.0's claim that servers that push and advertise `diagnosticProvider` (rust-analyzer) are always measured by their pushes: a cold rust-analyzer was pulled, learned as pull only from an empty placeholder, and measured by those pulls until its first push.
+- When the server is learned to push while an auto mode pull is in flight (request or backoff), the pull stops without recording a timing and the wait goes on waiting for pushes for the rest of its timeout, instead of pulling until it times out.
+
+### Diagnostics waits
+
+- Once a server is known to publish on close, a further empty, unversioned publish within the 1000 ms close window after a reopen is credited to the closed generation when the server versions its publishes for open documents, and held as a close candidate otherwise. rust-analyzer clears a closed document with two or three such publishes, and in next.0 a late one resolved the reopen wait in about 0.1 ms. Such a candidate accepted at the end of the window no longer teaches that the server is silent on close.
+- A `diagnostics/open` wait that times out having seen only the publishes clearing the latest close logs a hint that the server may not republish clean files on reopen, suggesting `until` or a short timeout. `DocumentSyncState.closePublishes` counts those publishes.
+- Publish URIs are matched to documents after decoding percent-encoding, and case-insensitively on darwin and win32, so a server lowercasing or encoding the URIs it publishes no longer makes waits time out. Elsewhere matching stays case-sensitive, and a publish for an unopened URI that matches an open document apart from case logs a hint once per URI.
+
+### Server exits
+
+- `--allow-exit-code <n>` (repeatable) and `ServerConfig.allowExitCodes` tolerate a known non zero exit code after a replied `shutdown`, such as TypeScript 7 exiting 1. Such exits are listed in the new report field `tolerated_exits` instead of `abnormal_exits` and do not make lsbench exit non zero. An exit without a shutdown reply stays abnormal whatever its code. The printed summary shows the abnormal and tolerated exit counts.
+- Under `--restart`, a server exiting while its iteration's server was stopped is recorded as during `teardown of iteration N` (or `teardown of warmup N`) instead of `iteration N`, which read as a crash during the iteration's work. A server that exited before the teardown keeps `iteration N`.
+
+### Action scripts and API
+
+- Action scripts may be `.js` or `.mjs` ES modules as well as `.ts`.
+- `detectLanguageId(path)` is exported, returning the language id `openDocument` sends for a path.
+
+### Verbose output
+
+- Under `-v`, `Running iteration N...` ends with a newline, so the first ctx line no longer lands on it, and the iteration time follows as its own `Iteration N: Xms` line. Non verbose output is unchanged.
+- The `lsbench results` banner of the printed summary is aligned again.
+
+### Docs
+
+- README: debounce numbers (VS Code servers about 500 ms, pyright about 250 ms), lua-language-server and the HTML server named as silent servers, zls named for intermediate publishes, a note on reopen waits for servers that do not republish clean files, the tentative pull behavior, idle waits listed as `lifecycle/idle` and `server/idle` in the report section, `during` labels of exits, and `detectLanguageId`.
+
 ## v0.3.0-next.0 (preview)
 
 Makes diagnostics timings trustworthy (version aware, timed, push or pull, with explicit timeouts), adds a readiness signal for servers that load in the background, classifies every result, skips requests the server does not support, and keeps the report when a server crashes.
