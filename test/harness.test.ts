@@ -1256,6 +1256,47 @@ describe('ProgressTracker', () => {
         expect(Date.now() - started).toBeGreaterThanOrEqual(45);
     });
 
+    it('is busy by server status once one arrived, by active tokens otherwise', () => {
+        const tracker = new ProgressTracker();
+        expect(tracker.busy).toBe(false);
+        tracker.progress(begin('index'));
+        expect(tracker.busy).toBe(true);
+        // a server status takes precedence over tokens, rust-analyzer's flycheck runs after quiescence
+        tracker.serverStatusChanged({ health: 'ok', quiescent: true });
+        expect(tracker.busy).toBe(false);
+        expect(tracker.idle).toBe(false);
+        tracker.progress(end('index'));
+        tracker.serverStatusChanged({ health: 'ok', quiescent: false });
+        expect(tracker.busy).toBe(true);
+        tracker.clear();
+        expect(tracker.busy).toBe(false);
+    });
+
+    it('notifies once per change from busy to not busy', () => {
+        const tracker = new ProgressTracker();
+        let calls = 0;
+        const stop = tracker.onNotBusy(() => calls++);
+        tracker.progress(begin('a'));
+        tracker.progress(begin('b'));
+        tracker.progress(end('a'));
+        expect(calls).toBe(0);
+        tracker.progress(end('b'));
+        expect(calls).toBe(1);
+        tracker.serverStatusChanged({ health: 'ok', quiescent: false });
+        tracker.serverStatusChanged({ health: 'ok', quiescent: false });
+        tracker.serverStatusChanged({ health: 'ok', quiescent: true });
+        tracker.serverStatusChanged({ health: 'ok', quiescent: true });
+        expect(calls).toBe(2);
+        // tokens after quiescence do not make the server busy, so their end notifies nothing
+        tracker.progress(begin('cargo check'));
+        tracker.progress(end('cargo check'));
+        expect(calls).toBe(2);
+        stop();
+        tracker.serverStatusChanged({ health: 'ok', quiescent: false });
+        tracker.serverStatusChanged({ health: 'ok', quiescent: true });
+        expect(calls).toBe(2);
+    });
+
     it('waits until every active token has ended', async () => {
         const tracker = new ProgressTracker();
         tracker.progress(begin('a'));

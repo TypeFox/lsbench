@@ -136,6 +136,14 @@ class FakeHarness {
     waitForIdle(options: IdleWaitOptions): Promise<IdleWaitResult> {
         return this.progress.waitForIdle(options);
     }
+
+    isServerBusy(): boolean {
+        return this.progress.busy;
+    }
+
+    onServerNotBusy(listener: () => void): () => void {
+        return this.progress.onNotBusy(listener);
+    }
 }
 
 /** shorthand for an edit replacing the range from (sl, sc) to (el, ec) */
@@ -1802,6 +1810,103 @@ describe('BenchContextImpl', () => {
                 });
                 expect(result).toMatchObject({ timedOut: true, source: 'pull' });
                 expect(harness.diagnosticsDelivery()).toBe('unknown');
+            });
+
+            describe('busy servers', () => {
+                const busy = () => harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
+                const quiescent = () => harness.progress.serverStatusChanged({ health: 'ok', quiescent: true });
+
+                it('holds an empty pull of a busy server and pulls again once it is quiescent', async () => {
+                    // rust-analyzer under --restart: a carried tentative pull, then a placeholder while loading
+                    servePulls(full('placeholder'), full('2'));
+                    harness.tracker.seedDelivery('pull', true);
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const start = Date.now();
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    await new Promise((r) => setTimeout(r, 50));
+                    expect(pulls()).toHaveLength(1);
+                    expect(harness.logs.some((l) => l.includes('tentatively pull only'))).toBe(false);
+                    quiescent();
+                    const result = await waiting;
+                    expect(Date.now() - start).toBeGreaterThanOrEqual(45);
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', diagnostics: [], pulls: 2 });
+                    expect(result.tentative).toBe(true);
+                    expect(result.graceMs).toBeUndefined();
+                    // timed from didOpen, the wait for the server to load included
+                    expect(result.ms).toBeGreaterThanOrEqual(45);
+                    // the placeholder's resultId is not sent with the next pull
+                    expect(previousResultIds()).toEqual([undefined, undefined]);
+                    const timings = ctx.collectTimings();
+                    expect(timings).toMatchObject([
+                        { method: 'diagnostics/pull/open', success: true, result: 'empty', held_pulls: 1 },
+                    ]);
+                    expect(timings[0].grace_ms).toBeUndefined();
+                });
+
+                it('takes a push after a held empty pull', async () => {
+                    servePulls(full('1'));
+                    harness.tracker.seedDelivery('pull', true);
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    await new Promise((r) => setTimeout(r, 20));
+                    harness.setDiagnostics(uri, [diag('pushed')], 1);
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
+                    expect(pulls()).toHaveLength(1);
+                    expect(harness.diagnosticsDelivery()).toBe('push');
+                    expect(ctx.collectTimings()).toMatchObject([{ method: 'diagnostics/open', success: true }]);
+                });
+
+                it('times out with the empty placeholder when the server stays busy', async () => {
+                    servePulls(full('1'));
+                    harness.tracker.seedDelivery('pull', true);
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 80 });
+                    expect(result).toMatchObject({ timedOut: true, source: 'pull', diagnostics: [], pulls: 1 });
+                    expect(ctx.collectTimings()).toMatchObject([
+                        {
+                            method: 'diagnostics/pull/open',
+                            success: false,
+                            result: 'timeout',
+                            diagnostics: 0,
+                            held_pulls: 1,
+                        },
+                    ]);
+                    // nothing was learned from the placeholder
+                    expect(harness.tracker.deliveryTentative).toBe(true);
+                });
+
+                it('resolves with an empty pull at once when the server never reports being busy (ts7)', async () => {
+                    servePulls(full('1'));
+                    harness.tracker.seedDelivery('pull', true);
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1, tentative: true });
+                    expect(ctx.collectTimings()[0].held_pulls).toBeUndefined();
+                });
+
+                it('does not hold a busy empty pull once pull is settled', async () => {
+                    servePulls(full('1'));
+                    harness.markPullOnly('test');
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
+                });
+
+                it('does not hold an empty pull while only flycheck progress runs after quiescence', async () => {
+                    // rust-analyzer runs cargo check under a progress token once quiescent
+                    servePulls(full('1'));
+                    harness.tracker.seedDelivery('pull', true);
+                    quiescent();
+                    harness.progress.progress({ token: 'flycheck', value: { kind: 'begin', title: 'cargo check' } });
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
+                });
             });
 
             it('auto: pulls at half the timeout when it is not longer than pullAfterMs', async () => {

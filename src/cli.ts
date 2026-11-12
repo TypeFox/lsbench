@@ -442,7 +442,12 @@ Synchronization
                                           resolved with no push meanwhile, pull at once. A pull that
                                           returned no diagnostics learns pull only tentatively (a server
                                           still loading may answer with an empty placeholder), and pulls
-                                          are marked tentative: true until a pull returns diagnostics. A
+                                          are marked tentative: true until a pull returns diagnostics.
+                                          Unless pull is settled, an empty pull while the server is busy
+                                          (experimental/serverStatus not quiescent, or without a status
+                                          an open $/progress token) is held as a placeholder: the wait
+                                          waits for a push and pulls again once the server is not busy,
+                                          and records held_pulls. A
                                           publish flips it back to push at any time, and a pull in flight
                                           then stops, records nothing and the wait waits for pushes for
                                           the rest of its timeout. With --restart, what a server was

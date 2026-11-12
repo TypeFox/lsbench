@@ -33,10 +33,14 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     let skipped = 0;
     let timeouts = 0;
     const graces: number[] = [];
+    let held = 0;
     for (const t of timings) {
         if (t.result === 'skipped') {
             skipped++;
             continue;
+        }
+        if (t.held_pulls !== undefined) {
+            held++;
         }
         if (t.result === 'timeout') {
             timeouts++;
@@ -69,6 +73,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         skipped,
         skip_rate: rate(skipped, count),
         ...(graces.length > 0 ? { graced: graces.length, grace_median_ms: round(percentile(sorted(graces), 50)) } : {}),
+        ...(held > 0 ? { held } : {}),
     };
 
     // no durations left (all timeouts or skipped): null rather than 0, which would read as instant
@@ -284,9 +289,11 @@ export function printSummary(report: BenchReport): void {
         console.log(row);
     }
 
-    // auto mode pulls that first waited for a push include that grace in their durations
+    // auto mode pulls that first waited for a push include that grace in their durations,
+    // and those that held back empty answers of a busy server include the wait for it
     const graced = methods.filter((m) => report.summary[m].graced !== undefined);
-    if (graced.length > 0) {
+    const held = methods.filter((m) => report.summary[m].held !== undefined);
+    if (graced.length > 0 || held.length > 0) {
         console.log();
         for (const method of graced) {
             const s = report.summary[method];
@@ -295,7 +302,15 @@ export function printSummary(report: BenchReport): void {
                 `  ${method}: ${pulls} first waited for a push (median ${s.grace_median_ms}ms, included above)`,
             );
         }
-        console.log("  Pass mode: 'pull' or a short pullAfterMs to waitForDiagnostics for a pull only server");
+        for (const method of held) {
+            const s = report.summary[method];
+            const waits = s.held === 1 ? '1 wait' : `${s.held} waits`;
+            console.log(`  ${method}: ${waits} held back empty answers while the server was busy (included above)`);
+        }
+        // a server answering empty while busy loads and may push, pull mode would measure its placeholders
+        if (graced.length > 0 && held.length === 0) {
+            console.log("  Pass mode: 'pull' or a short pullAfterMs to waitForDiagnostics for a pull only server");
+        }
     }
 
     console.log();

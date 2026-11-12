@@ -365,6 +365,24 @@ describe('printSummary', () => {
         expect(lines.some((line) => line.includes('waited for a push'))).toBe(false);
     });
 
+    it('notes held pulls and drops the pull mode hint when a busy server answered with placeholders', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [
+            timing({ method: 'diagnostics/pull/open', duration_ms: 2800, grace_ms: 1000, held_pulls: 1 }),
+            timing({ method: 'diagnostics/pull/open', duration_ms: 2900, held_pulls: 2 }),
+        ];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 5700 }], 5700);
+        expect(report.summary['diagnostics/pull/open']).toMatchObject({ graced: 1, held: 2 });
+        printSummary(report);
+        expect(lines).toContain(
+            '  diagnostics/pull/open: 2 waits held back empty answers while the server was busy (included above)',
+        );
+        expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
+    });
+
     it('leaves out the null and empty columns when every result is ok', () => {
         expect(header([timing()])).not.toMatch(/Null%|Empty%/);
     });

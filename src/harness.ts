@@ -668,7 +668,10 @@ export interface IdleWaitResult {
  * token is active and, once it ever sent a server status, the latest one is quiescent.
  * Tokens are tracked whether or not the server created them first through
  * window/workDoneProgress/create. One tracker serves one server process, `clear()`
- * forgets all state
+ * forgets all state.
+ *
+ * Separately, `busy` tells whether the server is still loading, for auto mode diagnostics
+ * waits that must not take an empty pull for real diagnostics, see `busy`
  */
 export class ProgressTracker {
     /** active tokens with the title of their begin */
@@ -677,8 +680,29 @@ export class ProgressTracker {
     /** process.hrtime.bigint() of the latest change from busy to idle, or of creation */
     private idleSince = process.hrtime.bigint();
     private listeners = new Set<() => void>();
+    private idleListeners = new Set<() => void>();
 
     constructor(private log: (msg: string) => void = () => {}) {}
+
+    /**
+     * Whether the server reports it is still loading: once it ever sent a server status,
+     * exactly while the latest one is not quiescent, otherwise while a progress token is
+     * active. The server status takes precedence because rust-analyzer keeps reporting
+     * progress after it turned quiescent: flycheck (cargo check) runs under a $/progress
+     * token about 130ms after quiescence, and diagnostics waits must not wait for it
+     */
+    get busy(): boolean {
+        if (this.status !== undefined) {
+            return !this.status.quiescent;
+        }
+        return this.active.size > 0;
+    }
+
+    /** Call `listener` whenever the server turns from busy to not busy, see `busy`; returns a function removing it */
+    onNotBusy(listener: () => void): () => void {
+        this.idleListeners.add(listener);
+        return () => this.idleListeners.delete(listener);
+    }
 
     /** Whether no token is active and the latest server status, if any, is quiescent */
     get idle(): boolean {
@@ -790,12 +814,18 @@ export class ProgressTracker {
     /** Apply a change, note when the server turned idle and let the waits recheck */
     private update(change: () => void): void {
         const wasIdle = this.idle;
+        const wasBusy = this.busy;
         change();
         if (!wasIdle && this.idle) {
             this.idleSince = process.hrtime.bigint();
         }
         for (const check of this.listeners) {
             check();
+        }
+        if (wasBusy && !this.busy) {
+            for (const listener of this.idleListeners) {
+                listener();
+            }
         }
     }
 
@@ -1336,6 +1366,16 @@ export class LspHarness {
         options: PublishWaitOptions,
     ): Promise<PublishWaitResult> {
         return this.diagnostics.waitForPublishes(uri, accept, options);
+    }
+
+    /** Whether the server reports it is still loading, see ProgressTracker.busy */
+    isServerBusy(): boolean {
+        return this.progress.busy;
+    }
+
+    /** Call `listener` whenever the server stops being busy, see ProgressTracker.onNotBusy */
+    onServerNotBusy(listener: () => void): () => void {
+        return this.progress.onNotBusy(listener);
     }
 
     /** Resolve once the server has finished its background work, see ProgressTracker.waitForIdle */

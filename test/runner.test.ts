@@ -529,6 +529,13 @@ const pushes = mode === 'late' && start > 1;
 conn.onRequest('initialize', () => ({
     capabilities: { textDocumentSync: 1, diagnosticProvider: { interFileDependencies: false, workspaceDiagnostics: false } },
 }));
+// busy: loads for 150ms after initialized like rust-analyzer, answering pulls empty meanwhile
+conn.onNotification('initialized', () => {
+    if (mode === 'busy') {
+        conn.sendNotification('experimental/serverStatus', { health: 'ok', quiescent: false });
+        setTimeout(() => conn.sendNotification('experimental/serverStatus', { health: 'ok', quiescent: true }), 150);
+    }
+});
 conn.onNotification('textDocument/didOpen', ({ textDocument }) => {
     if (pushes) {
         const diagnostic = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'x' };
@@ -573,7 +580,7 @@ describe('runBenchmark with restart carries the learned diagnostics delivery', (
     });
 
     /** run two iterations after one warmup with restart and -v, returning the report and the logged lines */
-    async function run(mode: 'pull' | 'late') {
+    async function run(mode: 'pull' | 'late' | 'busy') {
         const lines: string[] = [];
         vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
             lines.push(...String(chunk).split('\n'));
@@ -621,12 +628,30 @@ describe('runBenchmark with restart carries the learned diagnostics delivery', (
             const pulls = r.requests.filter((t) => t.method === 'diagnostics/pull/open');
             expect(pulls).toHaveLength(1);
             expect(pulls[0]).toMatchObject({ success: true, diagnostics: 0, tentative: true });
-            // pulled at once, so no grace is part of the timing
+            // pulled at once, so no grace is part of the timing, and a server never busy holds nothing
             expect(pulls[0].grace_ms).toBeUndefined();
+            expect(pulls[0].held_pulls).toBeUndefined();
             // without carrying, each run would wait the 1000ms grace before pulling
             expect(r.total_ms).toBeLessThan(1000);
         }
         expect(report.summary['diagnostics/pull/open']).not.toHaveProperty('graced');
+        expect(report.summary['diagnostics/pull/open']).not.toHaveProperty('held');
+    });
+
+    it('does not resolve a carried tentative pull with the placeholder of a busy server', async () => {
+        const { report, lines } = await run('busy');
+        expect(linesOf(lines, '1/2', '2/2')).toContain(
+            '[lsbench] Carrying diagnostics delivery from the previous server: pull (tentative)',
+        );
+        for (const r of report.runs) {
+            const pulls = r.requests.filter((t) => t.method === 'diagnostics/pull/open');
+            expect(pulls).toHaveLength(1);
+            // the pull at once is held, the one after quiescence resolves, timed from didOpen
+            expect(pulls[0]).toMatchObject({ success: true, diagnostics: 0, tentative: true, held_pulls: 1 });
+            expect(pulls[0].duration_ms).toBeGreaterThanOrEqual(100);
+            expect(pulls[0].grace_ms).toBeUndefined();
+        }
+        expect(report.summary['diagnostics/pull/open']).toMatchObject({ held: 2 });
     });
 
     it('still flips a carried tentative pull to push when the restarted server pushes', async () => {
