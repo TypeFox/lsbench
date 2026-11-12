@@ -34,7 +34,7 @@ export interface BenchOptions {
     server: string;
     /** Path to the workspace root to benchmark against */
     workspace: string;
-    /** Path to the action driver script (.ts) */
+    /** Path to the action driver script (.ts, .js or .mjs) */
     script: string;
     /** Number of timed iterations */
     iterations: number;

@@ -2,7 +2,7 @@
 
 import * as fs from 'node:fs';
 import { Command } from 'commander';
-import { runBenchmark } from './runner.js';
+import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
 import type { BenchOptions } from './types.js';
 import { CLI_VERSION } from './version.js';
 
@@ -34,7 +34,7 @@ program
     .allowExcessArguments(true)
     .argument('<server>', 'Server command, e.g. "typescript-language-server --stdio"')
     .requiredOption('-w, --workspace <path>', 'Path to the workspace directory to benchmark against')
-    .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts)')
+    .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts, .js or .mjs)')
     .option('-n, --iterations <number>', 'Number of timed iterations', '10')
     .option('--warmup <number>', 'Number of warmup iterations (not recorded)', '2')
     .option('-o, --output <path>', 'Output file for JSON report', '')
@@ -100,8 +100,8 @@ program
             console.error(`Error: Workspace path is not a directory: ${opts.workspace}`);
             process.exit(1);
         }
-        if (!opts.script.endsWith('.ts')) {
-            console.error(`Error: Action script must be a TypeScript (.ts) file: ${opts.script}`);
+        if (!isActionScriptPath(opts.script)) {
+            console.error(`Error: ${actionScriptExtensionError(opts.script)}`);
             process.exit(1);
         }
         if (!fs.existsSync(opts.script)) {
@@ -266,9 +266,11 @@ idle (with --wait-idle) and shutdown are also reported as lifecycle/* methods
 
 ## Writing an action script
 
-An action script is a \`.ts\` file that default-exports an async function taking a
-BenchContext. It is loaded natively by Node (>= 24) via type stripping, so it
-must be "erasable" TypeScript: no \`enum\`, \`namespace\`, or parameter properties.
+An action script is a \`.ts\`, \`.js\` or \`.mjs\` ES module that default-exports an
+async function taking a BenchContext. TypeScript is loaded natively by Node (>= 24)
+via type stripping, so it must be "erasable" TypeScript: no \`enum\`, \`namespace\`,
+or parameter properties. A \`.js\` script is ESM unless the nearest package.json says
+otherwise, and \`.mjs\` always is.
 
     import type { BenchContext } from 'lsbench';
 
@@ -496,7 +498,7 @@ experimental/serverStatus (verbose mode logs progress titles).
 
     Options:
       -w, --workspace <path>       Workspace directory to benchmark against         (required)
-      -s, --script <path>          Action driver script (.ts)                       (required)
+      -s, --script <path>          Action driver script (.ts, .js or .mjs)          (required)
       -n, --iterations <number>    Number of timed iterations                       (default: 10)
           --warmup <number>        Warmup iterations, not recorded                  (default: 2)
       -o, --output <path>          Write the JSON report to this file

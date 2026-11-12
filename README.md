@@ -36,7 +36,7 @@ npm install lsbench
 
 lsbench spawns a language server process, performs the LSP
 initialize/initialized handshake, then runs your action script. That script is a
-TypeScript file that drives a sequence of LSP requests
+TypeScript or JavaScript file that drives a sequence of LSP requests
 against a target workspace.
 
 Each request is then timed. The script runs for N iterations, producing
@@ -44,8 +44,8 @@ a JSON report with per-method statistics and per-run breakdowns.
 
 ## Writing an action script
 
-An action script is a file that default-exports an async function
-receiving a `BenchContext`. The [`examples/`](examples) directory has a few
+An action script is a `.ts`, `.js` or `.mjs` ES module that default-exports an async function
+receiving a `BenchContext`. TypeScript scripts are loaded by Node's built-in type stripping (Node >= 24), so they must be erasable TypeScript: no `enum`, `namespace`, or parameter properties. A `.js` script is ESM unless the nearest `package.json` says otherwise, and `.mjs` always is. The [`examples/`](examples) directory has a few
 starting points you can checkout:
 
 - [`examples/typescript-actions.ts`](examples/typescript-actions.ts): a fuller driver exercising hover, completion (with resolve), navigation, formatting, document structure, semantic tokens, workspace symbols, call and type hierarchy, edits, and saves.
@@ -330,7 +330,7 @@ Arguments:
 
 Options:
   -w, --workspace <path>      Workspace directory (required)
-  -s, --script <path>         Action driver script, .ts (required)
+  -s, --script <path>         Action driver script, .ts, .js or .mjs (required)
   -n, --iterations <number>   Timed iterations (default: 10)
   --warmup <number>           Warmup iterations, not recorded (default: 2)
   -o, --output <path>         JSON report output file

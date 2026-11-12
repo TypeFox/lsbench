@@ -39,17 +39,31 @@ export function resolveServerConfig(
     return config;
 }
 
+/** File extensions accepted for action scripts */
+const ACTION_SCRIPT_EXTENSIONS = ['.ts', '.js', '.mjs'] as const;
+
+/** Whether a path has an extension accepted for action scripts (`.ts`, `.js` or `.mjs`) */
+export function isActionScriptPath(scriptPath: string): boolean {
+    return ACTION_SCRIPT_EXTENSIONS.some((ext) => scriptPath.endsWith(ext));
+}
+
+/** The error message for a script path with an unaccepted extension */
+export function actionScriptExtensionError(scriptPath: string): string {
+    return `Action script ${scriptPath} must be a TypeScript (.ts) or JavaScript (.js, .mjs) file.`;
+}
+
 /**
  * Load the user's action script.
- * Action scripts are TypeScript ESM modules loaded natively by Node's built-in
- * type stripping (Node >= 24). They must be "erasable" TypeScript — no runtime
- * TS features like enum, namespace, or parameter properties.
+ * Action scripts are ESM modules: TypeScript (`.ts`) loaded natively by Node's
+ * built-in type stripping (Node >= 24), or JavaScript (`.js`, `.mjs`). TypeScript
+ * must be "erasable", with no runtime TS features like enum, namespace, or
+ * parameter properties.
  */
 export async function loadActionScript(scriptPath: string): Promise<ActionScript> {
     const absPath = path.resolve(scriptPath);
 
-    if (!absPath.endsWith('.ts')) {
-        throw new Error(`Action script ${scriptPath} must be a TypeScript (.ts) file.`);
+    if (!isActionScriptPath(absPath)) {
+        throw new Error(actionScriptExtensionError(scriptPath));
     }
 
     const mod = await import(pathToFileURL(absPath).href);

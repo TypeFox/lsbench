@@ -75,8 +75,24 @@ describe('loadActionScript', () => {
         return file;
     }
 
-    it('rejects non-TypeScript files', async () => {
-        await expect(loadActionScript('actions.js')).rejects.toThrow(/must be a TypeScript \(\.ts\) file/);
+    it.each(['actions.cjs', 'actions.mts', 'actions.json', 'actions'])('rejects %s', async (name) => {
+        await expect(loadActionScript(name)).rejects.toThrow(
+            /must be a TypeScript \(\.ts\) or JavaScript \(\.js, \.mjs\) file/,
+        );
+    });
+
+    it.each(['valid-actions.mjs', 'valid-actions.js'])('loads a JavaScript action from %s', async (name) => {
+        const file = writeScript(
+            name,
+            `export default async function (ctx) {
+                ctx.called = true;
+            }`,
+        );
+
+        const fn = await loadActionScript(file);
+        const ctx = {} as { called?: boolean };
+        await expect(fn(ctx as never)).resolves.toBeUndefined();
+        expect(ctx.called).toBe(true);
     });
 
     it('loads a default-exported action function', async () => {
