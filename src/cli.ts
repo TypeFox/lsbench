@@ -434,12 +434,18 @@ Synchronization
                                           or timeout.
                                           mode is 'auto' (default), 'push' or 'pull'. auto waits for
                                           pushes unless the server advertises diagnosticProvider, then
-                                          learns per server: before any publish from it, pull through
+                                          learns per server: before any push, pull through
                                           textDocument/diagnostic after pullAfterMs (default 1000, half
                                           the timeout when that is not longer) without a publish; once
-                                          any publish arrived, push only; once a fallback pull resolved
-                                          with no push meanwhile, pull at once (a later publish flips
-                                          it back). pull pulls at once (skipped without
+                                          it published for an opened document (publishes for unopened
+                                          documents teach nothing), push only; once a fallback pull
+                                          resolved with no push meanwhile, pull at once. A pull that
+                                          returned no diagnostics learns pull only tentatively (a server
+                                          still loading may answer with an empty placeholder), and pulls
+                                          are marked tentative: true until a pull returns diagnostics. A
+                                          publish flips it back to push at any time, and a pull in flight
+                                          then stops, records nothing and the wait waits for pushes for
+                                          the rest of its timeout. pull pulls at once (skipped without
                                           diagnosticProvider). Pulls repeat with a
                                           25 to 250ms backoff until until passes or the timeout, sending
                                           previousResultId; an unchanged report reuses the previous

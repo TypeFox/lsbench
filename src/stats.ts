@@ -178,13 +178,13 @@ export function buildReport(
     return report;
 }
 
-/** Pretty-print a summary table to the console */
 /** "code 1" or "codes 1, 2" for the distinct exit codes of some exits */
 function describeExitCodes(exits: AbnormalExit[]): string {
     const codes = [...new Set(exits.map((e) => e.code))].sort((a, b) => (a ?? -1) - (b ?? -1));
     return `${codes.length === 1 ? 'code' : 'codes'} ${codes.join(', ')} after shutdown, allowed`;
 }
 
+/** Pretty-print a summary table to the console */
 export function printSummary(report: BenchReport): void {
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
     console.log('║                     lsbench results                          ║');
