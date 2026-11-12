@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.3.0-next.3 (preview)
+
+Cold rust-analyzer runs no longer measure empty pulls answered while loading, and no longer time out after it switches to refreshes.
+
+### Pull diagnostics in waits
+
+- Unless pull is settled, an empty auto mode pull answered while the server is busy is held as a placeholder instead of resolving the wait. The wait goes on waiting for a push and pulls again once the server is no longer busy. Busy is `experimental/serverStatus` with `quiescent: false` once the server sent a status, which takes precedence over `$/progress`, so rust-analyzer's flycheck after quiescence does not count; servers without a status use open `$/progress` tokens. In next.2 a carried tentative pull made each cold rust-analyzer S1 iteration resolve on such a placeholder in about 1.6 ms. Timings carry the new field `held_pulls`, `MethodStats` adds `held`, the printed summary notes such methods and then drops the `mode: 'pull'` hint, and a wait timing out while busy records a pull timeout. Servers that never report being busy, such as ts7, are unaffected.
+- A `workspace/diagnostic/refresh` while an auto wait waits for a push (in the grace, after a held placeholder, or with push learned) makes it pull once, retrying `ContentModified` and `ServerCancelled`. In next.2 the refresh was only acknowledged, so a cold rust-analyzer S4 run timed out both edit waits (about 31 s for iteration 1): it stops pushing for a document it was pulled for and only sends refreshes.
+- A refresh pull returning diagnostics settles the server as pull only, even after push was learned. An empty one teaches nothing, and a publish for an opened document still flips it back to push. Verbose mode logs each refresh.
+
+### Note on rust-analyzer cold numbers
+
+- Cold rust-analyzer S1 and S4 timings change meaning versus next.2. S1 `diagnostics/pull/open` now measures open to real diagnostics (seconds, at quiescence or refresh) instead of an empty placeholder pull (about 1.6 ms), so the two are not comparable. An empty placeholder publish while loading is not held, so it can still resolve a cold open wait as a push.
+
 ## v0.3.0-next.2 (preview)
 
 Cold starts on pull only servers no longer wait for a push in every iteration, and auto mode pull timings include the wait that preceded them.
