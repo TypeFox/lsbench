@@ -18,7 +18,7 @@ import type {
     WaitForDiagnosticsResult,
 } from 'lsbench';
 import { addRegisteredLanguage, BenchContextImpl, classifyResult, DiagnosticsTracker, ProgressTracker } from 'lsbench';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface SentRequest {
     method: string;
@@ -1144,6 +1144,50 @@ describe('BenchContextImpl', () => {
                 harness.setDiagnostics(uri, []);
                 harness.setDiagnostics(uri, []);
                 expect(await settledWithin(ctx.waitForDiagnostics('sample.ts', 5000))).toEqual([]);
+            });
+
+            /** run `body` with a verbose context on the same harness, returning its ctx log lines */
+            async function ctxLogs(body: (verbose: BenchContextImpl) => Promise<void>): Promise<string[]> {
+                const lines: string[] = [];
+                const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                    lines.push(String(line));
+                });
+                try {
+                    await body(new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true));
+                } finally {
+                    spy.mockRestore();
+                }
+                return lines;
+            }
+
+            it('does not resolve a reopen with late close publishes and hints at it on timeout', async () => {
+                const lines = await ctxLogs(async (verbose) => {
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, [], 1);
+                    await verbose.closeDocument('sample.ts');
+                    // rust-analyzer clears a closed document more than once, the last after the reopen
+                    harness.setDiagnostics(uri, []);
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, []);
+                    const result = await verbose.waitForDiagnostics('sample.ts', 50);
+                    expect(result).toMatchObject({ timedOut: true, publishes: 0 });
+                });
+                expect(
+                    lines.some((l) =>
+                        l.includes(
+                            'sample.ts saw only the 2 publishes clearing its close: the server may not republish',
+                        ),
+                    ),
+                ).toBe(true);
+            });
+
+            it('gives no reopen hint for a timeout without close publishes', async () => {
+                const lines = await ctxLogs(async (verbose) => {
+                    await verbose.openDocument('sample.ts');
+                    expect((await verbose.waitForDiagnostics('sample.ts', 20)).timedOut).toBe(true);
+                });
+                expect(lines.some((l) => l.includes('timeout'))).toBe(true);
+                expect(lines.some((l) => l.includes('may not republish'))).toBe(false);
             });
 
             it('accepts an empty publish after reopen once the close window has passed', async () => {

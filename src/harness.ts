@@ -116,6 +116,11 @@ export interface DocumentSyncState {
     syncSeq: number;
     /** which notification last synced the document, undefined before the first */
     syncedBy?: 'didOpen' | 'didChange';
+    /**
+     * publishes for the closed generation since the latest didClose: received while the
+     * document was closed, or after the reopen and credited to the close. 0 before a close
+     */
+    closePublishes: number;
 }
 
 interface TrackedDocument extends DocumentSyncState {
@@ -140,7 +145,10 @@ interface TrackedDocument extends DocumentSyncState {
  * a tentative candidate: a further publish before the window ends supersedes it, otherwise
  * it is accepted with its own receipt time when the window ends. What happens teaches the
  * tracker whether the server publishes on close, and only then is the candidate dropped
- * right away (`publishes`) or the rule turned off (`silent`). It also learns whether the
+ * right away (`publishes`) or the rule turned off (`silent`). Some servers clear a closed
+ * document more than once, so once the server is known to publish on close, a further
+ * empty, unversioned publish within the window is credited to the close too when the server
+ * versions its other publishes, and held as a candidate otherwise. It also learns whether the
  * server pushes diagnostics at all, see `delivery`. One tracker serves one server process,
  * `clear()` forgets what it learned.
  */
@@ -152,6 +160,8 @@ export class DiagnosticsTracker {
     private _closeBehavior: ClosePublishBehavior = 'unknown';
     private _delivery: DiagnosticsDelivery = 'unknown';
     private _deliveryTentative = false;
+    /** whether the server sent a version with a publish for an opened document */
+    private versionsPublishes = false;
     private deliveryListeners = new Set<(delivery: DiagnosticsDelivery) => void>();
 
     constructor(
@@ -169,7 +179,13 @@ export class DiagnosticsTracker {
         }
         const uri = textDocument.uri;
         const version = typeof textDocument.version === 'number' ? textDocument.version : undefined;
-        const doc = this.documents.get(uri) ?? { generation: 0, open: false, syncedAt: 0n, syncSeq: 0 };
+        const doc = this.documents.get(uri) ?? {
+            generation: 0,
+            open: false,
+            syncedAt: 0n,
+            syncSeq: 0,
+            closePublishes: 0,
+        };
         if (method === 'textDocument/didOpen') {
             doc.generation++;
             doc.open = true;
@@ -196,32 +212,57 @@ export class DiagnosticsTracker {
         let status: PublishStatus = !doc || doc.generation === 0 ? 'unopened' : 'current';
         if (doc && doc.generation > 0 && !doc.open) {
             status = 'closed';
+            doc.closePublishes++;
             this.learn('publishes', `publish for ${params.uri} while it is closed`);
         } else if (doc?.candidate) {
             // a further publish after the reopen: the candidate was the close publish
             this.log(`Publish for ${params.uri} supersedes the tentative empty publish after didClose`);
             doc.candidate = undefined;
             this.learn('publishes', `a publish superseded the empty one after closing ${params.uri}`);
-        } else if (
-            doc?.closedAt !== undefined &&
-            !doc.publishedSinceClose &&
-            params.diagnostics.length === 0 &&
-            params.version === undefined
-        ) {
-            // the first publish after the reopen may be the server clearing the closed document
+        } else if (doc?.closedAt !== undefined && params.diagnostics.length === 0 && params.version === undefined) {
             const sinceCloseMs = (Number(receivedAt - doc.closedAt) / 1_000_000).toFixed(1);
-            if (this._closeBehavior === 'publishes') {
-                generation--;
-                status = 'stale';
-                this.log(
-                    `Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
-                        `credited to closed generation ${generation}`,
-                );
-            } else if (this._closeBehavior === 'unknown') {
-                tentative = true;
-                status = 'close candidate';
-                this.log(`Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, held as tentative`);
+            if (!doc.publishedSinceClose) {
+                // the first publish after the reopen may be the server clearing the closed document
+                if (this._closeBehavior === 'publishes') {
+                    generation--;
+                    status = 'stale';
+                    this.log(
+                        `Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
+                            `credited to closed generation ${generation}`,
+                    );
+                } else if (this._closeBehavior === 'unknown') {
+                    tentative = true;
+                    status = 'close candidate';
+                    this.log(`Empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, held as tentative`);
+                }
+            } else if (this._closeBehavior === 'publishes') {
+                // a server may clear a closed document more than once (rust-analyzer sends two or
+                // three empty publishes per close), so a further one can land after the reopen
+                // even though one already arrived. A server versioning its publishes for open
+                // documents leaves the version out only for a closed one, so the publish is the
+                // close's; otherwise it is held like the first, until a further publish or the
+                // end of the window shows what it was
+                if (this.versionsPublishes) {
+                    generation--;
+                    status = 'stale';
+                    this.log(
+                        `Further unversioned empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
+                            `credited to closed generation ${generation}: the server versions its publishes`,
+                    );
+                } else {
+                    tentative = true;
+                    status = 'close candidate';
+                    this.log(
+                        `Further empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, held as tentative`,
+                    );
+                }
             }
+        }
+        if (doc && generation < doc.generation) {
+            doc.closePublishes++;
+        }
+        if (params.version !== undefined && doc && doc.generation > 0) {
+            this.versionsPublishes = true;
         }
         if (doc?.closedAt !== undefined) {
             doc.publishedSinceClose = true;
@@ -306,8 +347,8 @@ export class DiagnosticsTracker {
         if (!doc) {
             return undefined;
         }
-        const { generation, open, version, syncedAt, syncSeq, syncedBy } = doc;
-        return { generation, open, version, syncedAt, syncSeq, syncedBy };
+        const { generation, open, version, syncedAt, syncSeq, syncedBy, closePublishes } = doc;
+        return { generation, open, version, syncedAt, syncSeq, syncedBy, closePublishes };
     }
 
     /** The latest publish received for a URI */
@@ -436,6 +477,7 @@ export class DiagnosticsTracker {
             clearTimeout(doc.closeTimer);
         }
         this._closeBehavior = 'unknown';
+        this.versionsPublishes = false;
         this.setDelivery('unknown', false);
         this.documents.clear();
         this.latest.clear();
@@ -467,6 +509,7 @@ export class DiagnosticsTracker {
         doc.candidate = undefined;
         doc.closedAt = process.hrtime.bigint();
         doc.publishedSinceClose = false;
+        doc.closePublishes = 0;
         doc.closeTimer = setTimeout(() => this.endCloseWindow(uri, doc), this.closeWindowMs);
         // a pending window must not keep the process alive
         doc.closeTimer.unref();
@@ -480,7 +523,11 @@ export class DiagnosticsTracker {
         if (candidate) {
             doc.candidate = undefined;
             this.log(`No further publish for ${uri} within the close window, accepting the empty one`);
-            this.learn('silent', `the empty publish after reopening ${uri} was not superseded`);
+            // a candidate held after a publish already cleared the closed document says nothing
+            // about whether the server publishes on close
+            if (this._closeBehavior !== 'publishes') {
+                this.learn('silent', `the empty publish after reopening ${uri} was not superseded`);
+            }
             this.deliver(candidate);
         } else if (!doc.publishedSinceClose) {
             this.learn('silent', `no publish for ${uri} within ${this.closeWindowMs}ms of didClose`);

@@ -848,6 +848,66 @@ describe('DiagnosticsTracker', () => {
             expect(tracker.latestPublish(uri)).toBe(stale);
         });
 
+        /** a server that cleared the closed document once already, as rust-analyzer does, then reopened */
+        function clearedAndReopened(windowMs: number, versioned: boolean, statuses: PublishStatus[] = []) {
+            const logs: string[] = [];
+            const tracker = new DiagnosticsTracker(
+                (msg) => logs.push(msg),
+                windowMs,
+                (_p, status) => statuses.push(status),
+            );
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.receive({ uri, diagnostics: [], ...(versioned ? { version: 1 } : {}) });
+            tracker.noteNotification('textDocument/didClose', close);
+            tracker.receive({ uri, diagnostics: [] });
+            tracker.noteNotification('textDocument/didOpen', open());
+            return { tracker, logs };
+        }
+
+        it('credits a further unversioned empty publish after the reopen to the close for a versioning server', () => {
+            const statuses: PublishStatus[] = [];
+            const { tracker, logs } = clearedAndReopened(1000, true, statuses);
+            expect(tracker.closeBehavior).toBe('publishes');
+            const late = tracker.receive({ uri, diagnostics: [] });
+            expect(statuses).toEqual(['current', 'closed', 'stale']);
+            expect(late.generation).toBe(1);
+            expect(tracker.document(uri)?.closePublishes).toBe(2);
+            expect(logs.some((l) => l.includes('the server versions its publishes'))).toBe(true);
+            // the server's own publish for the reopen is current
+            const fresh = tracker.receive({ uri, version: 1, diagnostics: [] });
+            expect(fresh.generation).toBe(2);
+            expect(statuses.at(-1)).toBe('current');
+            tracker.clear();
+        });
+
+        it('holds a further empty publish after the reopen as a candidate for a server not versioning', async () => {
+            const statuses: PublishStatus[] = [];
+            const { tracker } = clearedAndReopened(40, false, statuses);
+            const late = tracker.receive({ uri, diagnostics: [] });
+            expect(statuses.at(-1)).toBe('close candidate');
+            expect(tracker.latestPublish(uri)).not.toBe(late);
+            // not superseded: accepted with its receipt time, without unlearning publishes on close
+            expect(await tracker.waitFor(uri, current(tracker), 5000)).toBe(late);
+            expect(tracker.closeBehavior).toBe('publishes');
+        });
+
+        it('lets a publish supersede a further empty candidate held after the reopen', async () => {
+            const { tracker } = clearedAndReopened(1000, false);
+            tracker.receive({ uri, diagnostics: [] });
+            const wait = tracker.waitFor(uri, current(tracker), 5000);
+            tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
+            expect((await wait)?.diagnostics.map((d) => d.message)).toEqual(['fresh']);
+            tracker.clear();
+        });
+
+        it('counts the publishes clearing a close, resetting on the next close', () => {
+            const { tracker } = clearedAndReopened(1000, true);
+            expect(tracker.document(uri)?.closePublishes).toBe(1);
+            tracker.noteNotification('textDocument/didClose', close);
+            expect(tracker.document(uri)?.closePublishes).toBe(0);
+            tracker.clear();
+        });
+
         it('forgets what it learned on clear', () => {
             const tracker = new DiagnosticsTracker(() => {}, 1000);
             tracker.noteNotification('textDocument/didOpen', open());

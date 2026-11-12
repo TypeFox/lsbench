@@ -607,6 +607,13 @@ export class BenchContextImpl implements BenchContext {
             `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
                 `${diagnostics.length} diagnostics, ${publishes} publishes`,
         );
+        if (timedOut && publishes === 0 && method === 'diagnostics/open' && doc && doc.closePublishes > 0) {
+            const seen = doc.closePublishes === 1 ? 'the publish' : `the ${doc.closePublishes} publishes`;
+            this.log(
+                `The reopen of ${relativePath} saw only ${seen} clearing its close: the server may not ` +
+                    'republish a clean file on reopen, use `until` or a short timeout for this wait',
+            );
+        }
 
         return { diagnostics, timedOut, publishes, source: 'push', pulls: 0, ms: timing.duration_ms };
     }
