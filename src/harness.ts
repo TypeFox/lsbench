@@ -704,6 +704,8 @@ export interface ServerExit {
     signal: NodeJS.Signals | null;
     /** the server exited on its own before replying to shutdown, or with a failure after it */
     abnormal: boolean;
+    /** the server exited after a replied shutdown with a non zero code in ServerConfig.allowExitCodes */
+    tolerated?: boolean;
     /** human readable description of the exit */
     reason: string;
 }
@@ -1092,7 +1094,7 @@ export class LspHarness {
         this.lifecycleTimings.push(timing);
     }
 
-    /** Classify a process exit, signals we sent and a clean exit after shutdown are normal */
+    /** Classify a process exit, signals we sent and a clean (or allowed) exit after shutdown are normal */
     private describeExit(code: number | null, signal: NodeJS.Signals | null): ServerExit {
         const status = signal ? `signal ${signal}` : `code ${code}`;
         if (this.killRequested) {
@@ -1100,6 +1102,15 @@ export class LspHarness {
         }
         if (!this.shutdownReplied) {
             return { code, signal, abnormal: true, reason: `exited unexpectedly (${status})` };
+        }
+        if (signal === null && code !== null && code !== 0 && this.config.allowExitCodes?.includes(code)) {
+            return {
+                code,
+                signal,
+                abnormal: false,
+                tolerated: true,
+                reason: `exited after shutdown with ${status} (allowed)`,
+            };
         }
         if (code !== 0) {
             return { code, signal, abnormal: true, reason: `exited after shutdown with ${status}` };

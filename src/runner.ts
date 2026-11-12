@@ -26,12 +26,17 @@ export function resolveServerConfig(
     initializationOptions?: unknown,
     clientCapabilities?: Record<string, unknown>,
     settings?: Record<string, unknown>,
+    allowExitCodes?: number[],
 ): ServerConfig {
     const parts = serverArg.split(/\s+/).filter(Boolean);
     const command = parts[0];
     const args = [...parts.slice(1), ...(extraArgs ?? [])];
 
-    return { command, args, initializationOptions, clientCapabilities, settings };
+    const config: ServerConfig = { command, args, initializationOptions, clientCapabilities, settings };
+    if (allowExitCodes && allowExitCodes.length > 0) {
+        config.allowExitCodes = allowExitCodes;
+    }
+    return config;
 }
 
 /**
@@ -68,6 +73,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         opts.initializationOptions,
         opts.clientCapabilities,
         opts.settings,
+        opts.allowExitCodes,
     );
     const actionFn = await loadActionScript(opts.script);
 
@@ -82,6 +88,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (opts.waitIdle !== undefined) {
         console.log(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
     }
+    if (serverConfig.allowExitCodes) {
+        console.log(`  Allow exit: ${serverConfig.allowExitCodes.join(', ')} after shutdown`);
+    }
     if (opts.serverLog) {
         console.log(`  Server log: ${path.resolve(opts.serverLog)}`);
     }
@@ -95,9 +104,14 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         abnormalExits.push(exit);
         console.error(`  Warning: server ${exit.reason} during ${exit.during}`);
     };
+    // exits with an allowed code after a replied shutdown, kept apart so they do not fail the run
+    const toleratedExits: AbnormalExit[] = [];
     const teardown = async (h: LspHarness, during: string) => {
         try {
             const exit = await h.stop(opts.shutdownTimeout);
+            if (exit?.tolerated) {
+                toleratedExits.push({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
+            }
             if (exit?.abnormal) {
                 recordAbnormal({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
             }
@@ -224,22 +238,26 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     // build and write the report before the final teardown, so a server
     // crashing at shutdown cannot lose the collected runs
     const report = buildReport(opts, runs, totalMs, lifecycle);
-    if (abnormalExits.length > 0) {
-        report.abnormal_exits = abnormalExits;
-    }
+    const addExits = () => {
+        if (abnormalExits.length > 0) {
+            report.abnormal_exits = abnormalExits;
+        }
+        if (toleratedExits.length > 0) {
+            report.tolerated_exits = toleratedExits;
+        }
+    };
+    addExits();
     if (opts.output) {
         writeReport(report, opts.output);
     }
 
     // stop the persistent server, then rewrite the report with the shutdown
-    // timing and any abnormal exit
+    // timing and any abnormal or tolerated exit
     if (!opts.restart && harness && lifecycle) {
         await teardown(harness, 'final teardown');
         lifecycle.push(...harness.takeLifecycleTimings());
         report.summary = summarizeMethods(runs, lifecycle);
-        if (abnormalExits.length > 0) {
-            report.abnormal_exits = abnormalExits;
-        }
+        addExits();
         if (opts.output) {
             writeReport(report, opts.output);
         }

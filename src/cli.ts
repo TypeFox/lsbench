@@ -43,6 +43,12 @@ program
     .option('--settings-file <path>', 'Path to a JSON file with client settings keyed by section')
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
+    .option(
+        '--allow-exit-code <n>',
+        'Tolerate this non zero exit code after a replied shutdown (repeatable), recorded in tolerated_exits',
+        collectExitCode,
+        [] as number[],
+    )
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
     .option('--no-skip-unsupported', 'Send requests even when the server does not advertise their provider')
     .option(
@@ -80,6 +86,9 @@ program
             initializationOptions,
             clientCapabilities,
             settings,
+            allowExitCodes: (rawOpts.allowExitCode as number[]).length
+                ? (rawOpts.allowExitCode as number[])
+                : undefined,
         };
 
         // Validate inputs
@@ -109,6 +118,10 @@ program
         }
         if (Number.isNaN(opts.shutdownTimeout) || (opts.shutdownTimeout ?? 0) < 1) {
             console.error('Error: --shutdown-timeout must be a positive integer');
+            process.exit(1);
+        }
+        if (opts.allowExitCodes?.some((code) => Number.isNaN(code))) {
+            console.error('Error: --allow-exit-code must be a non-negative integer');
             process.exit(1);
         }
         if (opts.waitIdle !== undefined && (Number.isNaN(opts.waitIdle) || opts.waitIdle < 1)) {
@@ -161,6 +174,12 @@ program
     });
 
 program.parse();
+
+/** Collect repeated --allow-exit-code values, NaN for an invalid one (rejected after parsing) */
+function collectExitCode(value: string, previous: number[]): number[] {
+    const code = /^\d+$/.test(value) ? parseInt(value, 10) : Number.NaN;
+    return previous.includes(code) ? previous : [...previous, code];
+}
 
 /** The --wait-idle timeout: undefined without the flag, the default for a bare flag */
 function parseWaitIdle(value: string | boolean | undefined): number | undefined {
@@ -489,6 +508,8 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    sent once via workspace/didChangeConfiguration
           --restart                Restart the server each iteration (cold start)   (default: false)
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
+          --allow-exit-code <n>    Tolerate exit code n after a replied shutdown,
+                                   recorded in tolerated_exits (repeatable)
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
           --no-skip-unsupported    Send requests even when the server does not
@@ -516,7 +537,10 @@ The JSON report (and the printed summary) contains:
   - lifecycle          keep alive mode only: spawn, initialize, idle and final shutdown
                        timings of the single server
   - abnormal_exits     servers that crashed or exited unexpectedly (only when any did,
-                       lsbench then exits non zero but still writes the report)
+                       lsbench then exits non zero but still writes the report). An exit
+                       without a shutdown reply is always abnormal, whatever its code
+  - tolerated_exits    servers that exited after a replied shutdown with a code allowed by
+                       --allow-exit-code (only when any did, these do not fail the run)
 
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started

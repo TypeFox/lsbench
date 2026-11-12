@@ -49,6 +49,13 @@ describe('resolveServerConfig', () => {
         const cfg = resolveServerConfig('cmd', undefined, undefined, undefined, settings);
         expect(cfg.settings).toBe(settings);
     });
+
+    it('sets allowExitCodes only when some are given', () => {
+        expect(resolveServerConfig('cmd', undefined, undefined, undefined, undefined, [1]).allowExitCodes).toEqual([1]);
+        expect(resolveServerConfig('cmd', undefined, undefined, undefined, undefined, [])).not.toHaveProperty(
+            'allowExitCodes',
+        );
+    });
 });
 
 describe('loadActionScript', () => {
@@ -265,6 +272,98 @@ describe('runBenchmark lifecycle timings', () => {
             'lifecycle/initialize',
             'lifecycle/idle',
             'lifecycle/shutdown',
+        ]);
+    });
+});
+
+/**
+ * a fake server picked by argv: fail replies to shutdown, then exits 1 on exit (as ts7 does);
+ * quit exits 0 on shutdown without replying
+ */
+const exitCodeServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const mode = process.argv[1];
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
+conn.onRequest('textDocument/hover', () => null);
+conn.onRequest('shutdown', () => (mode === 'quit' ? process.exit(0) : null));
+conn.onNotification('exit', () => process.exit(1));
+conn.listen();
+`;
+
+describe('runBenchmark with allowExitCodes', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-exit-codes-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function options(mode: 'fail' | 'quit', restart: boolean, output: string, allowExitCodes?: number[]): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', exitCodeServer, mode],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output,
+            restart,
+            verbose: false,
+            allowExitCodes,
+        };
+    }
+
+    it('records a non zero exit after a replied shutdown as abnormal without allowExitCodes', async () => {
+        const report = await runBenchmark(options('fail', true, path.join(tmpDir, 'report-default.json')));
+        expect(report.abnormal_exits).toHaveLength(3);
+        expect(report.tolerated_exits).toBeUndefined();
+    });
+
+    for (const restart of [false, true]) {
+        it(`records allowed exits as tolerated, not abnormal (${restart ? 'restart' : 'keep alive'})`, async () => {
+            const output = path.join(tmpDir, `report-allowed-${restart}.json`);
+            const report = await runBenchmark(options('fail', restart, output, [1]));
+
+            expect(report.abnormal_exits).toBeUndefined();
+            const expected = restart ? ['warmup 1', 'iteration 1', 'iteration 2'] : ['final teardown'];
+            expect(report.tolerated_exits?.map((e) => e.during)).toEqual(expected);
+            for (const exit of report.tolerated_exits ?? []) {
+                expect(exit).toEqual({
+                    during: exit.during,
+                    code: 1,
+                    signal: null,
+                    reason: 'exited after shutdown with code 1 (allowed)',
+                });
+            }
+            const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+            expect(written.abnormal_exits).toBeUndefined();
+            expect(written.tolerated_exits).toHaveLength(expected.length);
+        });
+    }
+
+    it('keeps an exit 0 without a shutdown reply abnormal whatever codes are allowed', async () => {
+        const report = await runBenchmark(options('quit', true, path.join(tmpDir, 'report-quit.json'), [0, 1]));
+        expect(report.tolerated_exits).toBeUndefined();
+        expect(report.abnormal_exits?.map((e) => [e.code, e.during])).toEqual([
+            [0, 'warmup 1'],
+            [0, 'iteration 1'],
+            [0, 'iteration 2'],
         ]);
     });
 });

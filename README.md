@@ -340,6 +340,7 @@ Options:
   --settings-file <path>      JSON file with client settings keyed by section
   --restart                   Restart the server between iterations
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
+  --allow-exit-code <n>       Tolerate exit code n after a replied shutdown (repeatable)
   --content-modified-retries <n>
                               Retry requests rejected with ContentModified (default: 3)
   --no-skip-unsupported       Send requests even when the server does not advertise their provider
@@ -423,7 +424,7 @@ lsbench "vscode-html-language-server --stdio" -w ./project -s ./actions.ts \
 
 Like VS Code, lsbench first expands dotted keys into nested objects, at every level, so the example above becomes `{ "js/ts": { ... }, "html": { "format": { "enable": true } } }`. Keys that meet at the same path deep merge, and on a conflict a key without dots wins over a dotted one. Each `workspace/configuration` item's `section` is then resolved as a dotted path into the expanded settings: `html` gets `{ "format": { "enable": true } }` and `html.format.enable` gets `true`. An unknown section gets `null`, and an item without a section gets the whole settings object. After `initialized`, the expanded settings are also sent once with `workspace/didChangeConfiguration` as `{ settings }`, and again after each restart. Without a settings file, every item gets `{}` and no `didChangeConfiguration` is sent.
 
-For full control over `command`, `args`, `env`, `initializationOptions`, `clientCapabilities` and `settings`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults, and `expandSettings()` shows how settings are expanded.
+For full control over `command`, `args`, `env`, `initializationOptions`, `clientCapabilities`, `settings` and `allowExitCodes`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults, and `expandSettings()` shows how settings are expanded.
 
 ## Output format
 
@@ -434,6 +435,7 @@ The JSON report contains:
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize, idle and final shutdown timings of the single server
 - **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero
+- **tolerated_exits**: Servers that replied to `shutdown` and then exited with a code allowed by `--allow-exit-code` (`ServerConfig.allowExitCodes`), only present when any did. They have the same shape as `abnormal_exits` but do not make lsbench exit non zero. Use this for servers known to exit non zero after `exit`, such as TypeScript 7 exiting 1. A server that exits without replying to `shutdown` stays in `abnormal_exits` whatever its code
 
 Each request timing has a `result`:
 

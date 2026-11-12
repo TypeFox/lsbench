@@ -117,7 +117,10 @@ conn.listen();
 setInterval(() => {}, 1000);
 `;
 
-/** a fake server whose shutdown behavior is picked by argv: crash, hang or clean */
+/**
+ * a fake server whose shutdown behavior is picked by argv: crash (exit 3 without a reply),
+ * quit (exit 0 without a reply), hang, fail (reply, then exit 1 on exit) or clean
+ */
 const shutdownServer = `
 import * as rpc from 'vscode-jsonrpc/node';
 const conn = rpc.createMessageConnection(
@@ -130,18 +133,21 @@ conn.onRequest('shutdown', () => {
     if (mode === 'crash') {
         process.exit(3);
     }
+    if (mode === 'quit') {
+        process.exit(0);
+    }
     if (mode === 'hang') {
         return new Promise(() => {});
     }
     return null;
 });
-conn.onNotification('exit', () => process.exit(0));
+conn.onNotification('exit', () => process.exit(mode === 'fail' ? 1 : 0));
 conn.listen();
 `;
 
-function shutdownHarness(mode: 'crash' | 'hang' | 'clean'): LspHarness {
+function shutdownHarness(mode: 'crash' | 'quit' | 'hang' | 'fail' | 'clean', allowExitCodes?: number[]): LspHarness {
     return new LspHarness(
-        { command: process.execPath, args: ['--input-type=module', '-e', shutdownServer, mode] },
+        { command: process.execPath, args: ['--input-type=module', '-e', shutdownServer, mode], allowExitCodes },
         process.cwd(),
     );
 }
@@ -192,6 +198,46 @@ describe('LspHarness.stop', () => {
             reason: 'exited cleanly',
         });
     });
+
+    it('reports a non zero exit after a replied shutdown as abnormal by default', async () => {
+        const harness = shutdownHarness('fail');
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ code: 1, abnormal: true, reason: 'exited after shutdown with code 1' });
+        expect(exit?.tolerated).toBeUndefined();
+    });
+
+    it('tolerates an allowed exit code after a replied shutdown', async () => {
+        const harness = shutdownHarness('fail', [1]);
+        await harness.start();
+        expect(await harness.stop()).toMatchObject({
+            code: 1,
+            signal: null,
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after shutdown with code 1 (allowed)',
+        });
+    });
+
+    it('does not tolerate an exit code that is not allowed', async () => {
+        const harness = shutdownHarness('fail', [2]);
+        await harness.start();
+        expect(await harness.stop()).toMatchObject({ code: 1, abnormal: true });
+    });
+
+    for (const [mode, code] of [
+        ['quit', 0],
+        ['crash', 3],
+    ] as const) {
+        it(`keeps an exit without a shutdown reply abnormal even when code ${code} is allowed`, async () => {
+            const harness = shutdownHarness(mode, [0, 1, 3]);
+            await harness.start();
+            const exit = await harness.stop();
+            expect(exit).toMatchObject({ code, abnormal: true });
+            expect(exit?.tolerated).toBeUndefined();
+            expect(exit?.reason).toMatch(/unexpectedly/);
+        });
+    }
 
     it('records spawn, initialize and shutdown timings', async () => {
         const harness = shutdownHarness('clean');

@@ -19,6 +19,12 @@ export interface ServerConfig {
      * into nested objects first, as VS Code does
      */
     settings?: Record<string, unknown>;
+    /**
+     * Non zero exit codes tolerated after the server replied to shutdown, for servers known to
+     * exit with them (0 is always clean). Such an exit is recorded as tolerated, not abnormal.
+     * An exit without a shutdown reply stays abnormal whatever its code
+     */
+    allowExitCodes?: number[];
 }
 
 // ── CLI Options ─────────────────────────────────────────────────────────────
@@ -46,6 +52,8 @@ export interface BenchOptions {
     clientCapabilities?: Record<string, unknown>;
     /** Client settings keyed by section, see ServerConfig.settings */
     settings?: Record<string, unknown>;
+    /** Non zero exit codes tolerated after a replied shutdown, see ServerConfig.allowExitCodes */
+    allowExitCodes?: number[];
     /** Verbose logging */
     verbose: boolean;
     /**
@@ -161,8 +169,14 @@ export interface BenchReport {
     lifecycle?: RequestTiming[];
     /** Server processes that crashed or exited unexpectedly, absent when none did */
     abnormal_exits?: AbnormalExit[];
+    /**
+     * Server processes that exited after a replied shutdown with a code allowed by
+     * allowExitCodes (--allow-exit-code), absent when none did. They do not fail the run
+     */
+    tolerated_exits?: AbnormalExit[];
 }
 
+/** A server exit recorded in abnormal_exits or tolerated_exits */
 export interface AbnormalExit {
     /** When the exit was seen, e.g. "iteration 3", "warmup 1" or "final teardown" */
     during: string;

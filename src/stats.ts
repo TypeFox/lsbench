@@ -1,4 +1,4 @@
-import type { BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
+import type { AbnormalExit, BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
 
 /** Sort numbers ascending (in-place) and return the array */
 function sorted(arr: number[]): number[] {
@@ -178,6 +178,12 @@ export function buildReport(
 }
 
 /** Pretty-print a summary table to the console */
+/** "code 1" or "codes 1, 2" for the distinct exit codes of some exits */
+function describeExitCodes(exits: AbnormalExit[]): string {
+    const codes = [...new Set(exits.map((e) => e.code))].sort((a, b) => (a ?? -1) - (b ?? -1));
+    return `${codes.length === 1 ? 'code' : 'codes'} ${codes.join(', ')} after shutdown, allowed`;
+}
+
 export function printSummary(report: BenchReport): void {
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
     console.log('║                     lsbench results                          ║');
@@ -188,6 +194,14 @@ export function printSummary(report: BenchReport): void {
     console.log(`  Iterations:  ${report.iterations} (+ ${report.warmup} warmup)`);
     console.log(`  Total time:  ${(report.total_duration_ms / 1000).toFixed(1)}s`);
     console.log(`  Restart:     ${report.restart_between_iterations ? 'yes' : 'no'}`);
+    if (report.abnormal_exits) {
+        console.log(`  Abnormal exits:  ${report.abnormal_exits.length}`);
+    }
+    if (report.tolerated_exits) {
+        console.log(
+            `  Tolerated exits: ${report.tolerated_exits.length} (${describeExitCodes(report.tolerated_exits)})`,
+        );
+    }
     console.log();
 
     // Iteration summary
