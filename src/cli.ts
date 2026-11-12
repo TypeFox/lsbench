@@ -532,6 +532,7 @@ Anything after \`--\` is passed through as extra args to the server command.
 The JSON report (and the printed summary) contains:
   - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms,
                        failure_rate, null_rate, empty_rate, timeout_rate, skipped, skip_rate
+                       (latencies are null, printed n/a, when every call timed out or was skipped)
   - iteration_summary  per-iteration total-time stats
   - runs               full per-iteration, per-request breakdown
   - lifecycle          keep alive mode only: spawn, initialize, idle and final shutdown

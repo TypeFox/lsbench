@@ -13,17 +13,17 @@ function timing(overrides: Partial<RequestTiming> = {}): RequestTiming {
 }
 
 describe('computeMethodStats', () => {
-    it('returns all-zero stats for an empty set', () => {
+    it('returns null latencies and zero rates for an empty set', () => {
         const stats = computeMethodStats([]);
         expect(stats).toEqual({
             count: 0,
-            avg_ms: 0,
-            median_ms: 0,
-            p95_ms: 0,
-            p99_ms: 0,
-            min_ms: 0,
-            max_ms: 0,
-            stddev_ms: 0,
+            avg_ms: null,
+            median_ms: null,
+            p95_ms: null,
+            p99_ms: null,
+            min_ms: null,
+            max_ms: null,
+            stddev_ms: null,
             failure_rate: 0,
             null_rate: 0,
             empty_rate: 0,
@@ -117,9 +117,9 @@ describe('computeMethodStats', () => {
         });
     });
 
-    it('reports a fully skipped method with zero durations and a skip rate of 1', () => {
+    it('reports a fully skipped method with null latencies and a skip rate of 1', () => {
         const stats = computeMethodStats([timing({ duration_ms: 0, success: false, result: 'skipped' })]);
-        expect(stats).toMatchObject({ count: 1, skipped: 1, skip_rate: 1, avg_ms: 0, failure_rate: 0 });
+        expect(stats).toMatchObject({ count: 1, skipped: 1, skip_rate: 1, avg_ms: null, failure_rate: 0 });
     });
 
     it('counts timeouts in timeout_rate but keeps them out of durations and failures', () => {
@@ -141,9 +141,21 @@ describe('computeMethodStats', () => {
         });
     });
 
-    it('reports a method where every wait timed out with zero durations and a timeout rate of 1', () => {
-        const stats = computeMethodStats([timing({ duration_ms: 3000, success: false, result: 'timeout' })]);
-        expect(stats).toMatchObject({ count: 1, timeout_rate: 1, avg_ms: 0, max_ms: 0, failure_rate: 0 });
+    it('reports a method where every wait timed out with null latencies and a timeout rate of 1', () => {
+        const timeout = timing({ method: 'diagnostics/open', duration_ms: 15000, success: false, result: 'timeout' });
+        const stats = computeMethodStats([timeout, timeout, timeout]);
+        expect(stats).toMatchObject({
+            count: 3,
+            timeout_rate: 1,
+            avg_ms: null,
+            median_ms: null,
+            p95_ms: null,
+            p99_ms: null,
+            min_ms: null,
+            max_ms: null,
+            stddev_ms: null,
+            failure_rate: 0,
+        });
     });
 
     it('leaves skipped requests out of the timeout rate', () => {
@@ -288,6 +300,23 @@ describe('printSummary', () => {
         }
         return '';
     }
+
+    it('prints n/a for the latencies of a method where every wait timed out', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [
+            timing(),
+            timing({ method: 'diagnostics/open', duration_ms: 15000, success: false, result: 'timeout' }),
+        ];
+        printSummary(buildReport(opts, [{ iteration: 1, requests, total_ms: 10 }], 10));
+        const row = lines.find((line) => line.trimStart().startsWith('diagnostics/open')) ?? '';
+        expect(row.match(/n\/a/g)).toHaveLength(7);
+        expect(row).toContain('100.0%');
+        const hover = lines.find((line) => line.trimStart().startsWith('textDocument/hover')) ?? '';
+        expect(hover).not.toContain('n/a');
+    });
 
     it('leaves out the null and empty columns when every result is ok', () => {
         expect(header([timing()])).not.toMatch(/Null%|Empty%/);

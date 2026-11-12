@@ -61,13 +61,14 @@ async function main() {
     console.log(`  ${'method'.padEnd(32)} ${a.padStart(10)} ${b.padStart(10)}   delta`);
 
     for (const method of [...methods].sort()) {
-        const medianA = reports.get(a)?.summary[method]?.median_ms;
-        const medianB = reports.get(b)?.summary[method]?.median_ms;
+        // a median is null when every call timed out or was skipped, treat it like a missing method
+        const medianA = reports.get(a)?.summary[method]?.median_ms ?? undefined;
+        const medianB = reports.get(b)?.summary[method]?.median_ms ?? undefined;
 
         const cellA = medianA === undefined ? '—' : medianA.toFixed(1);
         const cellB = medianB === undefined ? '—' : medianB.toFixed(1);
 
-        // percentage change from a -> b, when both servers reported the method
+        // percentage change from a -> b, when both servers reported a median for the method
         let delta = '';
         if (medianA !== undefined && medianB !== undefined && medianA > 0) {
             const pct = ((medianB - medianA) / medianA) * 100;

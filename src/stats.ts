@@ -66,16 +66,17 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         skip_rate: rate(skipped, count),
     };
 
+    // no durations left (all timeouts or skipped): null rather than 0, which would read as instant
     if (n === 0) {
         return {
             count,
-            avg_ms: 0,
-            median_ms: 0,
-            p95_ms: 0,
-            p99_ms: 0,
-            min_ms: 0,
-            max_ms: 0,
-            stddev_ms: 0,
+            avg_ms: null,
+            median_ms: null,
+            p95_ms: null,
+            p99_ms: null,
+            min_ms: null,
+            max_ms: null,
+            stddev_ms: null,
             ...rates,
         };
     }
@@ -238,6 +239,8 @@ export function printSummary(report: BenchReport): void {
         }
     }
     const percent = (rate: number) => `${(rate * 100).toFixed(1)}%`.padStart(8);
+    // latencies are null when no durations are left
+    const ms = (value: number | null) => (value === null ? 'n/a' : `${value}`).padStart(10);
 
     const header =
         '  ' +
@@ -262,13 +265,13 @@ export function printSummary(report: BenchReport): void {
         const row =
             '  ' +
             method.padEnd(nameWidth) +
-            `${s.avg_ms}`.padStart(10) +
-            `${s.median_ms}`.padStart(10) +
-            `${s.p95_ms}`.padStart(10) +
-            `${s.p99_ms}`.padStart(10) +
-            `${s.min_ms}`.padStart(10) +
-            `${s.max_ms}`.padStart(10) +
-            `${s.stddev_ms}`.padStart(10) +
+            ms(s.avg_ms) +
+            ms(s.median_ms) +
+            ms(s.p95_ms) +
+            ms(s.p99_ms) +
+            ms(s.min_ms) +
+            ms(s.max_ms) +
+            ms(s.stddev_ms) +
             percent(s.failure_rate) +
             (showResults ? percent(s.null_rate) + percent(s.empty_rate) : '') +
             (showTimeouts ? percent(s.timeout_rate) : '') +

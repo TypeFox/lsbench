@@ -120,17 +120,18 @@ export interface IterationResult {
 
 /**
  * Per method aggregates. `count` and `skipped` include skipped requests, the rates cover
- * only the requests actually sent, and the durations additionally leave out timeouts
+ * only the requests actually sent, and the durations additionally leave out timeouts.
+ * The latency fields are null when no durations are left, for example when every wait timed out
  */
 export interface MethodStats {
     count: number;
-    avg_ms: number;
-    median_ms: number;
-    p95_ms: number;
-    p99_ms: number;
-    min_ms: number;
-    max_ms: number;
-    stddev_ms: number;
+    avg_ms: number | null;
+    median_ms: number | null;
+    p95_ms: number | null;
+    p99_ms: number | null;
+    min_ms: number | null;
+    max_ms: number | null;
+    stddev_ms: number | null;
     failure_rate: number;
     /** Share of requests that returned null */
     null_rate: number;

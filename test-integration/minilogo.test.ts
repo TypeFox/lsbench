@@ -380,7 +380,7 @@ export default async function (ctx: BenchContext) {
             skipped: 2,
             skip_rate: 1,
             failure_rate: 0,
-            avg_ms: 0,
+            avg_ms: null,
         });
         expect(symbolStats.skipped).toBe(0);
         // Langium never publishes on close, so each reopen must not run into the timeout
