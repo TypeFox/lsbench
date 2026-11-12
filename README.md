@@ -365,7 +365,7 @@ With `-v`, lsbench's own lines start with `[lsbench]`, request timings with `[ls
 [lsbench] Publish src/config.yaml v=1 n=2 current: Incorrect type. Expected "string".
 ```
 
-The status is `current` for the open document state, `stale` for an older version or a publish credited to a closed document, `closed` while the document is closed, `close candidate` when held as the possible clearing publish of a close (see [Waiting for diagnostics](#waiting-for-diagnostics)), and `unopened` for a document never opened.
+The status is `current` for the open document state, `stale` for an older version or a publish credited to a closed document, `closed` while the document is closed, `close candidate` when held as the possible clearing publish of a close (see [Waiting for diagnostics](#waiting-for-diagnostics)), and `unopened` for a document never opened. Publish URIs are matched to documents after decoding percent-encoding, and case-insensitively on macOS and Windows. On other platforms a publish whose URI matches an open document only apart from case stays `unopened`, and lsbench logs a hint once per URI.
 
 Server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` are forwarded in verbose mode with each line prefixed `[server]`, so `grep -v '^\[server\]'` leaves lsbench's lines. `--server-log <file>` writes them to a file instead, with or without `-v`. The file is appended to, with a header line per server start holding the timestamp and command:
 

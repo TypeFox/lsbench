@@ -151,6 +151,12 @@ interface TrackedDocument extends DocumentSyncState {
  * versions its other publishes, and held as a candidate otherwise. It also learns whether the
  * server pushes diagnostics at all, see `delivery`. One tracker serves one server process,
  * `clear()` forgets what it learned.
+ *
+ * URIs are matched after decoding percent-encoding, so a server publishing
+ * `file:///a%20b.ts` matches the document opened as `file:///a b.ts`. On platforms whose
+ * file systems are usually case-insensitive (darwin, win32) they are also compared
+ * case-insensitively, as some servers lowercase the URIs they publish. Elsewhere a publish
+ * for an unopened URI that matches an open document apart from case is logged as a hint.
  */
 export class DiagnosticsTracker {
     private documents = new Map<string, TrackedDocument>();
@@ -163,13 +169,50 @@ export class DiagnosticsTracker {
     /** whether the server sent a version with a publish for an opened document */
     private versionsPublishes = false;
     private deliveryListeners = new Set<(delivery: DiagnosticsDelivery) => void>();
+    /** whether URIs are compared case-insensitively, from the platform */
+    private readonly caseInsensitive: boolean;
+    /** URI keys already hinted at as matching an open document apart from case */
+    private caseHinted = new Set<string>();
 
     constructor(
         private log: (msg: string) => void = () => {},
         private closeWindowMs = CLOSE_PUBLISH_WINDOW_MS,
         /** called for each received publish with its classification, before any wait sees it */
         private onPublish: (publish: DiagnosticsPublish, status: PublishStatus) => void = () => {},
-    ) {}
+        /** decides whether URIs are compared case-insensitively (darwin, win32), injectable for tests */
+        platform: NodeJS.Platform = process.platform,
+    ) {
+        this.caseInsensitive = platform === 'darwin' || platform === 'win32';
+    }
+
+    /** The key a URI is tracked under: percent-decoded, and lowercased on case-insensitive platforms */
+    private key(uri: string): string {
+        let decoded = uri;
+        try {
+            decoded = decodeURIComponent(uri);
+        } catch {
+            // malformed percent-encoding, match the URI as it is
+        }
+        return this.caseInsensitive ? decoded.toLowerCase() : decoded;
+    }
+
+    /** On case-sensitive platforms, log once per URI when an unopened publish matches an open document apart from case */
+    private hintCaseMismatch(key: string, uri: string): void {
+        if (this.caseInsensitive || this.caseHinted.has(key)) {
+            return;
+        }
+        const lower = key.toLowerCase();
+        for (const [docKey, doc] of this.documents) {
+            if (doc.generation > 0 && docKey !== key && docKey.toLowerCase() === lower) {
+                this.caseHinted.add(key);
+                this.log(
+                    `Publish for unopened ${uri} matches opened ${docKey} apart from case, ` +
+                        'the server may be changing the case of URIs; it is not matched on this platform',
+                );
+                return;
+            }
+        }
+    }
 
     /** Update document state from an outgoing notification, other methods are ignored */
     noteNotification(method: string, params: unknown): void {
@@ -177,7 +220,7 @@ export class DiagnosticsTracker {
         if (typeof textDocument?.uri !== 'string') {
             return;
         }
-        const uri = textDocument.uri;
+        const uri = this.key(textDocument.uri);
         const version = typeof textDocument.version === 'number' ? textDocument.version : undefined;
         const doc = this.documents.get(uri) ?? {
             generation: 0,
@@ -196,7 +239,7 @@ export class DiagnosticsTracker {
             this.markSynced(doc, 'didChange');
         } else if (method === 'textDocument/didClose') {
             doc.open = false;
-            this.startCloseWindow(uri, doc);
+            this.startCloseWindow(textDocument.uri, doc);
         } else {
             return;
         }
@@ -206,10 +249,14 @@ export class DiagnosticsTracker {
     /** Record a publish and hand it to the listeners of its URI, unless it is held as a candidate */
     receive(params: PublishDiagnosticsParams): DiagnosticsPublish {
         const receivedAt = process.hrtime.bigint();
-        const doc = this.documents.get(params.uri);
+        const key = this.key(params.uri);
+        const doc = this.documents.get(key);
         let generation = doc?.generation ?? 0;
         let tentative = false;
         let status: PublishStatus = !doc || doc.generation === 0 ? 'unopened' : 'current';
+        if (status === 'unopened') {
+            this.hintCaseMismatch(key, params.uri);
+        }
         if (doc && doc.generation > 0 && !doc.open) {
             status = 'closed';
             doc.closePublishes++;
@@ -343,7 +390,7 @@ export class DiagnosticsTracker {
 
     /** The state of a document, from the notifications sent for it */
     document(uri: string): DocumentSyncState | undefined {
-        const doc = this.documents.get(uri);
+        const doc = this.documents.get(this.key(uri));
         if (!doc) {
             return undefined;
         }
@@ -353,7 +400,7 @@ export class DiagnosticsTracker {
 
     /** The latest publish received for a URI */
     latestPublish(uri: string): DiagnosticsPublish | undefined {
-        return this.latest.get(uri);
+        return this.latest.get(this.key(uri));
     }
 
     /** The current sequence number, a publish received after now has a larger seq */
@@ -393,15 +440,16 @@ export class DiagnosticsTracker {
         options: PublishWaitOptions,
     ): Promise<PublishWaitResult> {
         const { timeoutMs, until, settleMs, signal } = options;
+        const key = this.key(uri);
         return new Promise((resolve, reject) => {
             if (signal?.aborted) {
                 resolve({ publishes: 0, timedOut: false, aborted: true });
                 return;
             }
-            let listeners = this.listeners.get(uri);
+            let listeners = this.listeners.get(key);
             if (!listeners) {
                 listeners = new Set();
-                this.listeners.set(uri, listeners);
+                this.listeners.set(key, listeners);
             }
             let latest: DiagnosticsPublish | undefined;
             let publishes = 0;
@@ -414,8 +462,8 @@ export class DiagnosticsTracker {
                 clearTimeout(quietTimer);
                 signal?.removeEventListener('abort', onAbort);
                 listeners.delete(listener);
-                if (listeners.size === 0 && this.listeners.get(uri) === listeners) {
-                    this.listeners.delete(uri);
+                if (listeners.size === 0 && this.listeners.get(key) === listeners) {
+                    this.listeners.delete(key);
                 }
             };
             const finish = (timedOut: boolean) => {
@@ -464,7 +512,7 @@ export class DiagnosticsTracker {
             };
             signal?.addEventListener('abort', onAbort);
             listeners.add(listener);
-            const cached = this.latest.get(uri);
+            const cached = this.latest.get(key);
             if (cached) {
                 listener(cached);
             }
@@ -482,6 +530,7 @@ export class DiagnosticsTracker {
         this.documents.clear();
         this.latest.clear();
         this.listeners.clear();
+        this.caseHinted.clear();
     }
 
     private setDelivery(delivery: DiagnosticsDelivery, tentative: boolean): void {
@@ -497,8 +546,9 @@ export class DiagnosticsTracker {
 
     /** Make a publish the latest for its URI and hand it to the listeners */
     private deliver(publish: DiagnosticsPublish): void {
-        this.latest.set(publish.uri, publish);
-        for (const cb of this.listeners.get(publish.uri) ?? []) {
+        const key = this.key(publish.uri);
+        this.latest.set(key, publish);
+        for (const cb of this.listeners.get(key) ?? []) {
             cb(publish);
         }
     }

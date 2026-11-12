@@ -774,6 +774,77 @@ describe('DiagnosticsTracker', () => {
         expect(tracker.receive({ uri, version: 1, diagnostics: [] }).generation).toBe(2);
     });
 
+    describe('publish URI normalization', () => {
+        const opened = 'file:///Users/Me/My Project/a.ts';
+        const openNote = { textDocument: { uri: opened, languageId: 'typescript', version: 1, text: '' } };
+        const message = [{ range: {}, message: 'x' }];
+
+        it('matches a percent-encoded publish to the document opened unencoded, on any platform', async () => {
+            const tracker = new DiagnosticsTracker(undefined, undefined, undefined, 'linux');
+            tracker.noteNotification('textDocument/didOpen', openNote);
+            const wait = tracker.waitFor(opened, () => true, 5000);
+            const publish = tracker.receive({ uri: 'file:///Users/Me/My%20Project/a.ts', diagnostics: message });
+            expect(publish.generation).toBe(1);
+            expect(await wait).toBe(publish);
+            expect(tracker.latestPublish(opened)).toBe(publish);
+            // the publish keeps the URI the server sent
+            expect(publish.uri).toBe('file:///Users/Me/My%20Project/a.ts');
+        });
+
+        it.each(['darwin', 'win32'] as const)('matches a publish differing only in case on %s', async (platform) => {
+            const statuses: string[] = [];
+            const tracker = new DiagnosticsTracker(
+                undefined,
+                undefined,
+                (_publish, status) => statuses.push(status),
+                platform,
+            );
+            tracker.noteNotification('textDocument/didOpen', openNote);
+            const wait = tracker.waitFor(opened, () => true, 5000);
+            const publish = tracker.receive({ uri: 'file:///users/me/my%20project/a.ts', diagnostics: message });
+            expect(statuses).toEqual(['current']);
+            expect(publish.generation).toBe(1);
+            expect(await wait).toBe(publish);
+            expect(tracker.document('FILE:///USERS/ME/MY PROJECT/A.TS')?.open).toBe(true);
+        });
+
+        it('keeps case-sensitive matching on linux and logs a hint once per URI', () => {
+            const logs: string[] = [];
+            const statuses: string[] = [];
+            const tracker = new DiagnosticsTracker(
+                (msg) => logs.push(msg),
+                undefined,
+                (_publish, status) => statuses.push(status),
+                'linux',
+            );
+            tracker.noteNotification('textDocument/didOpen', openNote);
+            const lowered = 'file:///users/me/my%20project/a.ts';
+            expect(tracker.receive({ uri: lowered, diagnostics: message }).generation).toBe(0);
+            tracker.receive({ uri: lowered, diagnostics: [] });
+            expect(statuses).toEqual(['unopened', 'unopened']);
+            expect(tracker.latestPublish(opened)).toBeUndefined();
+            const hints = logs.filter((l) => l.includes('apart from case'));
+            expect(hints).toHaveLength(1);
+            expect(hints[0]).toContain(lowered);
+            expect(hints[0]).toContain(opened);
+        });
+
+        it('does not hint for an unopened publish that matches no open document', () => {
+            const logs: string[] = [];
+            const tracker = new DiagnosticsTracker((msg) => logs.push(msg), undefined, undefined, 'linux');
+            tracker.noteNotification('textDocument/didOpen', openNote);
+            tracker.receive({ uri: 'file:///Users/Me/My%20Project/tsconfig.json', diagnostics: [] });
+            expect(logs.filter((l) => l.includes('apart from case'))).toEqual([]);
+        });
+
+        it('matches a malformed percent-encoded URI as it is', () => {
+            const tracker = new DiagnosticsTracker(undefined, undefined, undefined, 'linux');
+            const odd = 'file:///w/100%.ts';
+            tracker.noteNotification('textDocument/didOpen', { textDocument: { uri: odd, version: 1 } });
+            expect(tracker.receive({ uri: odd, diagnostics: [] }).generation).toBe(1);
+        });
+    });
+
     describe('close window rule', () => {
         const close = { textDocument: { uri } };
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
