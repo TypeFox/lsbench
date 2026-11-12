@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BenchOptions } from 'lsbench';
 import { loadActionScript, resolveServerConfig, runBenchmark } from 'lsbench';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 describe('resolveServerConfig', () => {
     it('splits a bare command with no args', () => {
@@ -413,5 +413,81 @@ describe('runBenchmark with allowExitCodes', () => {
             [0, 'teardown of iteration 1'],
             [0, 'teardown of iteration 2'],
         ]);
+    });
+});
+
+describe('runBenchmark progress lines', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-progress-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** run two iterations after one warmup, returning stdout and console output in order as one string */
+    async function capture(verbose: boolean): Promise<string> {
+        const chunks: string[] = [];
+        vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+            chunks.push(String(chunk));
+            return true;
+        });
+        for (const method of ['log', 'error'] as const) {
+            vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+                chunks.push(`${args.map(String).join(' ')}\n`);
+            });
+        }
+        await runBenchmark({
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', cleanServer],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output: '',
+            restart: false,
+            verbose,
+        });
+        return chunks.join('');
+    }
+
+    it('ends the progress line and prints the iteration time on its own line under -v', async () => {
+        const out = await capture(true);
+        const lines = out.split('\n');
+        // the ctx line of the hover lands on its own line, never after the progress line
+        expect(out).not.toMatch(/\.\.\.\S/);
+        for (const iteration of ['warmup 1/1', '1/2', '2/2']) {
+            const start = lines.indexOf(`  Running iteration ${iteration}...`);
+            expect(start).toBeGreaterThanOrEqual(0);
+            expect(lines[start + 1]).toMatch(/^\[lsbench:ctx\] /);
+            const suffix = iteration.startsWith('warmup') ? ' \\(warmup\\)' : '';
+            const time = lines.findIndex((line) =>
+                new RegExp(`^  Iteration ${iteration}: \\d+ms${suffix}$`).test(line),
+            );
+            expect(time).toBeGreaterThan(start + 1);
+        }
+    });
+
+    it('keeps the time on the progress line without -v', async () => {
+        const out = await capture(false);
+        expect(out).toMatch(/^ {2}Running iteration warmup 1\/1\.\.\. \d+ms \(warmup\)$/m);
+        expect(out).toMatch(/^ {2}Running iteration 1\/2\.\.\. \d+ms$/m);
+        expect(out).toMatch(/^ {2}Running iteration 2\/2\.\.\. \d+ms$/m);
+        expect(out).not.toMatch(/Iteration \d/);
     });
 });

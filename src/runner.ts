@@ -156,7 +156,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         const iterNum = isWarmup ? `warmup ${i + 1}/${opts.warmup}` : `${i - opts.warmup + 1}/${opts.iterations}`;
         const during = isWarmup ? `warmup ${i + 1}` : `iteration ${i - opts.warmup + 1}`;
 
-        process.stdout.write(`  Running iteration ${iterNum}...`);
+        // verbose ctx and server lines follow, so end the progress line there and print the
+        // time on its own line below them, otherwise append the time to the progress line
+        process.stdout.write(`  Running iteration ${iterNum}...${opts.verbose ? '\n' : ''}`);
 
         const iterStart = process.hrtime.bigint();
         // with restart, this iteration's spawn and initialize timings
@@ -178,7 +180,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                     throw err;
                 }
                 const msg = err instanceof Error ? err.message : String(err);
-                console.log(` ERROR: ${msg}`);
+                console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
                 const exit = harness.exit;
                 recordAbnormal({
                     during,
@@ -196,7 +198,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             await actionFn(ctx!);
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.log(` ERROR: ${msg}`);
+            console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
             if (opts.verbose && err instanceof Error) {
                 console.error(err.stack);
             }
@@ -219,7 +221,8 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             runs.push(run);
         }
 
-        console.log(` ${iterMs.toFixed(0)}ms${isWarmup ? ' (warmup)' : ''}`);
+        const iterTime = `${iterMs.toFixed(0)}ms${isWarmup ? ' (warmup)' : ''}`;
+        console.log(opts.verbose ? `  Iteration ${iterNum}: ${iterTime}` : ` ${iterTime}`);
 
         // Reset document state between iterations (if not restarting)
         if (!opts.restart) {
