@@ -689,10 +689,14 @@ export class BenchContextImpl implements BenchContext {
             result: timedOut ? 'timeout' : classifyResult(diagnostics),
             diagnostics: diagnostics.length,
         };
+        if (held > 0) {
+            timing.held_pulls = held;
+        }
         this.timings.push(timing);
         this.log(
             `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
-                `${diagnostics.length} diagnostics, ${publishes} publishes`,
+                `${diagnostics.length} diagnostics, ${publishes} publishes` +
+                `${held > 0 ? `, ${held} empty pull answers held while the server was busy` : ''}`,
         );
         if (timedOut && publishes === 0 && method === 'diagnostics/open' && doc && doc.closePublishes > 0) {
             const seen = doc.closePublishes === 1 ? 'the publish' : `the ${doc.closePublishes} publishes`;

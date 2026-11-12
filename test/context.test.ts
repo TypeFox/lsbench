@@ -1874,7 +1874,10 @@ describe('BenchContextImpl', () => {
                     expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
                     expect(pulls()).toHaveLength(1);
                     expect(harness.diagnosticsDelivery()).toBe('push');
-                    expect(ctx.collectTimings()).toMatchObject([{ method: 'diagnostics/open', success: true }]);
+                    // the held pull is recorded on the push timing too
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/open', success: true, held_pulls: 1 },
+                    ]);
                 });
 
                 it('times out with the empty placeholder when the server stays busy', async () => {

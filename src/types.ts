@@ -117,7 +117,7 @@ export interface RequestTiming {
      */
     grace_ms?: number;
     /**
-     * Auto mode diagnostics pulls only: how many empty answers the wait held back as
+     * Auto mode diagnostics waits only: how many empty pull answers the wait held back as
      * placeholders, because the server reported it was still loading when they arrived
      * (experimental/serverStatus not quiescent, or an open $/progress token for a server that
      * never sends a status). The wait then waited for a push or for the server to be no
@@ -166,7 +166,7 @@ export interface MethodStats {
     graced?: number;
     grace_median_ms?: number;
     /**
-     * Diagnostics pulls only, present when some auto mode wait held back empty answers of a
+     * Diagnostics waits only, present when some auto mode wait held back empty pull answers of a
      * busy server: how many timings did, timeouts included, see RequestTiming.held_pulls
      */
     held?: number;
