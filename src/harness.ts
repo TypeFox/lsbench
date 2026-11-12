@@ -832,6 +832,12 @@ export class LspHarness {
     private shutdownReplied = false;
     /** set once we signal the process, so the resulting exit is not abnormal */
     private killRequested = false;
+    /** set while stop() runs, an exit then is part of our own shutdown */
+    private stopping = false;
+    /** set once the server exited outside stop(), requests and notifications then fail with it */
+    private exitError: Error | null = null;
+    /** rejecters of the requests sent through sendRequest still awaiting a reply */
+    private pendingRequests = new Set<(err: Error) => void>();
     /** lifecycle timings (spawn, initialize, shutdown) not yet taken by the runner */
     private lifecycleTimings: RequestTiming[] = [];
     /** ServerConfig.settings with dotted keys expanded, undefined when none are given */
@@ -924,6 +930,8 @@ export class LspHarness {
         this._exit = null;
         this.shutdownReplied = false;
         this.killRequested = false;
+        this.stopping = false;
+        this.exitError = null;
         const child = this.process;
         const spawned = new Promise<void>((resolve) => child.once('spawn', () => resolve()));
         this.exited = new Promise((resolve) => {
@@ -962,6 +970,9 @@ export class LspHarness {
         this.process.on('exit', (code, signal) => {
             this.log(`Server exited: code=${code} signal=${signal}`);
             this._exit = this.describeExit(code, signal);
+            if (!this.stopping) {
+                this.failPendingRequests(child, `server ${this._exit.reason}`);
+            }
             onEarlyExit(
                 new Error(
                     `Server exited before initialize (code=${code} signal=${signal}).` +
@@ -1122,6 +1133,7 @@ export class LspHarness {
         if (!connection) {
             return this._exit;
         }
+        this.stopping = true;
 
         if (!this._exit) {
             const shutdownStart = process.hrtime.bigint();
@@ -1173,6 +1185,44 @@ export class LspHarness {
         this.progress.clear();
         this._registrations.clear();
         return this._exit;
+    }
+
+    /**
+     * After an exit outside stop(), fail new requests and notifications at once, and the
+     * requests awaiting a reply once the server's output is drained, since vscode-jsonrpc
+     * rejects them only on dispose. A reply written just before the exit still arrives
+     */
+    private failPendingRequests(child: cp.ChildProcess, message: string): void {
+        const error = new Error(message);
+        this.exitError = error;
+        const connection = this.connection;
+        const drained = new Promise<void>((resolve) => {
+            const stdout = child.stdout;
+            if (!stdout || stdout.readableEnded || stdout.destroyed) {
+                resolve();
+                return;
+            }
+            stdout.once('end', () => resolve());
+            stdout.once('close', () => resolve());
+        });
+        // a grandchild may keep stdout open, so do not wait on it for long
+        void raceTimeout([drained], 200).then(() => {
+            // a restart may have replaced the connection meanwhile
+            if (this.exitError !== error) {
+                return;
+            }
+            const pending = [...this.pendingRequests];
+            this.pendingRequests.clear();
+            if (pending.length > 0) {
+                this.log(`Failing ${pending.length} pending request(s): ${message}`);
+            }
+            for (const reject of pending) {
+                reject(error);
+            }
+            if (connection && this.connection === connection) {
+                connection.dispose();
+            }
+        });
     }
 
     /** Record a lifecycle timing from startNs to now, failed when error is given */
@@ -1296,13 +1346,47 @@ export class LspHarness {
     }
 
     /** Send a typed LSP request */
-    async sendRequest<R>(method: string, params: unknown): Promise<R> {
-        return this.conn.sendRequest(method, params) as Promise<R>;
+    sendRequest<R>(method: string, params: unknown): Promise<R> {
+        if (this.exitError) {
+            return Promise.reject(this.exitError);
+        }
+        return new Promise<R>((resolve, reject) => {
+            // settle once, by the reply or by the server exiting before it
+            let settled = false;
+            const fail = (err: unknown) => {
+                if (!settled) {
+                    settled = true;
+                    this.pendingRequests.delete(fail);
+                    reject(err);
+                }
+            };
+            this.pendingRequests.add(fail);
+            let request: Promise<unknown>;
+            try {
+                request = this.conn.sendRequest(method, params);
+            } catch (err: unknown) {
+                fail(err);
+                return;
+            }
+            request.then((value) => {
+                if (!settled) {
+                    settled = true;
+                    this.pendingRequests.delete(fail);
+                    resolve(value as R);
+                }
+            }, fail);
+        });
     }
 
-    /** Send an LSP notification */
+    /** Send an LSP notification, throwing once the server has exited outside stop() */
     sendNotification(method: string, params: unknown): void {
-        this.conn.sendNotification(method, params);
+        if (this.exitError) {
+            throw new Error(`cannot send ${method}: ${this.exitError.message}`);
+        }
+        // a write to a server that just closed its input rejects, which is not ours to surface
+        this.conn.sendNotification(method, params).catch((err: unknown) => {
+            this.log(`Failed to send ${method}: ${err instanceof Error ? err.message : String(err)}`);
+        });
         this.diagnostics.noteNotification(method, params);
     }
 

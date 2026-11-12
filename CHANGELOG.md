@@ -23,6 +23,7 @@ Fixes found re-testing next.0 against real servers: auto mode no longer locks pu
 ### Server exits
 
 - `--allow-exit-code <n>` (repeatable) and `ServerConfig.allowExitCodes` tolerate a known non zero exit code after a replied `shutdown`, such as TypeScript 7 exiting 1. Such exits are listed in the new report field `tolerated_exits` instead of `abnormal_exits` and do not make lsbench exit non zero. An exit without a shutdown reply stays abnormal whatever its code. The printed summary shows the abnormal and tolerated exit counts.
+- A server exiting after initialize while a request is awaiting its reply no longer hangs the benchmark. vscode-jsonrpc rejects pending requests only when the connection is disposed, so in next.0 such a request never settled. Pending requests now fail with `server exited unexpectedly (...)`, recorded as an `error` timing, and later requests and notifications of the script fail at once, so the iteration ends and the exit is reported as an abnormal exit as before, with or without `--restart`.
 - Under `--restart`, a server exiting while its iteration's server was stopped is recorded as during `teardown of iteration N` (or `teardown of warmup N`) instead of `iteration N`, which read as a crash during the iteration's work. A server that exited before the teardown keeps `iteration N`.
 
 ### Action scripts and API

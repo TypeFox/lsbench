@@ -33,6 +33,22 @@ conn.onNotification('exit', () => process.exit(1));
 conn.listen();
 `;
 
+// holds a hover request and exits 5 while it is pending
+const crashOnHoverServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
+conn.onRequest('textDocument/hover', () => {
+    setTimeout(() => process.exit(5), 50);
+    return new Promise(() => {});
+});
+conn.onRequest('shutdown', () => null);
+conn.listen();
+`;
+
 // exits 0 on shutdown without replying, the fix 4 fake server
 const quitOnShutdownServer = crashOnShutdownServer.replace('process.exit(3)', 'process.exit(0)');
 
@@ -141,6 +157,62 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
         const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
         expect(report.abnormal_exits).toHaveLength(2);
         expect(report.tolerated_exits).toBeUndefined();
+    });
+
+    function runCrashOnHover(output: string, restart: boolean) {
+        return spawnSync(
+            process.execPath,
+            [
+                path.resolve('dist/cli.js'),
+                process.execPath,
+                '-w',
+                tmpDir,
+                '-s',
+                script,
+                '-n',
+                '2',
+                '--warmup',
+                '0',
+                ...(restart ? ['--restart'] : []),
+                '-o',
+                output,
+                '--',
+                '--input-type=module',
+                '-e',
+                crashOnHoverServer,
+            ],
+            // a hang fails the test instead of stalling the suite
+            { encoding: 'utf-8', timeout: 30_000 },
+        );
+    }
+
+    it('fails a request pending when the server exits, and reports the exit, keep alive', () => {
+        const output = path.join(tmpDir, 'cli-crash-pending.json');
+        const result = runCrashOnHover(output, false);
+        expect(result.signal).toBeNull();
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/exited abnormally during final teardown \(exit code 5\)/);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.runs).toHaveLength(2);
+        for (const run of report.runs) {
+            const hover = run.requests.find((t: { method: string }) => t.method === 'textDocument/hover');
+            expect(hover).toMatchObject({ success: false, result: 'error' });
+            expect(hover.error).toMatch(/server exited unexpectedly \(code 5\)/);
+        }
+        expect(report.abnormal_exits).toHaveLength(1);
+    });
+
+    it('fails a request pending when the server exits, and reports the exit, with --restart', () => {
+        const output = path.join(tmpDir, 'cli-crash-pending-restart.json');
+        const result = runCrashOnHover(output, true);
+        expect(result.signal).toBeNull();
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/exited abnormally during iteration 1 \(exit code 5\)/);
+        expect(result.stderr).toMatch(/exited abnormally during iteration 2 \(exit code 5\)/);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.runs).toHaveLength(2);
+        expect(report.summary['textDocument/hover']).toMatchObject({ count: 2, failure_rate: 1 });
+        expect(report.abnormal_exits).toHaveLength(2);
     });
 
     it('rejects an invalid --allow-exit-code', () => {

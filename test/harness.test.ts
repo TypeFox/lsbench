@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import type { DiagnosticsPublish, PublishStatus } from 'lsbench';
 import {
+    BenchContextImpl,
     DiagnosticsTracker,
     defaultClientCapabilities,
     expandSettings,
@@ -336,6 +337,76 @@ conn.onRequest('shutdown', () => null);
 conn.onNotification('exit', () => process.exit(0));
 conn.listen();
 `;
+
+/** a fake server that holds hover requests and exits 5 shortly after receiving one */
+const crashOnHoverServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
+conn.onRequest('textDocument/hover', () => {
+    setTimeout(() => process.exit(5), 50);
+    return new Promise(() => {});
+});
+conn.onRequest('shutdown', () => null);
+conn.listen();
+`;
+
+function crashOnHoverHarness(): LspHarness {
+    return new LspHarness(
+        { command: process.execPath, args: ['--input-type=module', '-e', crashOnHoverServer] },
+        process.cwd(),
+    );
+}
+
+describe('LspHarness with a server exiting while a request is pending', () => {
+    it('rejects the pending request, fails later requests and notifications fast, and still stops', async () => {
+        const harness = crashOnHoverHarness();
+        await harness.start();
+        const started = Date.now();
+        await expect(harness.sendRequest('textDocument/hover', {})).rejects.toThrow(
+            /server exited unexpectedly \(code 5\)/,
+        );
+        expect(Date.now() - started).toBeLessThan(2000);
+        expect(harness.exit).toMatchObject({ code: 5, abnormal: true });
+
+        await expect(harness.sendRequest('textDocument/hover', {})).rejects.toThrow(/server exited/);
+        expect(() => harness.sendNotification('textDocument/didOpen', {})).toThrow(
+            /cannot send textDocument\/didOpen: server exited/,
+        );
+
+        const exit = await harness.stop(500);
+        expect(exit).toMatchObject({ code: 5, signal: null, abnormal: true });
+        expect(exit?.reason).toMatch(/unexpectedly \(code 5\)/);
+        // no shutdown request is sent to a server already gone
+        expect(harness.takeLifecycleTimings().map((t) => t.method)).toEqual([
+            'lifecycle/spawn',
+            'lifecycle/initialize',
+        ]);
+    });
+
+    it('records the timed request as an error and lets the script go on failing fast', async () => {
+        const harness = crashOnHoverHarness();
+        await harness.start();
+        try {
+            const ctx = new BenchContextImpl(harness, process.cwd());
+            expect(await ctx.request('textDocument/hover', {})).toBeNull();
+            expect(await ctx.request('textDocument/hover', {})).toBeNull();
+            const timings = ctx.collectTimings();
+            expect(timings).toHaveLength(2);
+            for (const timing of timings) {
+                expect(timing).toMatchObject({ method: 'textDocument/hover', success: false, result: 'error' });
+                expect(timing.error).toMatch(/server exited unexpectedly \(code 5\)/);
+            }
+            // resetting documents after the crash does not throw
+            await ctx.resetDocuments();
+        } finally {
+            expect(await harness.stop(500)).toMatchObject({ code: 5, abnormal: true });
+        }
+    });
+});
 
 describe('LspHarness.saveSyncOptions', () => {
     async function withSyncServer(sync: unknown, body: (harness: LspHarness) => Promise<void>): Promise<void> {
