@@ -168,7 +168,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 
 | Method | Description |
 | --- | --- |
-| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version, or pull them, and time it (`options` is `{ timeout, until, settleMs, mode, pullAfterMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }`, plus `tentative: true` for an auto mode pull of a server whose delivery is not settled, see [Waiting for diagnostics](#waiting-for-diagnostics) |
+| `waitForDiagnostics(path, options?)` | Wait for `publishDiagnostics` matching the current document version, or pull them, and time it (`options` is `{ timeout, until, settleMs, mode, pullAfterMs }` or a bare timeout, default 30000 ms). Resolves with `{ diagnostics, timedOut, publishes, source, pulls, ms }`, plus `tentative: true` for an auto mode pull of a server whose delivery is not settled and `graceMs` for an auto mode pull that first waited for a push, see [Waiting for diagnostics](#waiting-for-diagnostics) |
 | `waitForIdle(options?)` | Wait until the server finished background work such as loading the workspace (`options` is `{ timeout, quietMs }` or a bare timeout, default 30000 ms). Resolves with `{ idle, timedOut, ms }`, see [Waiting for idle](#waiting-for-idle) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
@@ -251,12 +251,19 @@ Some servers advertise `diagnosticProvider` and never push (ts7, for example), s
   - pull only: once an auto wait fell back to pulling and the pull resolved with no push in the meantime, later auto waits pull at once. A pull that returned no diagnostics learns this only tentatively, since a server still loading (a cold rust-analyzer, for example) may answer with an empty placeholder and push later. Until a pull returns diagnostics, pulled timings and results are marked `tentative: true`, and verbose mode adds `(tentative, the server may still push)`
 
   A push flips the server to push at any time. A pull in flight then stops, records no timing, and the wait goes on waiting for pushes for the rest of its timeout, so a server that both pushes and advertises `diagnosticProvider`, such as rust-analyzer, is measured by its pushes from its first publish on. Before that, it may be measured by tentative pulls: wait for idle first (see [warmup and readiness](#warmup-and-readiness)), or pass `mode: "push"`. Verbose mode logs what was learned
+
+  With `--restart`, what one iteration's server was learned to use is carried over to the next iteration's server (verbose mode logs `Carrying diagnostics delivery from the previous server`), so warmup iterations teach it and timed iterations on a pull only server pull at once instead of paying the `pullAfterMs` grace on every cold start. A carried tentative pull stays tentative, so a restarted server that pushes still flips it to push
 - `push`: only wait for pushes
 - `pull`: send `textDocument/diagnostic` at once. A server without `diagnosticProvider` gets the wait recorded as `skipped`, like other unsupported requests
 
 A pull resolves on the first report passing `until` (any report without it). Otherwise lsbench pulls again with a backoff from 25 ms doubling up to 250 ms, until `until` passes or the remaining `timeout` runs out. Each pull sends the `resultId` of the previous report for the document as `previousResultId`, and an `unchanged` report resolves to the diagnostics of that previous report. Closing the document forgets its `resultId`. A request rejected with ContentModified or ServerCancelled is pulled again, any other error ends the wait with `result: "error"`. `settleMs` does not apply, a report is the server's complete answer.
 
-The result's `source` is `push` or `pull`, telling which one resolved the wait, and `pulls` counts the requests sent (0 for push, `publishes` is 0 for pull). A pull has no server debounce, so its timing is not comparable with time to a push. It is recorded under its own methods, `diagnostics/pull/open`, `diagnostics/pull/edit` and `diagnostics/pull/wait`, and its `ms` runs from the first pull request to the resolving response, re-pulls and backoff included. The grace period of `auto` mode is not part of it, and the first auto wait on a pull only server pays it once. A `tentative` pull may have measured a placeholder rather than real diagnostics, so leave such timings out or wait for idle first. `codeAction` codes match against pulled diagnostics when the server never published for the document.
+The result's `source` is `push` or `pull`, telling which one resolved the wait, and `pulls` counts the requests sent (0 for push, `publishes` is 0 for pull). A pull has no server debounce, so its timing is not comparable with time to a push. It is recorded under its own methods, `diagnostics/pull/open`, `diagnostics/pull/edit` and `diagnostics/pull/wait`, re-pulls and backoff included:
+
+- `auto` mode: timed like a push wait, from the latest `didOpen` or `didChange` to the resolving response (from the call of the wait for a document that is not open, or that was already pulled since its latest sync). So the timing is open (or edit) to diagnostics as the script saw it, for push and pull alike. When the wait first waited for a push from a server whose delivery was unknown, that grace is part of `ms` and is also recorded as `grace_ms` in the timing and `graceMs` in the result. The summary entry then adds `graced`, how many timings include a grace, and `grace_median_ms`, and the printed summary notes them below the table. The first auto wait on a pull only server pays the grace once (under `--restart`, once per run unless a warmup taught the delivery, see above)
+- `pull` mode: timed from the first pull request to the resolving response, the round trip the script asked to measure. No grace is involved
+
+To avoid the grace on a server known to be pull only, such as ts7, pass `mode: "pull"`, or a short `pullAfterMs`. A `tentative` pull may have measured a placeholder rather than real diagnostics, so leave such timings out or wait for idle first. `codeAction` codes match against pulled diagnostics when the server never published for the document.
 
 ### Waiting for idle
 
@@ -439,7 +446,7 @@ For full control over `command`, `args`, `env`, `initializationOptions`, `client
 
 The JSON report contains:
 
-- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, null rate, empty rate, timeout rate, skipped), including the server lifecycle (see below), time to diagnostics (`diagnostics/*` and `diagnostics/pull/*`, see [waiting for diagnostics](#waiting-for-diagnostics)) and idle waits (`lifecycle/idle` for `--wait-idle`, `server/idle` for `ctx.waitForIdle`)
+- **summary**: Per-method aggregate stats (avg, median, p95, p99, min, max, stddev, failure rate, null rate, empty rate, timeout rate, skipped, and for auto mode pulls that waited for a push first `graced` and `grace_median_ms`), including the server lifecycle (see below), time to diagnostics (`diagnostics/*` and `diagnostics/pull/*`, see [waiting for diagnostics](#waiting-for-diagnostics)) and idle waits (`lifecycle/idle` for `--wait-idle`, `server/idle` for `ctx.waitForIdle`)
 - **iteration_summary**: Per-iteration total time stats
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize, idle and final shutdown timings of the single server
@@ -526,7 +533,7 @@ Warmup iterations are still useful for what idle does not cover: JIT compilation
 
 ## Tips
 
-- **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks).
+- **Cold start**: Use `--restart` to measure initialization time, reported per iteration as `lifecycle/spawn` and `lifecycle/initialize`. Without it, the server stays alive across iterations (warm benchmarks). Keep at least one warmup iteration: the diagnostics delivery it learns carries over to the timed iterations, so a pull only server is not waited on for a push in each of them. With `--warmup 0`, the first run pays the `pullAfterMs` grace, visible as `grace_ms`; pass `mode: "pull"` or a short `pullAfterMs` to avoid it.
 - **waitForDiagnostics**: Always call this after opening a document or making edits, before timing requests. Servers do background work that affects latency. The wait itself is reported as `diagnostics/open` or `diagnostics/edit` (`diagnostics/pull/open` or `diagnostics/pull/edit` when pulled); check `timeout_rate` before reading its durations.
 - **Warmup**: see [warmup and readiness](#warmup-and-readiness).
 - **Compare servers**: Run the same action script against different servers (e.g. `typescript-language-server` vs `vtsls`) on the same workspace, and read [comparing diagnostics timings](#comparing-diagnostics-timings) first.

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v0.3.0-next.2 (preview)
+
+Cold starts on pull only servers no longer wait for a push in every iteration, and auto mode pull timings include the wait that preceded them.
+
+### Pull diagnostics in waits
+
+- With `--restart`, the diagnostics delivery a server was learned to use (push, or pull and whether that is tentative) is carried over to the next iteration's server. In next.1 each restarted server started unknown, so every auto wait on a pull only server such as ts7 first waited the full `pullAfterMs` grace (1000 ms by default) for a push, about 1000 ms of each S1 iteration. Warmup iterations now teach the delivery and timed ones pull at once. A carried tentative pull still flips to push when the restarted server pushes, so a server pulled empty while loading and pushing later (rust-analyzer) is not stuck on pulls. Verbose mode logs `Carrying diagnostics delivery from the previous server`.
+- Auto mode pulls (`diagnostics/pull/*`) are timed like push waits: from the latest `didOpen` or `didChange` to the resolving response, or from the call of the wait for a document that is not open or already pulled since its latest sync. In next.1 they were timed from the pull request, so the grace before a fallback pull showed only in the iteration total (`diagnostics/pull/open` 3.9 ms in a 1066 ms iteration). The grace is now part of `duration_ms` and also recorded as the new timing field `grace_ms` (`graceMs` in the `waitForDiagnostics` result), and `MethodStats` adds `graced` and `grace_median_ms` when any timing has it. The printed summary notes such methods below the table. All new fields are optional, so the report change is additive. `mode: 'pull'` waits are still timed from the first pull request.
+- Docs: for pull only servers, pass `mode: 'pull'` or a short `pullAfterMs` to avoid the grace altogether, and keep a warmup iteration with `--restart`.
+
 ## v0.3.0-next.1 (preview)
 
 Fixes found re-testing next.0 against real servers: auto mode no longer locks pull only servers into push or measures placeholder pulls of servers still loading, reopen waits no longer resolve on a late close publish, known exit codes can be tolerated, and fully timed out methods no longer report 0 ms. Action scripts may also be JavaScript.
