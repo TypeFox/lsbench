@@ -186,10 +186,6 @@ export class DiagnosticsTracker {
     /** Record a publish and hand it to the listeners of its URI, unless it is held as a candidate */
     receive(params: PublishDiagnosticsParams): DiagnosticsPublish {
         const receivedAt = process.hrtime.bigint();
-        if (this._delivery !== 'push') {
-            this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
-            this._delivery = 'push';
-        }
         const doc = this.documents.get(params.uri);
         let generation = doc?.generation ?? 0;
         let tentative = false;
@@ -238,6 +234,14 @@ export class DiagnosticsTracker {
             if (status === 'current' && doc?.version !== undefined && params.version !== doc.version) {
                 status = 'stale';
             }
+        }
+        // only a publish for a document the client opened shows that the server pushes for the
+        // documents it is waited on for, servers may publish for files never opened (ts7 clears
+        // tsconfig.json right after the first didOpen) and still answer only pulls for the rest.
+        // A stale one (outdated version) counts, a held close window candidate does not
+        if (this._delivery !== 'push' && (status === 'current' || status === 'closed' || status === 'stale')) {
+            this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
+            this._delivery = 'push';
         }
         this.onPublish(publish, status);
         if (tentative && doc) {

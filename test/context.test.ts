@@ -1526,13 +1526,42 @@ describe('BenchContextImpl', () => {
                 expect(result).toMatchObject({ source: 'pull', pulls: 1 });
             });
 
-            it('auto: waits for pushes once the server published for any document', async () => {
+            it('auto: waits for pushes once the server published for any opened document', async () => {
                 servePulls(full('1', diag('pulled')));
-                harness.setDiagnostics('file:///elsewhere.ts', []);
+                fs.writeFileSync(path.join(tmpDir, 'pushed.ts'), '\n', 'utf-8');
+                await ctx.openDocument('pushed.ts');
+                harness.setDiagnostics(`file://${path.resolve(tmpDir, 'pushed.ts')}`, []);
+                expect(harness.diagnosticsDelivery()).toBe('push');
                 await ctx.openDocument('sample.ts');
                 const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 60, pullAfterMs: 5 });
                 expect(result).toMatchObject({ timedOut: true, source: 'push' });
                 expect(pulls()).toEqual([]);
+            });
+
+            it('auto: still pulls after a stray publish for a document that was never opened', async () => {
+                // ts7: advertises diagnosticProvider, never pushes for .ts files, but clears
+                // tsconfig.json (never opened, lowercased URI) right after the first didOpen
+                servePulls(full('1', diag('type error')));
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics('file:///users/someone/project/tsconfig.json', []);
+                expect(harness.diagnosticsDelivery()).toBe('unknown');
+                expect(harness.logs.some((l) => l.includes('Server pushes diagnostics'))).toBe(false);
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 20 });
+                expect(messages(result)).toEqual(['type error']);
+                expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1, publishes: 0 });
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                // later waits pull at once, a further stray publish does not flip it to push
+                harness.setDiagnostics('file:///users/someone/project/tsconfig.json', []);
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const start = Date.now();
+                const edited = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 1000 });
+                expect(Date.now() - start).toBeLessThan(500);
+                expect(edited).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
+                expect(ctx.collectTimings()).toMatchObject([
+                    { method: 'diagnostics/pull/open', success: true, result: 'ok' },
+                    { method: 'diagnostics/pull/edit', success: true, result: 'ok' },
+                ]);
             });
 
             it('auto: a publish flips a pull only server back to push', async () => {
@@ -1550,7 +1579,7 @@ describe('BenchContextImpl', () => {
 
             it('auto: does not learn pull only when a push arrived during the fallback pull', async () => {
                 servePulls(async () => {
-                    harness.setDiagnostics('file:///elsewhere.ts', []);
+                    harness.setDiagnostics(uri, []);
                     return full('1');
                 });
                 await ctx.openDocument('sample.ts');

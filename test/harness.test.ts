@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { DiagnosticsPublish } from 'lsbench';
+import type { DiagnosticsPublish, PublishStatus } from 'lsbench';
 import {
     DiagnosticsTracker,
     defaultClientCapabilities,
@@ -839,6 +839,7 @@ describe('DiagnosticsTracker', () => {
         expect(tracker.delivery).toBe('unknown');
         tracker.markPullOnly('test');
         expect(tracker.delivery).toBe('pull');
+        tracker.noteNotification('textDocument/didOpen', open());
         tracker.receive({ uri, diagnostics: [] });
         expect(tracker.delivery).toBe('push');
         // a push is never overruled by a pull
@@ -846,6 +847,62 @@ describe('DiagnosticsTracker', () => {
         expect(tracker.delivery).toBe('push');
         tracker.clear();
         expect(tracker.delivery).toBe('unknown');
+    });
+
+    it('learns push only from publishes for documents the client opened', () => {
+        const logs: string[] = [];
+        const statuses: PublishStatus[] = [];
+        const tracker = new DiagnosticsTracker(
+            (msg) => logs.push(msg),
+            undefined,
+            (_publish, status) => statuses.push(status),
+        );
+        tracker.noteNotification('textDocument/didOpen', open());
+        // ts7 clears a never opened tsconfig.json right after the first didOpen
+        tracker.receive({ uri: 'file:///users/someone/project/tsconfig.json', diagnostics: [] });
+        expect(statuses).toEqual(['unopened']);
+        expect(tracker.delivery).toBe('unknown');
+        expect(logs.some((l) => l.includes('Server pushes diagnostics'))).toBe(false);
+        // so a pull fallback can still learn the server as pull only
+        tracker.markPullOnly('test');
+        expect(tracker.delivery).toBe('pull');
+        tracker.receive({ uri: 'file:///users/someone/project/tsconfig.json', diagnostics: [] });
+        expect(tracker.delivery).toBe('pull');
+        // a publish for the opened document does teach push
+        tracker.receive({ uri, diagnostics: [] });
+        expect(statuses).toEqual(['unopened', 'unopened', 'current']);
+        expect(tracker.delivery).toBe('push');
+    });
+
+    it('learns push from a stale publish for an opened document', () => {
+        const statuses: PublishStatus[] = [];
+        const tracker = new DiagnosticsTracker(undefined, undefined, (_publish, status) => statuses.push(status));
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didChange', { textDocument: { uri, version: 2 }, contentChanges: [] });
+        tracker.receive({ uri, version: 1, diagnostics: [] });
+        expect(statuses).toEqual(['stale']);
+        expect(tracker.delivery).toBe('push');
+    });
+
+    it('does not learn push from a close window candidate', () => {
+        const statuses: PublishStatus[] = [];
+        const tracker = new DiagnosticsTracker(undefined, 1000, (_publish, status) => statuses.push(status));
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.receive({ uri, diagnostics: [] });
+        expect(statuses).toEqual(['close candidate']);
+        expect(tracker.delivery).toBe('unknown');
+        tracker.clear();
+    });
+
+    it('learns push from a publish for a closed document', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.receive({ uri, diagnostics: [] });
+        expect(tracker.delivery).toBe('push');
+        tracker.clear();
     });
 
     it('ends a wait through its signal with what it saw so far, unregistering it', async () => {
