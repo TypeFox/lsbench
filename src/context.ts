@@ -69,6 +69,8 @@ interface AutoPull {
     graceMs: number;
     /** empty answers the wait held back as placeholders before this pull, see pullDiagnostics */
     held: number;
+    /** placeholder publishes the wait held back before this pull, see waitForDiagnostics */
+    heldPublishes: number;
     /** pulls the wait sent before this pull, those of the held answers and unresolved refresh pulls */
     earlierPulls: number;
     /** a pull on workspace/diagnostic/refresh: pulls once, and teaches pull only with diagnostics */
@@ -530,7 +532,14 @@ export class BenchContextImpl implements BenchContext {
      * A workspace/diagnostic/refresh while the wait waits for a push (in the grace, after a
      * held answer, or with push learned) pulls once. A result passing `until` resolves the
      * wait, and with diagnostics settles the server as pull only even after push was learned;
-     * otherwise the wait goes on waiting for a push
+     * otherwise the wait goes on waiting for a push.
+     * An empty publish for the open document received while the server reports
+     * experimental/serverStatus quiescent:false is a placeholder too (see
+     * DiagnosticsPublish.placeholder): it does not resolve an auto mode wait and does not teach
+     * push. Once the server is quiescent, the wait resolves with a newer publish, or pulls when
+     * a held pull would, or else with the placeholder, timed to the quiescence. Timing out
+     * reports the placeholder. Timings record held pulls and publishes as `held_pulls` and
+     * `held_publishes`
      */
     async waitForDiagnostics(
         relativePath: string,
@@ -561,16 +570,21 @@ export class BenchContextImpl implements BenchContext {
         // empty answers of a busy server held back as placeholders, and the pulls that did not resolve
         let held = 0;
         let earlierPulls = 0;
+        // seqs of the placeholder publishes held back, see isHeldPublish
+        const heldPublishes = new Set<number>();
+        const isHeldPublish = (p: DiagnosticsPublish) =>
+            mode === 'auto' && p.placeholder === true && p.trustedAt === undefined;
         // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
         let refresh = false;
         let wait: PublishWaitResult;
         for (;;) {
             const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
+            const anyHeld = held > 0 || heldPublishes.size > 0;
             // after a held placeholder, wait for a push until the server is no longer busy
-            if (held > 0 && pullReason === undefined && delivery !== 'push' && !this.harness.isServerBusy()) {
+            if (anyHeld && pullReason === undefined && delivery !== 'push' && !this.harness.isServerBusy()) {
                 pullReason = `a pull for ${relativePath} once the server was no longer busy`;
             }
-            if (pullReason === undefined && delivery === 'pull' && held === 0) {
+            if (pullReason === undefined && delivery === 'pull' && !anyHeld) {
                 pullReason = `a pull for ${relativePath}`;
             }
             if (pullReason !== undefined && (delivery !== 'push' || refresh)) {
@@ -579,6 +593,7 @@ export class BenchContextImpl implements BenchContext {
                     calledAt,
                     graceMs: Number(graceSpentNs) / 1_000_000,
                     held,
+                    heldPublishes: heldPublishes.size,
                     earlierPulls,
                     ...(refresh ? { refresh } : {}),
                 });
@@ -599,11 +614,16 @@ export class BenchContextImpl implements BenchContext {
             const abort = new AbortController();
             let graceTimer: NodeJS.Timeout | undefined;
             let graceMs = 0;
-            // a held placeholder is pulled again once the server is no longer busy, not after a grace
-            let stopNotBusy = () => {};
-            if (held > 0 && delivery !== 'push') {
-                stopNotBusy = this.harness.onServerNotBusy(() => abort.abort());
-            } else if (delivery === 'unknown') {
+            // a held placeholder is pulled again once the server is no longer busy, not after a grace,
+            // and a held placeholder publish is trusted then
+            let notBusy = false;
+            const stopNotBusy = this.harness.onServerNotBusy(() => {
+                if ((held > 0 && delivery !== 'push') || heldPublishes.size > 0) {
+                    notBusy = true;
+                    abort.abort();
+                }
+            });
+            if (delivery === 'unknown' && held === 0) {
                 graceMs = timeout <= pullAfterMs ? timeout / 2 : pullAfterMs;
                 // the grace left after a refresh pull that did not resolve
                 const graceLeftMs = Math.max(0, graceMs - Number(graceSpentNs) / 1_000_000);
@@ -635,7 +655,21 @@ export class BenchContextImpl implements BenchContext {
                 {
                     timeoutMs: remainingMs(),
                     signal: abort.signal,
-                    ...(until ? { until: (p: DiagnosticsPublish) => until(p.diagnostics) } : {}),
+                    // a placeholder that would resolve the wait is held until the server is quiescent
+                    until: (p: DiagnosticsPublish) => {
+                        const passed = !until || until(p.diagnostics);
+                        if (passed && isHeldPublish(p)) {
+                            if (!heldPublishes.has(p.seq)) {
+                                heldPublishes.add(p.seq);
+                                this.log(
+                                    `Server published no diagnostics for ${relativePath} while not quiescent, ` +
+                                        'held as a placeholder: waiting for a further publish, or for the server to be quiescent',
+                                );
+                            }
+                            return false;
+                        }
+                        return passed;
+                    },
                     ...(settleMs !== undefined ? { settleMs } : {}),
                 },
             );
@@ -655,8 +689,8 @@ export class BenchContextImpl implements BenchContext {
                 refresh = true;
                 continue;
             }
-            if (held > 0) {
-                // the server is no longer busy, the loop pulls again
+            if (notBusy) {
+                // the server is no longer busy, the loop pulls again or takes the trusted placeholder
                 continue;
             }
             graceSpentNs += process.hrtime.bigint() - waitStartedAt;
@@ -668,8 +702,12 @@ export class BenchContextImpl implements BenchContext {
             return this.recordHeldTimeout(relativePath, uri, calledAt, held, earlierPulls, graceSpentNs);
         }
 
-        // only the timer firing means a timeout, elapsed time is never compared to it
-        const endedAt = publish && !timedOut ? publish.receivedAt : process.hrtime.bigint();
+        // only the timer firing means a timeout, elapsed time is never compared to it. A
+        // placeholder resolves an auto wait only from when the server turned quiescent
+        let endedAt = process.hrtime.bigint();
+        if (publish && !timedOut) {
+            endedAt = mode === 'auto' ? (publish.trustedAt ?? publish.receivedAt) : publish.receivedAt;
+        }
         const diagnostics = publish?.diagnostics ?? this.harness.getDiagnostics(uri);
 
         // the document state at resolution is what the accepted publish matched
@@ -692,11 +730,15 @@ export class BenchContextImpl implements BenchContext {
         if (held > 0) {
             timing.held_pulls = held;
         }
+        if (heldPublishes.size > 0) {
+            timing.held_publishes = heldPublishes.size;
+        }
         this.timings.push(timing);
         this.log(
             `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
                 `${diagnostics.length} diagnostics, ${publishes} publishes` +
-                `${held > 0 ? `, ${held} empty pull answers held while the server was busy` : ''}`,
+                `${held > 0 ? `, ${held} empty pull answers held while the server was busy` : ''}` +
+                `${heldPublishes.size > 0 ? `, ${heldPublishes.size} empty publishes held while the server was not quiescent` : ''}`,
         );
         if (timedOut && publishes === 0 && method === 'diagnostics/open' && doc && doc.closePublishes > 0) {
             const seen = doc.closePublishes === 1 ? 'the publish' : `the ${doc.closePublishes} publishes`;
@@ -895,6 +937,9 @@ export class BenchContextImpl implements BenchContext {
         if (auto !== undefined && auto.held > 0) {
             timing.held_pulls = auto.held;
         }
+        if (auto !== undefined && auto.heldPublishes > 0) {
+            timing.held_publishes = auto.heldPublishes;
+        }
         if (failure) {
             timing.error = failure.message;
             this._lastError = failure;
@@ -906,6 +951,7 @@ export class BenchContextImpl implements BenchContext {
                 `${result.length} diagnostics, ${pulls} pulls` +
                 `${graceMs !== undefined ? `, ${graceMs.toFixed(1)}ms of it waiting for a push` : ''}` +
                 `${auto !== undefined && auto.held > 0 ? `, ${auto.held} empty answers held while the server was busy` : ''}` +
+                `${auto !== undefined && auto.heldPublishes > 0 ? `, ${auto.heldPublishes} empty publishes held while the server was not quiescent` : ''}` +
                 `${failure ? ` ERROR: ${failure.message}` : ''}`,
         );
 

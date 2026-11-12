@@ -447,7 +447,12 @@ Synchronization
                                           (experimental/serverStatus not quiescent, or without a status
                                           an open $/progress token) is held as a placeholder: the wait
                                           waits for a push and pulls again once the server is not busy,
-                                          and records held_pulls. A workspace/diagnostic/refresh while
+                                          and records held_pulls. Likewise an empty publish for an open
+                                          document while experimental/serverStatus is not quiescent
+                                          ($/progress does not count) is held and teaches nothing: the
+                                          wait resolves once the server is quiescent, with a newer
+                                          publish, a pull as above, or else the placeholder, and records
+                                          held_publishes. A workspace/diagnostic/refresh while
                                           a wait waits for a push pulls once; a result passing until
                                           resolves it, and with diagnostics settles pull even after
                                           push was learned. A

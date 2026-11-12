@@ -7,6 +7,7 @@ import {
     expandSettings,
     LspHarness,
     mergeCapabilities,
+    linkPlaceholders,
     ProgressTracker,
     pathToUri,
     resolveConfigurationSection,
@@ -846,6 +847,32 @@ describe('DiagnosticsTracker', () => {
         tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
         tracker.noteNotification('textDocument/didOpen', open());
         expect(tracker.document(uri)).toMatchObject({ generation: 2, open: true, version: 1 });
+    });
+
+    it('marks empty publishes while the server is not quiescent as placeholders, trusted once it is', () => {
+        const tracker = new DiagnosticsTracker();
+        const progress = new ProgressTracker();
+        linkPlaceholders(tracker, progress);
+        tracker.noteNotification('textDocument/didOpen', open());
+        // $/progress alone does not make a placeholder
+        progress.progress({ token: 't', value: { kind: 'begin', title: 'indexing' } });
+        expect(tracker.receive({ uri, version: 1, diagnostics: [] }).placeholder).toBeUndefined();
+        tracker.clear();
+        tracker.noteNotification('textDocument/didOpen', open());
+        progress.serverStatusChanged({ quiescent: false });
+        expect(tracker.receive({ uri: 'file:///w/other.ts', diagnostics: [] }).placeholder).toBeUndefined();
+        expect(tracker.receive({ uri, version: 1, diagnostics: [{ range: {}, message: 'a' }] }).placeholder).toBe(
+            undefined,
+        );
+        tracker.clear();
+        tracker.noteNotification('textDocument/didOpen', open());
+        const placeholder = tracker.receive({ uri, version: 1, diagnostics: [] });
+        expect(placeholder.placeholder).toBe(true);
+        // a placeholder does not teach push
+        expect(tracker.delivery).toBe('unknown');
+        expect(placeholder.trustedAt).toBeUndefined();
+        progress.serverStatusChanged({ quiescent: true });
+        expect(typeof placeholder.trustedAt).toBe('bigint');
     });
 
     it('tracks versions from didChange and keeps publish versions', () => {

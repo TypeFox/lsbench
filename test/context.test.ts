@@ -23,6 +23,7 @@ import {
     classifyResult,
     DiagnosticsTracker,
     detectLanguageId,
+    linkPlaceholders,
     ProgressTracker,
 } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +56,10 @@ class FakeHarness {
     response: unknown = { ok: true };
     /** what the fake server asks for around saves */
     saveOptions: SaveSyncOptions = { didSave: true, includeText: false, willSave: true, willSaveWaitUntil: true };
+
+    constructor() {
+        linkPlaceholders(this.tracker, this.progress);
+    }
 
     /** answers requests in place of `response` when set, may throw or return a promise */
     respond?: (method: string, params: unknown) => unknown;
@@ -1930,6 +1935,113 @@ describe('BenchContextImpl', () => {
                 });
             });
 
+            describe('placeholder publishes', () => {
+                const busy = () => harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
+                const quiescent = () => harness.progress.serverStatusChanged({ health: 'ok', quiescent: true });
+                const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+                it('holds an empty publish while not quiescent and resolves with it at quiescence', async () => {
+                    harness.capabilities = { textDocumentSync: 2 };
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    await tick(10);
+                    harness.setDiagnostics(uri, [], 1);
+                    await tick(40);
+                    // the placeholder neither resolved the wait nor taught push
+                    expect(harness.diagnosticsDelivery()).toBe('unknown');
+                    quiescent();
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', diagnostics: [], publishes: 1 });
+                    // timed to the quiescence, not to the placeholder
+                    expect(result.ms).toBeGreaterThanOrEqual(45);
+                    expect(pulls()).toEqual([]);
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/open', success: true, result: 'empty', held_publishes: 1 },
+                    ]);
+                    // once trusted, a later wait takes the placeholder at once, still timed to the quiescence
+                    const again = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    expect(again).toMatchObject({ timedOut: false, diagnostics: [] });
+                    expect(again.ms).toBe(result.ms);
+                });
+
+                it('resolves with a newer publish after a held placeholder', async () => {
+                    // rust-analyzer under --restart with push carried, as in S1
+                    servePulls(full('1'));
+                    harness.tracker.seedDelivery('push', false);
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                    harness.setDiagnostics(uri, [], 1);
+                    await tick(20);
+                    harness.setDiagnostics(uri, [diag('unused')], 1);
+                    const result = await waiting;
+                    expect(messages(result)).toEqual(['unused']);
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 2 });
+                    expect(pulls()).toEqual([]);
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/open', success: true, diagnostics: 1, held_publishes: 1 },
+                    ]);
+                });
+
+                it('resolves at once on a non-empty publish while not quiescent', async () => {
+                    servePulls(full('1'));
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 1000 });
+                    harness.setDiagnostics(uri, [diag('error')], 1);
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
+                    expect(result.ms).toBeLessThan(500);
+                    expect(harness.diagnosticsDelivery()).toBe('push');
+                    expect(ctx.collectTimings()[0].held_publishes).toBeUndefined();
+                });
+
+                it('resolves at once on an empty publish while only $/progress is open', async () => {
+                    // a server that never sends experimental/serverStatus is not affected
+                    servePulls(full('1'));
+                    harness.progress.progress({ token: 'load', value: { kind: 'begin', title: 'loading' } });
+                    expect(harness.isServerBusy()).toBe(true);
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 1000 });
+                    harness.setDiagnostics(uri, [], 1);
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', diagnostics: [], publishes: 1 });
+                    expect(result.ms).toBeLessThan(500);
+                    expect(harness.diagnosticsDelivery()).toBe('push');
+                    expect(ctx.collectTimings()[0].held_publishes).toBeUndefined();
+                });
+
+                it('times out with the held placeholder when the server never turns quiescent', async () => {
+                    harness.capabilities = { textDocumentSync: 2 };
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 80 });
+                    harness.setDiagnostics(uri, [], 1);
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: true, source: 'push', diagnostics: [], publishes: 1 });
+                    expect(ctx.collectTimings()).toMatchObject([
+                        {
+                            method: 'diagnostics/open',
+                            success: false,
+                            result: 'timeout',
+                            diagnostics: 0,
+                            held_publishes: 1,
+                        },
+                    ]);
+                });
+
+                it('does not hold an empty publish in push mode', async () => {
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'push' });
+                    harness.setDiagnostics(uri, [], 1);
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
+                    expect(ctx.collectTimings()[0].held_publishes).toBeUndefined();
+                });
+            });
+
             describe('workspace/diagnostic/refresh', () => {
                 const busy = () => harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
                 const quiescent = () => harness.progress.serverStatusChanged({ health: 'ok', quiescent: true });
@@ -1961,49 +2073,40 @@ describe('BenchContextImpl', () => {
                     expect(harness.refreshListeners.size).toBe(0);
                 });
 
-                it('rust-analyzer cold S4: resolves both edit waits after a placeholder push, no timeouts', async () => {
-                    // replays verify/out/next1/rust-analyzer.S4.warmup0.trace.jsonl: busy from the start,
-                    // empty pulls while loading, one empty placeholder publish, then only a refresh
+                it('rust-analyzer cold S4: holds the placeholder pull and push until quiescence, no timeouts', async () => {
+                    // replays verify/out/next3/rust-analyzer.S4.warmup0.trace.jsonl: busy from the start,
+                    // an empty pull and an empty placeholder publish while loading, then quiescent
                     let loaded = false;
                     let broken = false;
-                    let cancelNext = false;
-                    servePulls(() => {
-                        if (cancelNext) {
-                            cancelNext = false;
-                            throw responseError(-32802, 'server cancelled');
-                        }
-                        return loaded && broken ? full('e', diag('expected i32, found String')) : full('0');
-                    });
+                    servePulls(() => (loaded && broken ? full('e', diag('expected i32, found String')) : full('0')));
                     busy();
                     await ctx.openDocument('sample.ts');
                     const opening = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
                     await tick(40);
-                    // the pull after the grace is held, the placeholder publish resolves the wait
+                    // the pull after the grace is held, and so is the placeholder publish
                     expect(pulls()).toHaveLength(1);
                     harness.setDiagnostics(uri, [], 1);
-                    const opened = await opening;
-                    expect(opened).toMatchObject({ timedOut: false, source: 'push', diagnostics: [] });
-                    expect(harness.diagnosticsDelivery()).toBe('push');
-
-                    // the error edit waits for a push that never comes, until the refresh after quiescence
-                    await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
-                    broken = true;
-                    const editing = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: (d) => d.length > 0 });
                     await tick(20);
+                    expect(harness.diagnosticsDelivery()).toBe('unknown');
                     loaded = true;
                     quiescent();
-                    await tick(20);
-                    expect(pulls()).toHaveLength(1);
-                    // the first pull on refresh is cancelled, as rust-analyzer does while it recomputes
-                    cancelNext = true;
-                    harness.refresh();
-                    const edited = await editing;
-                    expect(messages(edited)).toEqual(['expected i32, found String']);
-                    expect(edited).toMatchObject({ timedOut: false, source: 'pull', pulls: 2 });
-                    expect(edited.ms).toBeGreaterThanOrEqual(35);
+                    // once quiescent the wait pulls again, as after a held pull
+                    const opened = await opening;
+                    expect(opened).toMatchObject({ timedOut: false, source: 'pull', diagnostics: [], pulls: 2 });
+                    expect(opened.ms).toBeGreaterThanOrEqual(55);
                     expect(harness.diagnosticsDelivery()).toBe('pull');
+                    expect(harness.tracker.deliveryTentative).toBe(true);
+
+                    // the error edit pulls at once and gets the error
+                    await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                    broken = true;
+                    const edited = await ctx.waitForDiagnostics('sample.ts', {
+                        timeout: 5000,
+                        until: (d) => d.length > 0,
+                    });
+                    expect(messages(edited)).toEqual(['expected i32, found String']);
+                    expect(edited).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
                     expect(harness.tracker.deliveryTentative).toBe(false);
-                    expect(harness.logs.some((l) => l.includes('no longer waiting for pushes'))).toBe(true);
 
                     // the fix edit pulls at once, no refresh and no push needed
                     await ctx.edit('sample.ts', op(0, 0, 0, 1, ''));
@@ -2013,16 +2116,62 @@ describe('BenchContextImpl', () => {
                         until: (d) => d.length === 0,
                     });
                     expect(fixed).toMatchObject({ timedOut: false, source: 'pull', diagnostics: [], pulls: 1 });
-                    expect(fixed.ms).toBeLessThan(1000);
 
+                    const timings = ctx.collectTimings();
+                    expect(timings).toMatchObject([
+                        {
+                            method: 'diagnostics/pull/open',
+                            success: true,
+                            result: 'empty',
+                            held_pulls: 1,
+                            held_publishes: 1,
+                        },
+                        { method: 'diagnostics/pull/edit', success: true, result: 'ok', diagnostics: 1 },
+                        { method: 'diagnostics/pull/edit', success: true, result: 'empty' },
+                    ]);
+                    expect(timings.some((t) => t.result === 'timeout')).toBe(false);
+                });
+
+                it('learns pull from a refresh pull with diagnostics after push was learned', async () => {
+                    // rust-analyzer stops pushing for a document once it was pulled and only refreshes
+                    let broken = false;
+                    let cancelNext = false;
+                    servePulls(() => {
+                        if (cancelNext) {
+                            cancelNext = false;
+                            throw responseError(-32802, 'server cancelled');
+                        }
+                        return broken ? full('e', diag('expected i32, found String')) : full('0');
+                    });
+                    quiescent();
+                    await ctx.openDocument('sample.ts');
+                    const opening = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 1000 });
+                    harness.setDiagnostics(uri, [], 1);
+                    expect(await opening).toMatchObject({ timedOut: false, source: 'push', diagnostics: [] });
+                    expect(harness.diagnosticsDelivery()).toBe('push');
+
+                    // the error edit waits for a push that never comes, until the refresh
+                    await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                    broken = true;
+                    const editing = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, until: (d) => d.length > 0 });
+                    await tick(20);
+                    expect(pulls()).toHaveLength(0);
+                    // the first pull on refresh is cancelled, as rust-analyzer does while it recomputes
+                    cancelNext = true;
+                    harness.refresh();
+                    const edited = await editing;
+                    expect(messages(edited)).toEqual(['expected i32, found String']);
+                    expect(edited).toMatchObject({ timedOut: false, source: 'pull', pulls: 2 });
+                    expect(edited.ms).toBeGreaterThanOrEqual(15);
+                    expect(harness.diagnosticsDelivery()).toBe('pull');
+                    expect(harness.tracker.deliveryTentative).toBe(false);
+                    expect(harness.logs.some((l) => l.includes('no longer waiting for pushes'))).toBe(true);
                     const timings = ctx.collectTimings();
                     expect(timings).toMatchObject([
                         { method: 'diagnostics/open', success: true, result: 'empty' },
                         { method: 'diagnostics/pull/edit', success: true, result: 'ok', diagnostics: 1 },
-                        { method: 'diagnostics/pull/edit', success: true, result: 'empty' },
                     ]);
                     expect(timings[1].grace_ms).toBeUndefined();
-                    expect(timings.some((t) => t.result === 'timeout')).toBe(false);
                 });
 
                 it('sends no pull on a refresh without diagnosticProvider', async () => {

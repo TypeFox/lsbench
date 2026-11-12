@@ -38,6 +38,7 @@ export {
     expandSettings,
     formatPublishLine,
     LspHarness,
+    linkPlaceholders,
     mergeCapabilities,
     pathToUri,
     ProgressTracker,

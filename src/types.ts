@@ -124,6 +124,13 @@ export interface RequestTiming {
      * longer busy, which `duration_ms` includes. Absent when nothing was held
      */
     held_pulls?: number;
+    /**
+     * Auto mode diagnostics waits only: how many empty publishes for the open document the wait
+     * held back as placeholders, because the server reported experimental/serverStatus
+     * quiescent:false when they arrived. The wait then waited for a further publish or for the
+     * server to be quiescent, which `duration_ms` includes. Absent when nothing was held
+     */
+    held_publishes?: number;
 }
 
 export interface IterationResult {
@@ -170,6 +177,12 @@ export interface MethodStats {
      * busy server: how many timings did, timeouts included, see RequestTiming.held_pulls
      */
     held?: number;
+    /**
+     * Diagnostics waits only, present when some auto mode wait held back a placeholder publish
+     * of a server not quiescent: how many timings did, timeouts included, see
+     * RequestTiming.held_publishes
+     */
+    held_publishes?: number;
 }
 
 export interface BenchReport {

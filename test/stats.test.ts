@@ -383,6 +383,26 @@ describe('printSummary', () => {
         expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
     });
 
+    it('notes held publishes and drops the pull mode hint when a server published placeholders', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [
+            timing({ method: 'diagnostics/open', duration_ms: 3000, held_publishes: 1, held_pulls: 1 }),
+            timing({ method: 'diagnostics/pull/open', duration_ms: 2800, grace_ms: 1000, held_publishes: 1 }),
+        ];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 5800 }], 5800);
+        expect(report.summary['diagnostics/open']).toMatchObject({ held: 1, held_publishes: 1 });
+        expect(report.summary['diagnostics/pull/open']).toMatchObject({ graced: 1, held_publishes: 1 });
+        expect(report.summary['diagnostics/pull/open'].held).toBeUndefined();
+        printSummary(report);
+        expect(lines).toContain(
+            '  diagnostics/open: 1 wait held back empty publishes until the server was quiescent (included above)',
+        );
+        expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
+    });
+
     it('leaves out the null and empty columns when every result is ok', () => {
         expect(header([timing()])).not.toMatch(/Null%|Empty%/);
     });

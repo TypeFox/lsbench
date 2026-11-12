@@ -69,6 +69,13 @@ export interface DiagnosticsPublish {
     generation: number;
     /** position in the order of sync notifications and publishes for all documents */
     seq: number;
+    /**
+     * an empty publish for an opened document received while the server reported it was not
+     * quiescent (experimental/serverStatus), which may be a placeholder of a server still loading
+     */
+    placeholder?: true;
+    /** process.hrtime.bigint() when the server turned quiescent after a placeholder was received */
+    trustedAt?: bigint;
 }
 
 /**
@@ -173,6 +180,8 @@ export class DiagnosticsTracker {
     private readonly caseInsensitive: boolean;
     /** URI keys already hinted at as matching an open document apart from case */
     private caseHinted = new Set<string>();
+    /** whether the server currently reports it is loading, an empty publish then is a placeholder */
+    private loading: () => boolean = () => false;
 
     constructor(
         private log: (msg: string) => void = () => {},
@@ -327,11 +336,26 @@ export class DiagnosticsTracker {
                 status = 'stale';
             }
         }
+        // an empty publish for an opened document while the server is loading may be a placeholder
+        // (rust-analyzer publishes one before it turned quiescent and then only sends refreshes)
+        if (
+            doc?.open &&
+            (status === 'current' || status === 'stale') &&
+            params.diagnostics.length === 0 &&
+            this.loading()
+        ) {
+            publish.placeholder = true;
+            this.log(`Empty publish for ${params.uri} while the server is not quiescent, a placeholder until it is`);
+        }
         // only a publish for a document the client opened shows that the server pushes for the
         // documents it is waited on for, servers may publish for files never opened (ts7 clears
         // tsconfig.json right after the first didOpen) and still answer only pulls for the rest.
-        // A stale one (outdated version) counts, a held close window candidate does not
-        if (this._delivery !== 'push' && (status === 'current' || status === 'closed' || status === 'stale')) {
+        // A stale one (outdated version) counts, a held close window candidate and a placeholder do not
+        if (
+            this._delivery !== 'push' &&
+            !publish.placeholder &&
+            (status === 'current' || status === 'closed' || status === 'stale')
+        ) {
             this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
             this.setDelivery('push', false);
         }
@@ -411,6 +435,24 @@ export class DiagnosticsTracker {
             `Carrying diagnostics delivery from the previous server: ${delivery}${carriedTentative ? ' (tentative)' : ''}`,
         );
         this.setDelivery(delivery, carriedTentative);
+    }
+
+    /**
+     * Mark empty publishes for opened documents received while `loading` returns true as
+     * placeholders, see DiagnosticsPublish.placeholder. A placeholder does not teach push
+     */
+    markPlaceholdersWhile(loading: () => boolean): void {
+        this.loading = loading;
+    }
+
+    /** Stamp the latest publishes still marked as placeholders as trusted from now, once the server finished loading */
+    trustPlaceholders(): void {
+        const now = process.hrtime.bigint();
+        for (const publish of this.latest.values()) {
+            if (publish.placeholder && publish.trustedAt === undefined) {
+                publish.trustedAt = now;
+            }
+        }
     }
 
     /** Call `listener` whenever the learned delivery changes, returns a function removing it */
@@ -853,6 +895,17 @@ export class ProgressTracker {
     }
 }
 
+/**
+ * Let `diagnostics` mark empty publishes as placeholders while the server reports
+ * experimental/serverStatus quiescent:false, and trust them once it no longer is busy. Only
+ * the server status counts (not $/progress), so other push servers are not affected. Call it
+ * before any wait subscribes to `progress`, so placeholders are trusted before waits hear of it
+ */
+export function linkPlaceholders(diagnostics: DiagnosticsTracker, progress: ProgressTracker): void {
+    diagnostics.markPlaceholdersWhile(() => progress.serverStatus?.quiescent === false);
+    progress.onNotBusy(() => diagnostics.trustPlaceholders());
+}
+
 /** default time to wait for a shutdown reply before giving up on the server */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 
@@ -927,6 +980,7 @@ export class LspHarness {
             },
         );
         this.progress = new ProgressTracker((msg) => this.log(msg));
+        linkPlaceholders(this.diagnostics, this.progress);
     }
 
     /** How the server process ended, or null while it is still running */
