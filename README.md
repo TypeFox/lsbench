@@ -255,6 +255,8 @@ Some servers advertise `diagnosticProvider` and never push (ts7, for example), s
   With `--restart`, what one iteration's server was learned to use is carried over to the next iteration's server (verbose mode logs `Carrying diagnostics delivery from the previous server`), so warmup iterations teach it and timed iterations on a pull only server pull at once instead of paying the `pullAfterMs` grace on every cold start. A carried tentative pull stays tentative, so a restarted server that pushes still flips it to push
 
   Unless pull is settled, an empty pull answered while the server reports it is still loading is held as a placeholder instead of resolving the wait: the wait goes on waiting for a push, and pulls again once the server is no longer busy. Busy means `experimental/serverStatus` with `quiescent: false` once the server sent a status (rust-analyzer), and an open `$/progress` token for servers that never send one; rust-analyzer's flycheck progress after it turned quiescent does not count. The resolving timing then carries `held_pulls`, and a wait that times out while the server stays busy records a pull timeout. A server that never reports being busy, such as ts7, is not affected
+
+  A `workspace/diagnostic/refresh` while an auto wait waits for a push (in the grace, after a held placeholder, or with push learned) makes it pull once, retrying `ContentModified` and `ServerCancelled`. A result passing `until` resolves the wait as a pull, the placeholder rule above still applying, otherwise the wait goes on waiting for a push. A refresh pull that returned diagnostics settles the server as pull only even after push was learned (rust-analyzer stops pushing for a document it was pulled for and only sends refreshes), while an empty one teaches nothing. A publish for an opened document still flips it back to push. Verbose mode logs each refresh
 - `push`: only wait for pushes
 - `pull`: send `textDocument/diagnostic` at once. A server without `diagnosticProvider` gets the wait recorded as `skipped`, like other unsupported requests
 
@@ -303,7 +305,7 @@ lsbench answers requests from the server so it doesn't get stuck waiting on a cl
 
 - `workspace/configuration` resolves each item's section against the [settings file](#server-configuration), or returns an empty object per item when no settings are given
 - `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`). lsbench advertises `workspace.didChangeWatchedFiles` with dynamic registration, as VS Code does, so servers leave file watching to the client; their watcher registrations are tracked, but lsbench never sends file events
-- `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) are acknowledged
+- `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) are acknowledged. A diagnostics refresh also makes pending auto diagnostics waits pull, see [pull diagnostics](#pull-diagnostics)
 - `window/workDoneProgress/create` is acknowledged, the token is tracked for [`waitForIdle`](#waiting-for-idle)
 - `window/showMessageRequest` is dismissed with `null`
 - `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying the workspace using server-initiated requests

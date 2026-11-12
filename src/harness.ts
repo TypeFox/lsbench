@@ -383,6 +383,21 @@ export class DiagnosticsTracker {
     }
 
     /**
+     * Learn that the server delivers through pulls from a pull on workspace/diagnostic/refresh
+     * that returned diagnostics: settles `pull`, even after `push` was learned, since the
+     * server then reports its diagnostics through refreshes (rust-analyzer stops pushing for
+     * a document once it was pulled). A later publish for an opened document flips it back
+     */
+    markPullFromRefresh(reason: string): void {
+        if (this._delivery === 'pull' && !this._deliveryTentative) {
+            return;
+        }
+        const was = this._delivery === 'push' ? ', no longer waiting for pushes' : '';
+        this.log(`Server delivered diagnostics through ${reason}${was}: pull only, auto waits pull at once`);
+        this.setDelivery('pull', false);
+    }
+
+    /**
      * Start from a delivery learned by an earlier tracker, as the runner does for each server
      * it restarts. A carried `pull` keeps its tentative flag, so a push still flips it, and a
      * carried `unknown` changes nothing. Ignored once this tracker learned anything itself
@@ -890,6 +905,8 @@ export class LspHarness {
     private settings: Record<string, unknown> | undefined;
     /** routes server stderr and log messages to the server log file or the console */
     private output: ServerOutput;
+    /** called on each workspace/diagnostic/refresh from the server */
+    private refreshListeners = new Set<() => void>();
 
     constructor(
         private config: ServerConfig,
@@ -1064,9 +1081,13 @@ export class LspHarness {
             });
         });
 
-        // acknowledge pull diagnostic refresh requests, we never cache pulled results
+        // acknowledge pull diagnostic refresh requests, pending auto diagnostics waits pull on them
         this.connection.onRequest('workspace/diagnostic/refresh', () => {
-            return;
+            this.log('Server requested workspace/diagnostic/refresh');
+            for (const listener of this.refreshListeners) {
+                listener();
+            }
+            return null;
         });
 
         // acknowledge refresh requests, we hold no cached state to invalidate
@@ -1341,6 +1362,11 @@ export class LspHarness {
         this.diagnostics.markPullOnly(reason, tentative);
     }
 
+    /** Learn pull from a pull on refresh that returned diagnostics, see DiagnosticsTracker.markPullFromRefresh */
+    markPullFromRefresh(reason: string): void {
+        this.diagnostics.markPullFromRefresh(reason);
+    }
+
     /** Start from a delivery learned by an earlier server, see DiagnosticsTracker.seedDelivery */
     seedDiagnosticsDelivery(delivery: DiagnosticsDelivery, tentative: boolean): void {
         this.diagnostics.seedDelivery(delivery, tentative);
@@ -1376,6 +1402,12 @@ export class LspHarness {
     /** Call `listener` whenever the server stops being busy, see ProgressTracker.onNotBusy */
     onServerNotBusy(listener: () => void): () => void {
         return this.progress.onNotBusy(listener);
+    }
+
+    /** Call `listener` on each workspace/diagnostic/refresh from the server, returns a function removing it */
+    onDiagnosticRefresh(listener: () => void): () => void {
+        this.refreshListeners.add(listener);
+        return () => this.refreshListeners.delete(listener);
     }
 
     /** Resolve once the server has finished its background work, see ProgressTracker.waitForIdle */

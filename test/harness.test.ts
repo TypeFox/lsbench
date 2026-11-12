@@ -12,7 +12,7 @@ import {
     resolveConfigurationSection,
     uriToPath,
 } from 'lsbench';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 describe('pathToUri', () => {
     it('produces a file:// URI from an absolute path', () => {
@@ -77,6 +77,7 @@ describe('LspHarness server-to-client requests', () => {
             ['workspace/inlayHint/refresh', null],
             ['workspace/codeLens/refresh', null],
             ['workspace/inlineValue/refresh', null],
+            ['workspace/diagnostic/refresh', null],
             ['window/workDoneProgress/create', { token: 'tok' }],
             ['client/unregisterCapability', { unregisterations: [] }],
             ['window/showMessageRequest', { type: 3, message: 'pick one', actions: [{ title: 'ok' }] }],
@@ -100,6 +101,38 @@ describe('LspHarness server-to-client requests', () => {
             });
         } finally {
             await harness.stop();
+        }
+    });
+});
+
+describe('LspHarness workspace/diagnostic/refresh', () => {
+    it('logs a refresh in verbose mode and tells the listeners', async () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+            lines.push(String(msg));
+        });
+        const harness = new LspHarness(
+            {
+                command: process.execPath,
+                args: [
+                    '--input-type=module',
+                    '-e',
+                    probeServer,
+                    JSON.stringify([['workspace/diagnostic/refresh', null]]),
+                ],
+            },
+            process.cwd(),
+            true,
+        );
+        let refreshes = 0;
+        harness.onDiagnosticRefresh(() => refreshes++);
+        try {
+            await harness.start();
+            expect(refreshes).toBe(1);
+            expect(lines).toContain('[lsbench] Server requested workspace/diagnostic/refresh');
+        } finally {
+            await harness.stop();
+            vi.restoreAllMocks();
         }
     });
 });

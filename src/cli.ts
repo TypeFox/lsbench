@@ -447,7 +447,10 @@ Synchronization
                                           (experimental/serverStatus not quiescent, or without a status
                                           an open $/progress token) is held as a placeholder: the wait
                                           waits for a push and pulls again once the server is not busy,
-                                          and records held_pulls. A
+                                          and records held_pulls. A workspace/diagnostic/refresh while
+                                          a wait waits for a push pulls once; a result passing until
+                                          resolves it, and with diagnostics settles pull even after
+                                          push was learned. A
                                           publish flips it back to push at any time, and a pull in flight
                                           then stops, records nothing and the wait waits for pushes for
                                           the rest of its timeout. With --restart, what a server was
@@ -500,7 +503,8 @@ lsbench answers these so a server never stalls waiting on a client:
                                           empty object per item
   client/(un)registerCapability           accepted, all registrations are tracked (ctx.registrations)
                                           (didChangeWatchedFiles is advertised, but no file events are sent)
-  workspace/*/refresh                     acknowledged
+  workspace/*/refresh                     acknowledged, a diagnostics refresh makes pending auto
+                                          diagnostics waits pull (logged in verbose mode)
   window/workDoneProgress/create          acknowledged, the token is tracked for waitForIdle
   window/showMessageRequest               dismissed with null
   workspace/applyEdit                     declined, lsbench never modifies the workspace

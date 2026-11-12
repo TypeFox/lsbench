@@ -46,10 +46,10 @@ interface DocumentDiagnosticReport {
 
 /**
  * How a pulling wait ended: resolved, failed, ran out of time, not sent at all, or (auto
- * mode) stopped because the server was learned to push meanwhile, or held back an empty
- * answer of a busy server as a placeholder
+ * mode) stopped because the server was learned to push meanwhile, held back an empty
+ * answer of a busy server as a placeholder, or pulled once on a refresh without resolving
  */
-type PullOutcome = 'ok' | 'error' | 'timeout' | 'skipped' | 'push' | 'held';
+type PullOutcome = 'ok' | 'error' | 'timeout' | 'skipped' | 'push' | 'held' | 'unresolved';
 
 /** The latest pulled report of a document, with unchanged reports resolved */
 interface PulledDiagnostics {
@@ -69,8 +69,10 @@ interface AutoPull {
     graceMs: number;
     /** empty answers the wait held back as placeholders before this pull, see pullDiagnostics */
     held: number;
-    /** pulls the wait sent before this pull, those of the held answers */
+    /** pulls the wait sent before this pull, those of the held answers and unresolved refresh pulls */
     earlierPulls: number;
+    /** a pull on workspace/diagnostic/refresh: pulls once, and teaches pull only with diagnostics */
+    refresh?: boolean;
 }
 
 export interface BenchContextOptions {
@@ -524,7 +526,11 @@ export class BenchContextImpl implements BenchContext {
      * pull is in flight switches the wait to waiting for pushes for the rest of its timeout.
      * An empty pull answered while the server is busy loading is held back as a placeholder
      * (see pullDiagnostics): the wait goes on waiting for a push, and pulls again once the
-     * server is no longer busy. Timing out after a held answer records a pull timeout
+     * server is no longer busy. Timing out after a held answer records a pull timeout.
+     * A workspace/diagnostic/refresh while the wait waits for a push (in the grace, after a
+     * held answer, or with push learned) pulls once. A result passing `until` resolves the
+     * wait, and with diagnostics settles the server as pull only even after push was learned;
+     * otherwise the wait goes on waiting for a push
      */
     async waitForDiagnostics(
         relativePath: string,
@@ -552,9 +558,11 @@ export class BenchContextImpl implements BenchContext {
         let pullReason: string | undefined;
         // time spent in push waits that ended in a grace abort, reported as grace_ms of the pull
         let graceSpentNs = 0n;
-        // empty answers of a busy server held back as placeholders, and the pulls they took
+        // empty answers of a busy server held back as placeholders, and the pulls that did not resolve
         let held = 0;
-        let heldPulls = 0;
+        let earlierPulls = 0;
+        // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
+        let refresh = false;
         let wait: PublishWaitResult;
         for (;;) {
             const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
@@ -565,18 +573,22 @@ export class BenchContextImpl implements BenchContext {
             if (pullReason === undefined && delivery === 'pull' && held === 0) {
                 pullReason = `a pull for ${relativePath}`;
             }
-            if (pullReason !== undefined && delivery !== 'push') {
+            if (pullReason !== undefined && (delivery !== 'push' || refresh)) {
                 const pulled = await this.pullDiagnostics(relativePath, uri, remainingMs(), until, {
                     reason: pullReason,
                     calledAt,
                     graceMs: Number(graceSpentNs) / 1_000_000,
                     held,
-                    earlierPulls: heldPulls,
+                    earlierPulls,
+                    ...(refresh ? { refresh } : {}),
                 });
                 pullReason = undefined;
+                refresh = false;
                 if (pulled.outcome === 'held') {
                     held++;
-                    heldPulls += pulled.result.pulls;
+                }
+                if (pulled.outcome === 'held' || pulled.outcome === 'unresolved') {
+                    earlierPulls += pulled.result.pulls;
                     continue;
                 }
                 if (pulled.outcome !== 'push') {
@@ -593,15 +605,25 @@ export class BenchContextImpl implements BenchContext {
                 stopNotBusy = this.harness.onServerNotBusy(() => abort.abort());
             } else if (delivery === 'unknown') {
                 graceMs = timeout <= pullAfterMs ? timeout / 2 : pullAfterMs;
+                // the grace left after a refresh pull that did not resolve
+                const graceLeftMs = Math.max(0, graceMs - Number(graceSpentNs) / 1_000_000);
                 graceTimer = setTimeout(
                     () => {
                         if (this.harness.diagnosticsDelivery() === 'unknown') {
                             abort.abort();
                         }
                     },
-                    Math.min(graceMs, remainingMs()),
+                    Math.min(graceLeftMs, remainingMs()),
                 );
             }
+            // a refresh tells the server has new diagnostics, a wait for a push pulls them
+            let refreshed = false;
+            const stopRefresh = auto
+                ? this.harness.onDiagnosticRefresh(() => {
+                      refreshed = true;
+                      abort.abort();
+                  })
+                : () => {};
             const after = this.harness.currentPublishSeq();
             const waitStartedAt = process.hrtime.bigint();
             wait = await this.harness.waitForPublishes(
@@ -619,8 +641,19 @@ export class BenchContextImpl implements BenchContext {
             );
             clearTimeout(graceTimer);
             stopNotBusy();
+            stopRefresh();
             if (!wait.aborted) {
                 break;
+            }
+            if (refreshed) {
+                // time in the grace counts toward it, a pull on refresh is not one after a grace
+                if (delivery === 'unknown' && held === 0) {
+                    graceSpentNs += process.hrtime.bigint() - waitStartedAt;
+                }
+                this.log(`Server requested workspace/diagnostic/refresh, pulling diagnostics for ${relativePath}`);
+                pullReason = `a pull for ${relativePath} on workspace/diagnostic/refresh`;
+                refresh = true;
+                continue;
             }
             if (held > 0) {
                 // the server is no longer busy, the loop pulls again
@@ -632,7 +665,7 @@ export class BenchContextImpl implements BenchContext {
         }
         const { publish, publishes, timedOut } = wait;
         if (timedOut && publishes === 0 && held > 0) {
-            return this.recordHeldTimeout(relativePath, uri, calledAt, held, heldPulls, graceSpentNs);
+            return this.recordHeldTimeout(relativePath, uri, calledAt, held, earlierPulls, graceSpentNs);
         }
 
         // only the timer firing means a timeout, elapsed time is never compared to it
@@ -754,25 +787,29 @@ export class BenchContextImpl implements BenchContext {
             if ('error' in response) {
                 failure = toRequestError('textDocument/diagnostic', response.error);
                 if (failure.code !== CONTENT_MODIFIED && failure.code !== SERVER_CANCELLED) {
-                    outcome = 'error';
+                    // a failing pull on refresh leaves the wait waiting for a push
+                    outcome = auto?.refresh ? 'unresolved' : 'error';
                     break;
                 }
                 this.log(`textDocument/diagnostic ${relativePath}: ${failure.message}, pulling again`);
             } else {
                 failure = undefined;
                 diagnostics = this.storePulled(uri, response.value, previous);
-                if (!until || until(diagnostics)) {
-                    if (auto !== undefined && diagnostics.length === 0 && this.isLoadingPlaceholder()) {
-                        // forget the placeholder, so the next pull sends no resultId of it and
-                        // is still timed from the latest sync
-                        if (previous) {
-                            this.pulled.set(uri, previous);
-                        } else {
-                            this.pulled.delete(uri);
-                        }
-                        outcome = 'held';
-                        break;
+                const passed = !until || until(diagnostics);
+                const placeholder =
+                    passed && auto !== undefined && diagnostics.length === 0 && this.isLoadingPlaceholder();
+                if (placeholder || (!passed && auto?.refresh)) {
+                    // forget the answer, so the next pull sends no resultId of it and is still
+                    // timed from the latest sync; a pull on refresh does not re-pull
+                    if (previous) {
+                        this.pulled.set(uri, previous);
+                    } else {
+                        this.pulled.delete(uri);
                     }
+                    outcome = placeholder ? 'held' : 'unresolved';
+                    break;
+                }
+                if (passed) {
                     outcome = 'ok';
                     break;
                 }
@@ -792,6 +829,16 @@ export class BenchContextImpl implements BenchContext {
             );
             return {
                 result: { diagnostics: [], timedOut: false, publishes: 0, source: 'pull', pulls, ms: 0 },
+                outcome,
+            };
+        }
+        if (outcome === 'unresolved') {
+            const why = failure
+                ? `failed: ${failure.message}`
+                : `did not pass until (${diagnostics?.length ?? 0} diagnostics)`;
+            this.log(`Pull for ${relativePath} on workspace/diagnostic/refresh ${why}, waiting for a push`);
+            return {
+                result: { diagnostics: diagnostics ?? [], timedOut: false, publishes: 0, source: 'pull', pulls, ms: 0 },
                 outcome,
             };
         }
@@ -817,7 +864,12 @@ export class BenchContextImpl implements BenchContext {
         // an empty answer may be the placeholder of a server still loading, it does not settle pull
         let tentative = false;
         if (auto !== undefined && outcome === 'ok') {
-            this.harness.markPullOnly(auto.reason, result.length === 0);
+            // a pull on refresh learns pull only from diagnostics, an empty one teaches nothing
+            if (!auto.refresh) {
+                this.harness.markPullOnly(auto.reason, result.length === 0);
+            } else if (result.length > 0) {
+                this.harness.markPullFromRefresh(auto.reason);
+            }
             tentative = this.harness.diagnosticsDelivery() !== 'pull' || this.harness.diagnosticsDeliveryTentative();
         }
         const method = pullTimingMethod(this.harness.documentState(uri));
