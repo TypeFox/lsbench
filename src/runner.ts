@@ -121,6 +121,10 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         }
     };
 
+    // with restart, an exit seen while stopping an iteration's server happened at shutdown,
+    // after the iteration's work, while one seen before stopping happened during the iteration
+    const restartTeardownLabel = (h: LspHarness, during: string) => (h.exit ? during : `teardown of ${during}`);
+
     let harness: LspHarness | null = null;
     let ctx: BenchContextImpl | null = null;
     // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
@@ -182,7 +186,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                     signal: exit?.signal ?? null,
                     reason: `failed to start: ${msg.split('\n')[0]}`,
                 });
-                await teardown(harness, during);
+                await teardown(harness, restartTeardownLabel(harness, during));
                 harness = null;
                 break;
             }
@@ -225,7 +229,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // If restarting, stop the server, keeping collected runs if teardown fails.
         // shutdown falls outside total_ms but is still attributed to this run
         if (opts.restart && harness) {
-            await teardown(harness, during);
+            await teardown(harness, restartTeardownLabel(harness, during));
             run?.requests.push(...harness.takeLifecycleTimings());
             harness = null;
             ctx = null;

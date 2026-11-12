@@ -130,14 +130,14 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
     it('still exits non zero without --allow-exit-code for that server', () => {
         const result = runCli(exitOneServer, path.join(tmpDir, 'cli-not-allowed.json'), []);
         expect(result.status).toBe(1);
-        expect(result.stderr).toMatch(/exited abnormally during iteration 1 \(exit code 1\)/);
+        expect(result.stderr).toMatch(/exited abnormally during teardown of iteration 1 \(exit code 1\)/);
     });
 
     it('still exits non zero for a server exiting 0 without a shutdown reply, whatever is allowed', () => {
         const output = path.join(tmpDir, 'cli-quit.json');
         const result = runCli(quitOnShutdownServer, output, ['--allow-exit-code', '0', '--allow-exit-code', '1']);
         expect(result.status).toBe(1);
-        expect(result.stderr).toMatch(/exited abnormally during iteration 1 \(exit code 0\)/);
+        expect(result.stderr).toMatch(/exited abnormally during teardown of iteration 1 \(exit code 0\)/);
         const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
         expect(report.abnormal_exits).toHaveLength(2);
         expect(report.tolerated_exits).toBeUndefined();

@@ -152,7 +152,9 @@ describe('runBenchmark with a server crashing at shutdown', () => {
             const report = await runBenchmark(options(restart, output));
 
             expect(report.runs).toHaveLength(2);
-            const expected = restart ? ['warmup 1', 'iteration 1', 'iteration 2'] : ['final teardown'];
+            const expected = restart
+                ? ['teardown of warmup 1', 'teardown of iteration 1', 'teardown of iteration 2']
+                : ['final teardown'];
             expect(report.abnormal_exits?.map((e) => e.during)).toEqual(expected);
             for (const exit of report.abnormal_exits ?? []) {
                 expect(exit).toMatchObject({ code: 3, signal: null });
@@ -163,6 +165,50 @@ describe('runBenchmark with a server crashing at shutdown', () => {
             expect(written.abnormal_exits).toHaveLength(expected.length);
         });
     }
+});
+
+describe('runBenchmark with restart and a server crashing during an iteration', () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-crash-mid-'));
+        fs.writeFileSync(
+            path.join(tmpDir, 'actions.ts'),
+            // the server exits right after its hover reply, while the iteration still runs
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+                await new Promise((resolve) => setTimeout(resolve, 300));
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('labels the exit with the iteration, not its teardown', async () => {
+        const server = crashOnShutdownServer.replace(
+            "conn.onRequest('textDocument/hover', () => null);",
+            "conn.onRequest('textDocument/hover', () => { setTimeout(() => process.exit(4), 20); return null; });",
+        );
+        const report = await runBenchmark({
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', server],
+            workspace: tmpDir,
+            script: path.join(tmpDir, 'actions.ts'),
+            iterations: 2,
+            warmup: 1,
+            output: '',
+            restart: true,
+            verbose: false,
+        });
+        expect(report.abnormal_exits?.map((e) => [e.code, e.during])).toEqual([
+            [4, 'warmup 1'],
+            [4, 'iteration 1'],
+            [4, 'iteration 2'],
+        ]);
+    });
 });
 
 /** a fake server that replies to shutdown and exits cleanly */
@@ -341,7 +387,9 @@ describe('runBenchmark with allowExitCodes', () => {
             const report = await runBenchmark(options('fail', restart, output, [1]));
 
             expect(report.abnormal_exits).toBeUndefined();
-            const expected = restart ? ['warmup 1', 'iteration 1', 'iteration 2'] : ['final teardown'];
+            const expected = restart
+                ? ['teardown of warmup 1', 'teardown of iteration 1', 'teardown of iteration 2']
+                : ['final teardown'];
             expect(report.tolerated_exits?.map((e) => e.during)).toEqual(expected);
             for (const exit of report.tolerated_exits ?? []) {
                 expect(exit).toEqual({
@@ -361,9 +409,9 @@ describe('runBenchmark with allowExitCodes', () => {
         const report = await runBenchmark(options('quit', true, path.join(tmpDir, 'report-quit.json'), [0, 1]));
         expect(report.tolerated_exits).toBeUndefined();
         expect(report.abnormal_exits?.map((e) => [e.code, e.during])).toEqual([
-            [0, 'warmup 1'],
-            [0, 'iteration 1'],
-            [0, 'iteration 2'],
+            [0, 'teardown of warmup 1'],
+            [0, 'teardown of iteration 1'],
+            [0, 'teardown of iteration 2'],
         ]);
     });
 });
