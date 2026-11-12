@@ -445,7 +445,11 @@ Synchronization
                                           are marked tentative: true until a pull returns diagnostics. A
                                           publish flips it back to push at any time, and a pull in flight
                                           then stops, records nothing and the wait waits for pushes for
-                                          the rest of its timeout. pull pulls at once (skipped without
+                                          the rest of its timeout. With --restart, what a server was
+                                          learned to use carries over to the next iteration's server
+                                          (a carried tentative pull still flips on a push), so warmups
+                                          teach it and timed iterations skip the grace.
+                                          pull pulls at once (skipped without
                                           diagnosticProvider). Pulls repeat with a
                                           25 to 250ms backoff until until passes or the timeout, sending
                                           previousResultId; an unchanged report reuses the previous
@@ -453,9 +457,14 @@ Synchronization
                                           errors end the wait as error. settleMs does not apply. source
                                           says whether push or pull resolved, pulls counts requests.
                                           Pulled waits are recorded as diagnostics/pull/open,
-                                          diagnostics/pull/edit or diagnostics/pull/wait, timed from the
-                                          first pull to the resolving response (no server debounce, so
-                                          not comparable with push timings).
+                                          diagnostics/pull/edit or diagnostics/pull/wait (no server
+                                          debounce, so not comparable with push timings). auto pulls are
+                                          timed like push waits, from the latest didOpen/didChange (from
+                                          the call when already pulled since) to the resolving response,
+                                          the grace included and also recorded as grace_ms (graceMs in
+                                          the result). mode 'pull' is timed from the first pull to the
+                                          resolving response. For a pull only server, pass mode 'pull'
+                                          or a short pullAfterMs to avoid the grace entirely.
   waitForIdle(options?)                   waits until the server finished background work (loading,
                                           indexing): no $/progress token is active and, once rust-analyzer
                                           sent experimental/serverStatus, the latest status is quiescent.
@@ -577,8 +586,12 @@ waitForDiagnostics call:
   - diagnostics/edit   from the latest didChange to the resolving publish
   - diagnostics/wait   document not open, from the call to the next publish
   - diagnostics/pull/open, diagnostics/pull/edit, diagnostics/pull/wait
-                       pulled instead (textDocument/diagnostic), from the first
-                       pull to the resolving response, not comparable with push
+                       pulled instead (textDocument/diagnostic), not comparable
+                       with push. auto mode: timed like the above, from the
+                       didOpen/didChange (or the call) to the resolving response;
+                       grace_ms is the part spent waiting for a push first, and
+                       the summary entry adds graced (how many) and
+                       grace_median_ms. mode 'pull': from the first pull
 These timings carry the diagnostic count in \`diagnostics\`.
 
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
@@ -620,7 +633,11 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
         empty syntax pass first; until: d => d.length > 0 skips it, settleMs
         takes the last publish of a burst
   - Cold start: use --restart to measure spawn + initialize time per iteration
-    (lifecycle/spawn, lifecycle/initialize).
+    (lifecycle/spawn, lifecycle/initialize). Use --warmup 1 or more there: the
+    diagnostics delivery a warmup learns carries over, so timed iterations on a
+    pull only server (ts7) skip the 1000ms push grace. With --warmup 0 the
+    first iteration pays it, shown as grace_ms; pass mode 'pull' or a short
+    pullAfterMs to waitForDiagnostics to avoid it.
   - Compare servers: run the same script/workspace against different servers
     (e.g. typescript-language-server vs vtsls).
   - Debugging: -v prefixes lsbench lines [lsbench] (request timings [lsbench:ctx])

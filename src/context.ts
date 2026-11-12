@@ -54,6 +54,18 @@ type PullOutcome = 'ok' | 'error' | 'timeout' | 'skipped' | 'push';
 interface PulledDiagnostics {
     diagnostics: Diagnostic[];
     resultId?: string;
+    /** syncSeq of the document when the report arrived, telling whether it was pulled since the latest sync */
+    syncSeq?: number;
+}
+
+/** What an auto mode wait passes to the pull it falls back to */
+interface AutoPull {
+    /** why the server is being learned as pull only, for the log */
+    reason: string;
+    /** when the wait was called, the timing start of a document that is not open */
+    calledAt: bigint;
+    /** milliseconds the wait spent waiting for a push before this pull, 0 when it pulled at once */
+    graceMs: number;
 }
 
 export interface BenchContextOptions {
@@ -530,6 +542,8 @@ export class BenchContextImpl implements BenchContext {
         const auto = mode === 'auto' && this.harness.capabilities !== null && this.supports('textDocument/diagnostic');
         const remainingMs = () => Math.max(0, timeout - Number(process.hrtime.bigint() - calledAt) / 1_000_000);
         let pullReason: string | undefined;
+        // time spent in push waits that ended in a grace abort, reported as grace_ms of the pull
+        let graceSpentNs = 0n;
         let wait: PublishWaitResult;
         for (;;) {
             const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
@@ -537,7 +551,11 @@ export class BenchContextImpl implements BenchContext {
                 pullReason = `a pull for ${relativePath}`;
             }
             if (pullReason !== undefined && delivery !== 'push') {
-                const pulled = await this.pullDiagnostics(relativePath, uri, remainingMs(), until, pullReason);
+                const pulled = await this.pullDiagnostics(relativePath, uri, remainingMs(), until, {
+                    reason: pullReason,
+                    calledAt,
+                    graceMs: Number(graceSpentNs) / 1_000_000,
+                });
                 if (pulled.outcome !== 'push') {
                     return pulled.result;
                 }
@@ -559,6 +577,7 @@ export class BenchContextImpl implements BenchContext {
                 );
             }
             const after = this.harness.currentPublishSeq();
+            const waitStartedAt = process.hrtime.bigint();
             wait = await this.harness.waitForPublishes(
                 uri,
                 (p) => {
@@ -576,6 +595,7 @@ export class BenchContextImpl implements BenchContext {
             if (!wait.aborted) {
                 break;
             }
+            graceSpentNs += process.hrtime.bigint() - waitStartedAt;
             this.log(`No publish from the server within ${graceMs}ms, pulling diagnostics for ${relativePath}`);
             pullReason = `a pull for ${relativePath} resolved after ${graceMs}ms without a push`;
         }
@@ -624,21 +644,24 @@ export class BenchContextImpl implements BenchContext {
      * `unchanged` report reuses the diagnostics of the previous report, whose resultId is
      * sent as previousResultId. ContentModified and ServerCancelled rejections are retried
      * like a failing `until`, other rejections end the wait as an error. The timing is
-     * labeled `diagnostics/pull/open`, `diagnostics/pull/edit` or `diagnostics/pull/wait`
-     * and runs from the first request to the resolving response, since a pull has no server
-     * debounce and is not comparable with time to a push.
+     * labeled `diagnostics/pull/open`, `diagnostics/pull/edit` or `diagnostics/pull/wait`.
+     * An explicit `pull` mode wait is timed from the first request to the resolving response,
+     * the round trip the script asked to measure.
      *
-     * An auto mode pull passes `learnReason`: a resolving pull teaches the harness the server
-     * is pull only, tentatively when it returned no diagnostics, and the timing is marked
-     * tentative while that is not settled. A publish teaching push during the pull stops it
-     * with outcome `push` and records nothing, the caller then waits for pushes
+     * An auto mode wait passes `auto`. Its timing runs to the resolving response like a push
+     * wait's: from the latest didOpen or didChange of an open document not yet pulled since,
+     * otherwise from the call of the wait, so the push grace before the pull is included and
+     * also recorded as `grace_ms`. A resolving pull teaches the harness the server is pull
+     * only, tentatively when it returned no diagnostics, and the timing is marked tentative
+     * while that is not settled. A publish teaching push during the pull stops it with
+     * outcome `push` and records nothing, the caller then waits for pushes
      */
     private async pullDiagnostics(
         relativePath: string,
         uri: string,
         timeoutMs: number,
         until: ((diagnostics: Diagnostic[]) => boolean) | undefined,
-        learnReason?: string,
+        auto?: AutoPull,
     ): Promise<{ result: WaitForDiagnosticsResult; outcome: PullOutcome }> {
         this._lastError = undefined;
         if (this.skipUnsupported && !this.supports('textDocument/diagnostic')) {
@@ -653,6 +676,13 @@ export class BenchContextImpl implements BenchContext {
         }
 
         const startedAt = process.hrtime.bigint();
+        // auto mode times open/edit (or call) to diagnostics, like a push wait, see above
+        let timedFrom = startedAt;
+        if (auto) {
+            const doc = this.harness.documentState(uri);
+            const pulledSinceSync = doc?.open && this.pulled.get(uri)?.syncSeq === doc.syncSeq;
+            timedFrom = doc?.open && doc.syncedBy !== undefined && !pulledSinceSync ? doc.syncedAt : auto.calledAt;
+        }
         const deadline = startedAt + BigInt(Math.round(timeoutMs * 1_000_000));
         const remainingMs = () => Number(deadline - process.hrtime.bigint()) / 1_000_000;
         let pulls = 0;
@@ -668,7 +698,7 @@ export class BenchContextImpl implements BenchContext {
             onPushed = () => resolve(null);
         });
         const unsubscribe =
-            learnReason === undefined
+            auto === undefined
                 ? () => {}
                 : this.harness.onDiagnosticsDeliveryChange((delivery) => {
                       if (delivery === 'push') {
@@ -734,12 +764,13 @@ export class BenchContextImpl implements BenchContext {
         const result = diagnostics ?? this.diagnosticsFor(uri);
         // an empty answer may be the placeholder of a server still loading, it does not settle pull
         let tentative = false;
-        if (learnReason !== undefined && outcome === 'ok') {
-            this.harness.markPullOnly(learnReason, result.length === 0);
+        if (auto !== undefined && outcome === 'ok') {
+            this.harness.markPullOnly(auto.reason, result.length === 0);
             tentative = this.harness.diagnosticsDelivery() !== 'pull' || this.harness.diagnosticsDeliveryTentative();
         }
         const method = pullTimingMethod(this.harness.documentState(uri));
-        const ms = Number(endedAt - startedAt) / 1_000_000; // nanoseconds → milliseconds
+        const ms = Math.max(0, Number(endedAt - timedFrom) / 1_000_000); // nanoseconds → milliseconds
+        const graceMs = auto && auto.graceMs > 0 ? Math.round(auto.graceMs * 1000) / 1000 : undefined;
         const timing: RequestTiming = {
             method,
             duration_ms: Math.round(ms * 1000) / 1000, // 3 decimal places
@@ -747,6 +778,9 @@ export class BenchContextImpl implements BenchContext {
             result: outcome === 'ok' ? classifyResult(result) : outcome,
             diagnostics: result.length,
         };
+        if (graceMs !== undefined) {
+            timing.grace_ms = graceMs;
+        }
         if (tentative) {
             timing.tentative = true;
         }
@@ -758,7 +792,9 @@ export class BenchContextImpl implements BenchContext {
         this.log(
             `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}` +
                 `${tentative ? ' (tentative, the server may still push)' : ''}, ` +
-                `${result.length} diagnostics, ${pulls} pulls${failure ? ` ERROR: ${failure.message}` : ''}`,
+                `${result.length} diagnostics, ${pulls} pulls` +
+                `${graceMs !== undefined ? `, ${graceMs.toFixed(1)}ms of it waiting for a push` : ''}` +
+                `${failure ? ` ERROR: ${failure.message}` : ''}`,
         );
 
         return {
@@ -769,6 +805,7 @@ export class BenchContextImpl implements BenchContext {
                 source: 'pull',
                 pulls,
                 ms: timing.duration_ms,
+                ...(graceMs !== undefined ? { graceMs } : {}),
                 ...(tentative ? { tentative: true as const } : {}),
             },
             outcome,
@@ -788,7 +825,12 @@ export class BenchContextImpl implements BenchContext {
             diagnostics = Array.isArray(report?.items) ? report.items : [];
         }
         const resultId = typeof report?.resultId === 'string' ? report.resultId : undefined;
-        this.pulled.set(uri, { diagnostics, ...(resultId !== undefined ? { resultId } : {}) });
+        const syncSeq = this.harness.documentState(uri)?.syncSeq;
+        this.pulled.set(uri, {
+            diagnostics,
+            ...(resultId !== undefined ? { resultId } : {}),
+            ...(syncSeq !== undefined ? { syncSeq } : {}),
+        });
         return diagnostics;
     }
 

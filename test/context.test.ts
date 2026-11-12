@@ -1586,12 +1586,44 @@ describe('BenchContextImpl', () => {
                 expect(Date.now() - start).toBeGreaterThanOrEqual(25);
                 expect(messages(result)).toEqual(['type error']);
                 expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1, publishes: 0 });
-                // timed from the pull, the grace period is not included
-                expect(result.ms).toBeLessThan(25);
+                // timed from didOpen like a push wait, the grace period is included and reported
+                expect(result.graceMs).toBeGreaterThanOrEqual(25);
+                expect(result.ms).toBeGreaterThanOrEqual(result.graceMs ?? Infinity);
                 expect(pulls()[0].params).toEqual({ textDocument: { uri } });
-                expect(ctx.collectTimings()).toMatchObject([
+                const timings = ctx.collectTimings();
+                expect(timings).toMatchObject([
                     { method: 'diagnostics/pull/open', success: true, result: 'ok', diagnostics: 1 },
                 ]);
+                expect(timings[0].duration_ms).toBe(result.ms);
+                expect(timings[0].grace_ms).toBe(result.graceMs);
+            });
+
+            it('auto: a pull at once is timed from the latest sync, without grace_ms', async () => {
+                servePulls(full('1', diag('a')));
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                await new Promise((resolve) => setTimeout(resolve, 30));
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 1000 });
+                expect(result).toMatchObject({ source: 'pull', pulls: 1 });
+                // the script's time between didChange and the wait counts, as for a push wait
+                expect(result.ms).toBeGreaterThanOrEqual(25);
+                expect(result.graceMs).toBeUndefined();
+                const timings = ctx.collectTimings();
+                expect(timings[1]).toMatchObject({ method: 'diagnostics/pull/edit', result: 'ok' });
+                expect(timings[1].grace_ms).toBeUndefined();
+            });
+
+            it('auto: a repeated pull of an unchanged document is timed from the wait', async () => {
+                servePulls(full('1', diag('a')));
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                await new Promise((resolve) => setTimeout(resolve, 50));
+                const again = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(again).toMatchObject({ source: 'pull', pulls: 1 });
+                // already pulled since didOpen, so the time since then is not attributed to this pull
+                expect(again.ms).toBeLessThan(40);
             });
 
             it('auto: learns a pull only server and pulls at once on later waits', async () => {
@@ -1840,6 +1872,16 @@ describe('BenchContextImpl', () => {
                 expect(result.tentative).toBeUndefined();
                 expect(harness.diagnosticsDelivery()).toBe('unknown');
                 expect(ctx.collectTimings()).toMatchObject([{ method: 'diagnostics/pull/edit', result: 'ok' }]);
+            });
+
+            it('pull: is timed from the first pull request, not from the latest sync', async () => {
+                servePulls(full('1', diag('a')));
+                await ctx.openDocument('sample.ts');
+                await new Promise((resolve) => setTimeout(resolve, 40));
+                const result = await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
+                expect(result.ms).toBeLessThan(30);
+                expect(result.graceMs).toBeUndefined();
+                expect(ctx.collectTimings()[0].grace_ms).toBeUndefined();
             });
 
             it('re-pulls until satisfied, sending the previous resultId', async () => {

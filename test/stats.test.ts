@@ -141,6 +141,32 @@ describe('computeMethodStats', () => {
         });
     });
 
+    it('counts auto mode pulls that waited for a push, with their median grace', () => {
+        const pull = (duration_ms: number, grace_ms?: number) =>
+            timing({ method: 'diagnostics/pull/open', duration_ms, ...(grace_ms !== undefined ? { grace_ms } : {}) });
+        const stats = computeMethodStats([
+            pull(1004, 1000),
+            pull(1010, 1002),
+            pull(1003, 1001),
+            pull(4),
+            timing({
+                method: 'diagnostics/pull/open',
+                duration_ms: 5000,
+                success: false,
+                result: 'timeout',
+                grace_ms: 1000,
+            }),
+        ]);
+        // the timeout is left out, like from the durations
+        expect(stats).toMatchObject({ count: 5, graced: 3, grace_median_ms: 1001, max_ms: 1010 });
+    });
+
+    it('leaves the grace fields out when no pull waited for a push', () => {
+        const stats = computeMethodStats([timing({ method: 'diagnostics/pull/open', duration_ms: 4 })]);
+        expect(stats).not.toHaveProperty('graced');
+        expect(stats).not.toHaveProperty('grace_median_ms');
+    });
+
     it('reports a method where every wait timed out with null latencies and a timeout rate of 1', () => {
         const timeout = timing({ method: 'diagnostics/open', duration_ms: 15000, success: false, result: 'timeout' });
         const stats = computeMethodStats([timeout, timeout, timeout]);
@@ -316,6 +342,27 @@ describe('printSummary', () => {
         expect(row).toContain('100.0%');
         const hover = lines.find((line) => line.trimStart().startsWith('textDocument/hover')) ?? '';
         expect(hover).not.toContain('n/a');
+    });
+
+    it('notes pulls that first waited for a push, only when there are some', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [
+            timing({ method: 'diagnostics/pull/open', duration_ms: 1004, grace_ms: 1000 }),
+            timing({ method: 'diagnostics/pull/edit', duration_ms: 4 }),
+        ];
+        printSummary(buildReport(opts, [{ iteration: 1, requests, total_ms: 1010 }], 1010));
+        expect(lines).toContain(
+            '  diagnostics/pull/open: 1 pull first waited for a push (median 1000ms, included above)',
+        );
+        expect(lines.some((line) => line.includes('diagnostics/pull/edit:'))).toBe(false);
+        expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(true);
+
+        lines.length = 0;
+        printSummary(buildReport(opts, [{ iteration: 1, requests: [timing()], total_ms: 10 }], 10));
+        expect(lines.some((line) => line.includes('waited for a push'))).toBe(false);
     });
 
     it('leaves out the null and empty columns when every result is ok', () => {

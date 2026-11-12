@@ -32,6 +32,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     let empties = 0;
     let skipped = 0;
     let timeouts = 0;
+    const graces: number[] = [];
     for (const t of timings) {
         if (t.result === 'skipped') {
             skipped++;
@@ -42,6 +43,9 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
             continue;
         }
         durations.push(t.duration_ms);
+        if (t.grace_ms !== undefined) {
+            graces.push(t.grace_ms);
+        }
         if (!t.success) {
             failures++;
         }
@@ -64,6 +68,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         timeout_rate: rate(timeouts, sent),
         skipped,
         skip_rate: rate(skipped, count),
+        ...(graces.length > 0 ? { graced: graces.length, grace_median_ms: round(percentile(sorted(graces), 50)) } : {}),
     };
 
     // no durations left (all timeouts or skipped): null rather than 0, which would read as instant
@@ -277,6 +282,20 @@ export function printSummary(report: BenchReport): void {
             (showTimeouts ? percent(s.timeout_rate) : '') +
             (showSkipped ? percent(s.skip_rate) : '');
         console.log(row);
+    }
+
+    // auto mode pulls that first waited for a push include that grace in their durations
+    const graced = methods.filter((m) => report.summary[m].graced !== undefined);
+    if (graced.length > 0) {
+        console.log();
+        for (const method of graced) {
+            const s = report.summary[method];
+            const pulls = s.graced === 1 ? '1 pull' : `${s.graced} pulls`;
+            console.log(
+                `  ${method}: ${pulls} first waited for a push (median ${s.grace_median_ms}ms, included above)`,
+            );
+        }
+        console.log("  Pass mode: 'pull' or a short pullAfterMs to waitForDiagnostics for a pull only server");
     }
 
     console.log();

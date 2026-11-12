@@ -507,3 +507,147 @@ describe('runBenchmark progress lines', () => {
         expect(out).not.toMatch(/Iteration \d/);
     });
 });
+
+/**
+ * a fake server advertising diagnosticProvider, picked by argv: pull answers every pull empty
+ * and never publishes (as ts7 does); late answers its first start the same way, after 100ms,
+ * as a server still loading would, and from its second start on also publishes for each
+ * opened document 20ms after didOpen (as rust-analyzer does once loaded). argv[2] is a file
+ * counting the starts
+ */
+const deliveryServer = `
+import * as fs from 'node:fs';
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const [mode, counter] = process.argv.slice(1);
+const start = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf-8') : '0') + 1;
+fs.writeFileSync(counter, String(start));
+const pushes = mode === 'late' && start > 1;
+conn.onRequest('initialize', () => ({
+    capabilities: { textDocumentSync: 1, diagnosticProvider: { interFileDependencies: false, workspaceDiagnostics: false } },
+}));
+conn.onNotification('textDocument/didOpen', ({ textDocument }) => {
+    if (pushes) {
+        const diagnostic = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'x' };
+        setTimeout(() => conn.sendNotification('textDocument/publishDiagnostics', { uri: textDocument.uri, diagnostics: [diagnostic] }), 20);
+    }
+});
+conn.onRequest('textDocument/diagnostic', async () => {
+    if (mode === 'late') {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return { kind: 'full', items: [] };
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('runBenchmark with restart carries the learned diagnostics delivery', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-delivery-'));
+        fs.writeFileSync(path.join(tmpDir, 'main.ts'), 'const a = 1;\n', 'utf-8');
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.openDocument('main.ts');
+                await ctx.waitForDiagnostics('main.ts', { timeout: 5000 });
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** run two iterations after one warmup with restart and -v, returning the report and the logged lines */
+    async function run(mode: 'pull' | 'late') {
+        const lines: string[] = [];
+        vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+            lines.push(...String(chunk).split('\n'));
+            return true;
+        });
+        for (const method of ['log', 'error'] as const) {
+            vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+                lines.push(...args.map(String).join(' ').split('\n'));
+            });
+        }
+        const report = await runBenchmark({
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', deliveryServer, mode, path.join(tmpDir, `starts-${mode}`)],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output: '',
+            restart: true,
+            verbose: true,
+        });
+        return { report, lines };
+    }
+
+    /** the lines logged from the start of `iteration` to the start of the next */
+    function linesOf(lines: string[], iteration: string, next?: string): string[] {
+        const from = lines.indexOf(`  Running iteration ${iteration}...`);
+        const to = next ? lines.indexOf(`  Running iteration ${next}...`) : lines.length;
+        expect(from).toBeGreaterThanOrEqual(0);
+        return lines.slice(from, to);
+    }
+
+    it('pulls at once after the warmup on a pull only server, without the push grace', async () => {
+        const { report, lines } = await run('pull');
+        const graces = lines.filter((l) => l.includes('No publish from the server within'));
+        expect(graces).toHaveLength(1);
+        expect(linesOf(lines, 'warmup 1/1', '1/2')).toContain(graces[0]);
+        for (const iteration of ['1/2', '2/2']) {
+            expect(linesOf(lines, iteration, iteration === '1/2' ? '2/2' : undefined)).toContain(
+                '[lsbench] Carrying diagnostics delivery from the previous server: pull (tentative)',
+            );
+        }
+        expect(report.runs).toHaveLength(2);
+        for (const r of report.runs) {
+            const pulls = r.requests.filter((t) => t.method === 'diagnostics/pull/open');
+            expect(pulls).toHaveLength(1);
+            expect(pulls[0]).toMatchObject({ success: true, diagnostics: 0, tentative: true });
+            // pulled at once, so no grace is part of the timing
+            expect(pulls[0].grace_ms).toBeUndefined();
+            // without carrying, each run would wait the 1000ms grace before pulling
+            expect(r.total_ms).toBeLessThan(1000);
+        }
+        expect(report.summary['diagnostics/pull/open']).not.toHaveProperty('graced');
+    });
+
+    it('still flips a carried tentative pull to push when the restarted server pushes', async () => {
+        const { report, lines } = await run('late');
+        const warmup = linesOf(lines, 'warmup 1/1', '1/2');
+        const first = linesOf(lines, '1/2', '2/2');
+        const second = linesOf(lines, '2/2');
+        // the warmup's server only answered pulls, empty, so pull is learned tentatively
+        expect(warmup.some((l) => l.includes('tentatively pull only'))).toBe(true);
+        expect(first).toContain('[lsbench] Carrying diagnostics delivery from the previous server: pull (tentative)');
+        expect(first.some((l) => l.includes('Server pushes diagnostics'))).toBe(true);
+        expect(first.some((l) => l.includes('No publish from the server within'))).toBe(false);
+        // the push is carried on, not the tentative pull
+        expect(second).toContain('[lsbench] Carrying diagnostics delivery from the previous server: push');
+        expect(second.some((l) => l.includes('No publish from the server within'))).toBe(false);
+
+        for (const r of report.runs) {
+            const waits = r.requests.filter((t) => t.method.startsWith('diagnostics/'));
+            expect(waits.at(-1)).toMatchObject({ method: 'diagnostics/open', diagnostics: 1 });
+        }
+        // the second run waits for the push alone, it does not pull
+        expect(report.runs[1].requests.some((t) => t.method === 'diagnostics/pull/open')).toBe(false);
+    });
+});

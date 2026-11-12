@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
 import { BenchContextImpl } from './context.js';
-import { LspHarness } from './harness.js';
+import { type DiagnosticsDelivery, LspHarness } from './harness.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
     AbnormalExit,
@@ -145,6 +145,10 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     const harnessOptions = { serverLog: opts.serverLog };
     const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries, skipUnsupported: opts.skipUnsupported };
     let lifecycle: RequestTiming[] | undefined;
+    // with restart, the diagnostics delivery the previous iteration's server was learned to
+    // use, seeded into the next harness so warmups teach it and timed iterations skip the
+    // push grace of auto waits. A carried tentative pull still flips on the first push
+    let carriedDelivery: { delivery: DiagnosticsDelivery; tentative: boolean } | undefined;
     // in verbose mode, summarize capabilities once, after the first server is up
     let capabilitiesLogged = !opts.verbose;
     const logCapabilities = (h: LspHarness) => {
@@ -182,6 +186,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // so cold-start benchmarks capture server spawn + initialize time)
         if (opts.restart) {
             harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
+            if (carriedDelivery) {
+                harness.seedDiagnosticsDelivery(carriedDelivery.delivery, carriedDelivery.tentative);
+            }
             ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
             try {
                 await harness.start();
@@ -246,6 +253,11 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // If restarting, stop the server, keeping collected runs if teardown fails.
         // shutdown falls outside total_ms but is still attributed to this run
         if (opts.restart && harness) {
+            // read before stopping, which makes the harness forget what it learned
+            carriedDelivery = {
+                delivery: harness.diagnosticsDelivery(),
+                tentative: harness.diagnosticsDeliveryTentative(),
+            };
             await teardown(harness, restartTeardownLabel(harness, during));
             run?.requests.push(...harness.takeLifecycleTimings());
             harness = null;

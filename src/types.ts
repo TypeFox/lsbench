@@ -109,6 +109,13 @@ export interface RequestTiming {
      * result may not measure real diagnostics. Absent otherwise
      */
     tentative?: true;
+    /**
+     * Auto mode diagnostics pulls only: milliseconds the wait spent waiting for a push from a
+     * server whose delivery was unknown before it pulled (the `pullAfterMs` grace). Included
+     * in `duration_ms`, which runs from the didOpen or didChange like a push wait. Absent when
+     * the wait pulled at once
+     */
+    grace_ms?: number;
 }
 
 export interface IterationResult {
@@ -143,6 +150,13 @@ export interface MethodStats {
     skipped: number;
     /** Share of all requests that were skipped */
     skip_rate: number;
+    /**
+     * Diagnostics pulls only, present when some auto mode pull first waited for a push: how
+     * many timings did (timeouts and skipped left out, like the durations) and their median
+     * `grace_ms`, which their durations include
+     */
+    graced?: number;
+    grace_median_ms?: number;
 }
 
 export interface BenchReport {
@@ -287,11 +301,18 @@ export interface WaitForDiagnosticsResult {
      */
     tentative?: true;
     /**
+     * auto mode pulls only: milliseconds spent waiting for a push before pulling, included in
+     * `ms`, see RequestTiming.grace_ms. Absent when the wait pulled at once
+     */
+    graceMs?: number;
+    /**
      * Milliseconds from the latest didOpen or didChange of the document to the resolving
      * publish (or to the timeout). With `settleMs` that is the latest publish before the
      * quiet period, which is not included. For a document that is not open, from the
-     * start of the wait. Pulled diagnostics are timed from the first pull request to the
-     * resolving response instead, re-pulls and their backoff included
+     * start of the wait. Auto mode pulls are timed the same way to the resolving response,
+     * a push grace before the pull (`graceMs`) and re-pulls included; a repeated pull of a
+     * document not synced since its previous pull is timed from the start of the wait.
+     * `mode: 'pull'` waits are timed from the first pull request to the resolving response
      */
     ms: number;
 }

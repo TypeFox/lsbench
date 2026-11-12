@@ -382,6 +382,22 @@ export class DiagnosticsTracker {
         this.setDelivery('pull', tentative);
     }
 
+    /**
+     * Start from a delivery learned by an earlier tracker, as the runner does for each server
+     * it restarts. A carried `pull` keeps its tentative flag, so a push still flips it, and a
+     * carried `unknown` changes nothing. Ignored once this tracker learned anything itself
+     */
+    seedDelivery(delivery: DiagnosticsDelivery, tentative: boolean): void {
+        if (delivery === 'unknown' || this._delivery !== 'unknown') {
+            return;
+        }
+        const carriedTentative = delivery === 'pull' && tentative;
+        this.log(
+            `Carrying diagnostics delivery from the previous server: ${delivery}${carriedTentative ? ' (tentative)' : ''}`,
+        );
+        this.setDelivery(delivery, carriedTentative);
+    }
+
     /** Call `listener` whenever the learned delivery changes, returns a function removing it */
     onDeliveryChange(listener: (delivery: DiagnosticsDelivery) => void): () => void {
         this.deliveryListeners.add(listener);
@@ -1293,6 +1309,11 @@ export class LspHarness {
     /** Learn that the server answers pulls but does not push, see DiagnosticsTracker.markPullOnly */
     markPullOnly(reason: string, tentative = false): void {
         this.diagnostics.markPullOnly(reason, tentative);
+    }
+
+    /** Start from a delivery learned by an earlier server, see DiagnosticsTracker.seedDelivery */
+    seedDiagnosticsDelivery(delivery: DiagnosticsDelivery, tentative: boolean): void {
+        this.diagnostics.seedDelivery(delivery, tentative);
     }
 
     /** Call `listener` whenever the learned delivery changes, see DiagnosticsTracker.onDeliveryChange */

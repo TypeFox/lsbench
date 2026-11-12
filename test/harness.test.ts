@@ -1097,6 +1097,31 @@ describe('DiagnosticsTracker', () => {
         expect(tracker.delivery).toBe('unknown');
     });
 
+    it('starts from a seeded delivery, a push still flips a seeded tentative pull', () => {
+        const logs: string[] = [];
+        const tracker = new DiagnosticsTracker((msg) => logs.push(msg));
+        tracker.seedDelivery('unknown', false);
+        expect(tracker.delivery).toBe('unknown');
+        expect(logs).toEqual([]);
+        tracker.seedDelivery('pull', true);
+        expect(tracker.delivery).toBe('pull');
+        expect(tracker.deliveryTentative).toBe(true);
+        expect(logs).toEqual(['Carrying diagnostics delivery from the previous server: pull (tentative)']);
+        // a seed never overrides what the tracker already holds
+        tracker.seedDelivery('push', false);
+        expect(tracker.delivery).toBe('pull');
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.receive({ uri, diagnostics: [] });
+        expect(tracker.delivery).toBe('push');
+        expect(tracker.deliveryTentative).toBe(false);
+
+        const pushed = new DiagnosticsTracker();
+        pushed.seedDelivery('push', true);
+        expect(pushed.delivery).toBe('push');
+        // only pull is ever tentative
+        expect(pushed.deliveryTentative).toBe(false);
+    });
+
     it('learns pull only tentatively from empty pulls, a push or a non tentative learn overturns it', () => {
         const logs: string[] = [];
         const changes: string[] = [];
