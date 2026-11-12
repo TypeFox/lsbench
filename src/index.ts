@@ -6,7 +6,13 @@
 export type { ProviderRequirement } from './capabilities.js';
 export { METHOD_PROVIDERS, summarizeSupport, supportsMethod } from './capabilities.js';
 export type { BenchContextOptions } from './context.js';
-export { addRegisteredLanguage, BenchContextImpl, classifyResult, isCurrentPublish } from './context.js';
+export {
+    addRegisteredLanguage,
+    BenchContextImpl,
+    classifyResult,
+    detectLanguageId,
+    isCurrentPublish,
+} from './context.js';
 export type {
     ClosePublishBehavior,
     Diagnostic,

@@ -17,7 +17,14 @@ import type {
     ServerCapabilities,
     WaitForDiagnosticsResult,
 } from 'lsbench';
-import { addRegisteredLanguage, BenchContextImpl, classifyResult, DiagnosticsTracker, ProgressTracker } from 'lsbench';
+import {
+    addRegisteredLanguage,
+    BenchContextImpl,
+    classifyResult,
+    DiagnosticsTracker,
+    detectLanguageId,
+    ProgressTracker,
+} from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface SentRequest {
@@ -135,6 +142,28 @@ class FakeHarness {
 function op(sl: number, sc: number, el: number, ec: number, text: string): EditOperation {
     return { range: { start: { line: sl, character: sc }, end: { line: el, character: ec } }, text };
 }
+
+describe('detectLanguageId', () => {
+    it.each([
+        ['src/index.ts', 'typescript'],
+        ['/abs/path/App.TSX', 'typescriptreact'],
+        ['lib/x.mjs', 'javascript'],
+        ['config.jsonc', 'jsonc'],
+        ['grammar.langium', 'langium'],
+    ])('maps %s to %s', (file, languageId) => {
+        expect(detectLanguageId(file)).toBe(languageId);
+    });
+
+    it('falls back to plaintext for unknown or missing extensions', () => {
+        expect(detectLanguageId('notes.unknownext')).toBe('plaintext');
+        expect(detectLanguageId('Makefile')).toBe('plaintext');
+    });
+
+    it('picks up extensions registered with addRegisteredLanguage', () => {
+        addRegisteredLanguage('detect-test-lang', '.DetectTest');
+        expect(detectLanguageId('a.detecttest')).toBe('detect-test-lang');
+    });
+});
 
 describe('BenchContextImpl', () => {
     let tmpDir: string;

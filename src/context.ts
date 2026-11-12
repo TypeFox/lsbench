@@ -1153,13 +1153,15 @@ export function addRegisteredLanguage(languageId: string, extension: string) {
 }
 
 /**
- * Will attempt to resolve the language id via the extension of the given file path.
- * Will default to 'plaintext' if the language id is unrecognized.
- * In such cases, `addRegisteredLanguage` should be invoked before opening any document.
- * @param filePath To extract extension from (expecting at least `abc.xyz`), no extension-less files here
- * @returns Associated language ID, or 'plaintext'
+ * Resolves the LSP language id that `openDocument` sends for a file, from the
+ * file's extension (matched case-insensitively, so `a.TS` is `typescript`).
+ * Returns `'plaintext'` for unknown or missing extensions; register those with
+ * `addRegisteredLanguage` before opening the document, or pass
+ * `options.languageId` to `openDocument`.
+ * @param filePath Path or file name to take the extension from (e.g. `src/index.ts`)
+ * @returns The associated language id, or `'plaintext'`
  */
-function detectLanguageId(filePath: string): string {
+export function detectLanguageId(filePath: string): string {
     const ext = path.extname(filePath).toLowerCase();
     return RegisteredLanguages[ext] ?? 'plaintext';
 }
