@@ -230,6 +230,11 @@ program
         'Milliseconds added on both sides of the median bounds',
         String(DEFAULT_CHECK_OPTIONS.slackMs),
     )
+    .option(
+        '--min-count <n>',
+        'Skip the median rule for methods with a count below this in the baseline or report',
+        String(DEFAULT_CHECK_OPTIONS.minCount),
+    )
     .option('--json', 'Print a machine readable verdict', false)
     .addHelpText(
         'after',
@@ -238,7 +243,8 @@ program
             '  - a method is added or missing\n' +
             '  - timeout_rate, skip_rate, empty_rate, null_rate or failure_rate differ by\n' +
             '    more than --rate-tolerance\n' +
-            '  - median_ms is outside [max(0, base / ratio - slack), base * ratio + slack]\n' +
+            '  - median_ms is outside [max(0, base / ratio - slack), base * ratio + slack],\n' +
+            '    unless the baseline or report count is below --min-count (1 checks all)\n' +
             '  - a null median_ms becomes a number or vice versa\n\n' +
             'Examples:\n' +
             '  lsbench check results.json -b baseline.json\n' +
@@ -252,6 +258,7 @@ program
         const rateTolerance = Number(rawOpts.rateTolerance);
         const medianRatio = Number(rawOpts.medianRatio);
         const slackMs = Number(rawOpts.slackMs);
+        const minCount = Number(rawOpts.minCount);
         if (!Number.isFinite(rateTolerance) || rateTolerance < 0) {
             console.error('Error: --rate-tolerance must be a non-negative number');
             process.exit(2);
@@ -264,9 +271,13 @@ program
             console.error('Error: --slack-ms must be a non-negative number');
             process.exit(2);
         }
+        if (!Number.isInteger(minCount) || minCount < 1) {
+            console.error('Error: --min-count must be a positive integer');
+            process.exit(2);
+        }
         const report = readCheckedRun(reportFile, 'Report', 2);
         const baseline = readCheckedRun(rawOpts.baseline as string, 'Baseline', 2);
-        const result = checkReport(report, baseline, { rateTolerance, medianRatio, slackMs });
+        const result = checkReport(report, baseline, { rateTolerance, medianRatio, slackMs, minCount });
         console.log(rawOpts.json ? JSON.stringify(result, null, 2) : formatCheckResult(result));
         process.exit(result.pass ? 0 : 1);
     });
@@ -680,7 +691,8 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    1 regressions, 2 usage errors. Options:
                                    --rate-tolerance <n> (default 0.1),
                                    --median-ratio <n> (default 2),
-                                   --slack-ms <n> (default 5), --json
+                                   --slack-ms <n> (default 5),
+                                   --min-count <n> (default 3), --json
 
 Anything after \`--\` is passed through as extra args to the server command.
 

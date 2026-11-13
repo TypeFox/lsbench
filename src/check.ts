@@ -38,12 +38,15 @@ export interface CheckOptions {
     medianRatio?: number;
     /** milliseconds added on both sides of the median bounds (default 5) */
     slackMs?: number;
+    /** the median rule is skipped when the baseline's or the report's count is below this (default 3) */
+    minCount?: number;
 }
 
 export const DEFAULT_CHECK_OPTIONS: Required<CheckOptions> = {
     rateTolerance: 0.1,
     medianRatio: 2,
     slackMs: 5,
+    minCount: 3,
 };
 
 export interface CheckFailure {
@@ -149,6 +152,10 @@ function compareMethod(
         }
         return failures;
     }
+    // a median of too few samples is noise, e.g. lifecycle methods measured once per run
+    if (stats.count < opts.minCount || base.count < opts.minCount) {
+        return failures;
+    }
     // a median is never negative, so the lower bound stops at 0
     const low = Math.max(0, baseMedian / opts.medianRatio - opts.slackMs);
     const high = baseMedian * opts.medianRatio + opts.slackMs;
@@ -192,6 +199,9 @@ export function validateCheckedRun(value: unknown): string | undefined {
             if (typeof fields[rate] !== 'number') {
                 return `summary of ${method} has no numeric ${rate}`;
             }
+        }
+        if (typeof fields.count !== 'number') {
+            return `summary of ${method} has no numeric count`;
         }
         if (fields.median_ms !== null && typeof fields.median_ms !== 'number') {
             return `summary of ${method} has no median_ms`;

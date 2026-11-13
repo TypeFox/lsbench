@@ -194,6 +194,45 @@ describe('checkReport', () => {
         });
     });
 
+    describe('min count', () => {
+        const base = run({ m: stats({ median_ms: 100 }) });
+        const slow = stats({ median_ms: 300 });
+
+        it('skips the median when the report count is below the minimum', () => {
+            expect(checkReport(run({ m: { ...slow, count: 2 } }), base).pass).toBe(true);
+        });
+
+        it('skips the median when the baseline count is below the minimum', () => {
+            const single = run({ m: stats({ median_ms: 0.84, count: 1 }) });
+            expect(checkReport(run({ m: stats({ median_ms: 7.2 }) }), single).pass).toBe(true);
+        });
+
+        it('compares the median at the minimum', () => {
+            const result = checkReport(
+                run({ m: { ...slow, count: 3 } }),
+                run({ m: stats({ median_ms: 100, count: 3 }) }),
+            );
+            expect(result.failures).toEqual([
+                { method: 'm', field: 'median_ms', baseline: 100, actual: 300, rule: 'outside [45, 205]' },
+            ]);
+        });
+
+        it('still checks rates of a single sample', () => {
+            const result = checkReport(
+                run({ m: stats({ count: 1, median_ms: 300, timeout_rate: 1 }) }),
+                run({ m: stats({ count: 1 }) }),
+            );
+            expect(result.failures.map((f) => f.field)).toEqual(['timeout_rate']);
+        });
+
+        it('compares every median with a minimum of 1', () => {
+            const result = checkReport(run({ m: { ...slow, count: 1 } }), run({ m: stats({ count: 1 }) }), {
+                minCount: 1,
+            });
+            expect(result.failures[0]).toMatchObject({ field: 'median_ms', baseline: 100, actual: 300 });
+        });
+    });
+
     describe('run settings', () => {
         it.each([
             ['iterations', 20],
@@ -246,6 +285,9 @@ describe('validateCheckedRun', () => {
         );
         expect(validateCheckedRun(run({ m: { ...stats(), median_ms: '1' } as unknown as MethodStats }))).toBe(
             'summary of m has no median_ms',
+        );
+        expect(validateCheckedRun(run({ m: { ...stats(), count: '1' } as unknown as MethodStats }))).toBe(
+            'summary of m has no numeric count',
         );
     });
 });
