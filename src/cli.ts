@@ -2,8 +2,16 @@
 
 import * as fs from 'node:fs';
 import { Command } from 'commander';
+import {
+    type CheckedRun,
+    checkReport,
+    createBaseline,
+    DEFAULT_CHECK_OPTIONS,
+    formatCheckResult,
+    validateCheckedRun,
+} from './check.js';
 import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
-import type { BenchOptions } from './types.js';
+import type { BenchOptions, BenchReport } from './types.js';
 import { CLI_VERSION } from './version.js';
 
 /** idle wait timeout of --wait-idle without a value */
@@ -173,6 +181,76 @@ program
         console.log(getPrimer());
     });
 
+program
+    .command('baseline')
+    .description('Write a baseline from a report: run settings and summaries, without the per iteration runs.')
+    .argument('<report>', 'JSON report written by lsbench')
+    .requiredOption('-o, --output <path>', 'Output file for the baseline')
+    .action((reportFile: string, rawOpts: Record<string, unknown>) => {
+        const report = readCheckedRun(reportFile, 'Report', 1) as BenchReport;
+        if (!report.iteration_summary) {
+            console.error(`Error: Report ${reportFile} has no iteration_summary`);
+            process.exit(1);
+        }
+        const output = rawOpts.output as string;
+        try {
+            fs.writeFileSync(output, `${JSON.stringify(createBaseline(report), null, 2)}\n`);
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`Error: Cannot write baseline ${output}: ${msg}`);
+            process.exit(1);
+        }
+        console.log(`Baseline written to ${output}`);
+    });
+
+program
+    .command('check')
+    .description('Check a report against a baseline. Exits 0 on pass, 1 on regressions, 2 on usage errors.')
+    .argument('<report>', 'JSON report written by lsbench')
+    .requiredOption('-b, --baseline <path>', 'Baseline written by `lsbench baseline`')
+    .option(
+        '--rate-tolerance <n>',
+        'Largest allowed absolute difference of a rate',
+        String(DEFAULT_CHECK_OPTIONS.rateTolerance),
+    )
+    .option(
+        '--median-ratio <n>',
+        'median_ms may grow by this factor or shrink by its inverse',
+        String(DEFAULT_CHECK_OPTIONS.medianRatio),
+    )
+    .option(
+        '--slack-ms <n>',
+        'Milliseconds added on both sides of the median bounds',
+        String(DEFAULT_CHECK_OPTIONS.slackMs),
+    )
+    .option('--json', 'Print a machine readable verdict', false)
+    // usage errors exit 2, apart from regressions (1)
+    .exitOverride((err) => {
+        process.exit(err.exitCode === 0 ? 0 : 2);
+    })
+    .action((reportFile: string, rawOpts: Record<string, unknown>) => {
+        const rateTolerance = Number(rawOpts.rateTolerance);
+        const medianRatio = Number(rawOpts.medianRatio);
+        const slackMs = Number(rawOpts.slackMs);
+        if (!Number.isFinite(rateTolerance) || rateTolerance < 0) {
+            console.error('Error: --rate-tolerance must be a non-negative number');
+            process.exit(2);
+        }
+        if (!Number.isFinite(medianRatio) || medianRatio < 1) {
+            console.error('Error: --median-ratio must be a number of at least 1');
+            process.exit(2);
+        }
+        if (!Number.isFinite(slackMs) || slackMs < 0) {
+            console.error('Error: --slack-ms must be a non-negative number');
+            process.exit(2);
+        }
+        const report = readCheckedRun(reportFile, 'Report', 2);
+        const baseline = readCheckedRun(rawOpts.baseline as string, 'Baseline', 2);
+        const result = checkReport(report, baseline, { rateTolerance, medianRatio, slackMs });
+        console.log(rawOpts.json ? JSON.stringify(result, null, 2) : formatCheckResult(result));
+        process.exit(result.pass ? 0 : 1);
+    });
+
 program.parse();
 
 /** Collect repeated --allow-exit-code values, NaN for an invalid one (rejected after parsing) */
@@ -218,6 +296,28 @@ function readJsonObjectFile(file: string | undefined, what: string): Record<stri
         process.exit(1);
     }
     return value as Record<string, unknown> | undefined;
+}
+
+/** Reads a report or baseline, exiting with exitCode if it is missing, invalid or lacks checked fields */
+function readCheckedRun(file: string, what: string, exitCode: number): CheckedRun {
+    if (!fs.existsSync(file)) {
+        console.error(`Error: ${what} file not found: ${file}`);
+        process.exit(exitCode);
+    }
+    let value: unknown;
+    try {
+        value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Error: Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
+        process.exit(exitCode);
+    }
+    const error = validateCheckedRun(value);
+    if (error) {
+        console.error(`Error: ${what} file ${file} is not an lsbench report or baseline: ${error}`);
+        process.exit(exitCode);
+    }
+    return value as CheckedRun;
 }
 
 // ── Primer ──────────────────────────────────────────────────────────────────

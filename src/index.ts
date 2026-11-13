@@ -5,6 +5,18 @@
 
 export type { ProviderRequirement } from './capabilities.js';
 export { METHOD_PROVIDERS, summarizeSupport, supportsMethod } from './capabilities.js';
+export type { BenchBaseline, CheckedRun, CheckFailure, CheckOptions, CheckResult } from './check.js';
+export {
+    BASELINE_FORMAT,
+    CHECKED_RATES,
+    CHECKED_SETTINGS,
+    checkReport,
+    createBaseline,
+    DEFAULT_CHECK_OPTIONS,
+    formatCheckResult,
+    RUN_METHOD,
+    validateCheckedRun,
+} from './check.js';
 export type { BenchContextOptions } from './context.js';
 export {
     addRegisteredLanguage,
