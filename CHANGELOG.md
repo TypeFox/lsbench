@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v0.3.0-next.4 (preview)
+
+Reports can be checked against a committed baseline, failing on changed behavior or timings, to gate server and lsbench upgrades.
+
+### Regression checks
+
+- `lsbench baseline <report> -o <file>` writes a baseline: the run settings (`iterations`, `warmup`, `restart_between_iterations`), `summary` and `iteration_summary`, without the per iteration `runs`, so it stays small and diffs well. The file carries `lsbench_baseline: 1` as its format version.
+- `lsbench check <report> -b <file>` fails on mismatched run settings, an added or missing method (which also catches a change of delivery, such as `diagnostics/open` turning into `diagnostics/pull/open`), a rate (`timeout_rate`, `skip_rate`, `empty_rate`, `null_rate`, `failure_rate`) differing by more than `--rate-tolerance` (default 0.1), a `median_ms` outside `[max(0, base / ratio - slack), base * ratio + slack]` with `--median-ratio` (default 2) and `--slack-ms` (default 5), and a `null` median turning into a number or back. Faster medians fail too, since placeholder answers looked like speedups.
+- `check` exits 0 on pass, 1 on regressions and 2 on usage errors. It prints a table of the broken rules, or with `--json` the verdict `{ pass, failures: [{ method, field, baseline, actual, rule }] }`. Run setting failures use the method `(run)`.
+- `createBaseline`, `checkReport`, `formatCheckResult`, `validateCheckedRun`, `DEFAULT_CHECK_OPTIONS` and the related constants and types are exported for use from code.
+
 ## v0.3.0-next.3 (preview)
 
 Cold rust-analyzer runs no longer measure empty placeholders answered or published while loading, and no longer time out after it switches to refreshes.

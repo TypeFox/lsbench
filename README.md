@@ -377,6 +377,8 @@ Options:
 Commands:
   run                         Run a benchmark (default command)
   prime                       Print a primer on using lsbench
+  baseline                    Write a baseline from a report (see [Regression checks](#regression-checks))
+  check                       Check a report against a baseline
 ```
 
 ### Verbose output
@@ -515,6 +517,70 @@ With `--restart` each run's `requests` start with spawn, initialize and idle and
   ]
 }
 ```
+
+## Regression checks
+
+`lsbench baseline` reduces a report to a baseline, and `lsbench check` fails when a later report changed behavior or timings against it. Use them to gate a server or lsbench upgrade in CI.
+
+```sh
+# record today's behavior, then commit baseline.json
+lsbench "typescript-language-server --stdio" -w ./ws -s ./actions.ts -o results.json
+lsbench baseline results.json -o baseline.json
+
+# later: run again and compare
+lsbench "typescript-language-server --stdio" -w ./ws -s ./actions.ts -o results.json
+lsbench check results.json -b baseline.json
+```
+
+The baseline keeps the run settings (`iterations`, `warmup`, `restart_between_iterations`), `summary` and `iteration_summary`, without the per iteration `runs`, so it stays small and diffs well. A baseline records behavior as it is, known timeouts included. Rewrite it with `lsbench baseline` when a change is intended, and review the diff.
+
+`check` applies these rules, and fails on each one broken:
+
+- **Run settings**: `iterations`, `warmup` and `restart_between_iterations` must match, since timings of different settings are not comparable.
+- **Methods**: a method added to or missing from `summary` fails. This catches changed delivery too, such as `diagnostics/open` turning into `diagnostics/pull/open`.
+- **Rates**: `timeout_rate`, `skip_rate`, `empty_rate`, `null_rate` and `failure_rate` fail when they differ by more than `--rate-tolerance` (default 0.1).
+- **Median**: `median_ms` fails outside `[max(0, base / ratio - slack), base * ratio + slack]`, with `--median-ratio` (default 2) and `--slack-ms` (default 5). Faster fails too, since a placeholder answer looks like a speedup. The slack absorbs the noise of methods taking a few milliseconds.
+- **Null median**: a `null` median (every call timed out or was skipped) must stay `null`, and a number must not become `null`.
+
+```
+Usage: lsbench baseline [options] <report>
+
+Options:
+  -o, --output <path>     Output file for the baseline (required)
+
+Usage: lsbench check [options] <report>
+
+Options:
+  -b, --baseline <path>   Baseline written by `lsbench baseline` (required)
+  --rate-tolerance <n>    Largest allowed absolute difference of a rate (default: 0.1)
+  --median-ratio <n>      median_ms may grow by this factor or shrink by its inverse (default: 2)
+  --slack-ms <n>          Milliseconds added on both sides of the median bounds (default: 5)
+  --json                  Print a machine readable verdict
+```
+
+`check` exits 0 on pass, 1 on regressions, and 2 on usage errors such as a missing or invalid file or option. A failing check prints a table of the broken rules, `(run)` standing for a run setting:
+
+```text
+FAIL: 2 regressions against the baseline
+
+method              field         baseline  actual  rule
+------------------  ------------  --------  ------  -----------------
+textDocument/hover  median_ms     100       300     outside [45, 205]
+diagnostics/open    timeout_rate  0         0.5     |diff| > 0.1
+```
+
+With `--json`, it prints the verdict instead:
+
+```json
+{
+  "pass": false,
+  "failures": [
+    { "method": "textDocument/hover", "field": "median_ms", "baseline": 100, "actual": 300, "rule": "outside [45, 205]" }
+  ]
+}
+```
+
+`field` is `method` for an added or missing method, with `baseline` and `actual` set to `present` or `missing`. `checkReport`, `createBaseline` and `formatCheckResult` are exported for use from code.
 
 ## Comparing diagnostics timings
 

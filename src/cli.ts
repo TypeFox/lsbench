@@ -186,6 +186,13 @@ program
     .description('Write a baseline from a report: run settings and summaries, without the per iteration runs.')
     .argument('<report>', 'JSON report written by lsbench')
     .requiredOption('-o, --output <path>', 'Output file for the baseline')
+    .addHelpText(
+        'after',
+        '\nThe baseline keeps iterations, warmup, restart_between_iterations, summary and\n' +
+            'iteration_summary. Commit it and review its diff when rewriting it.\n\n' +
+            'Example:\n' +
+            '  lsbench baseline results.json -o baseline.json',
+    )
     .action((reportFile: string, rawOpts: Record<string, unknown>) => {
         const report = readCheckedRun(reportFile, 'Report', 1) as BenchReport;
         if (!report.iteration_summary) {
@@ -224,6 +231,19 @@ program
         String(DEFAULT_CHECK_OPTIONS.slackMs),
     )
     .option('--json', 'Print a machine readable verdict', false)
+    .addHelpText(
+        'after',
+        '\nRules, each failing the check:\n' +
+            '  - iterations, warmup or restart_between_iterations differ\n' +
+            '  - a method is added or missing\n' +
+            '  - timeout_rate, skip_rate, empty_rate, null_rate or failure_rate differ by\n' +
+            '    more than --rate-tolerance\n' +
+            '  - median_ms is outside [max(0, base / ratio - slack), base * ratio + slack]\n' +
+            '  - a null median_ms becomes a number or vice versa\n\n' +
+            'Examples:\n' +
+            '  lsbench check results.json -b baseline.json\n' +
+            '  lsbench check results.json -b baseline.json --median-ratio 3 --slack-ms 10 --json',
+    )
     // usage errors exit 2, apart from regressions (1)
     .exitOverride((err) => {
         process.exit(err.exitCode === 0 ? 0 : 2);
@@ -655,6 +675,12 @@ experimental/serverStatus (verbose mode logs progress titles).
       -h, --help                   Print help
 
     prime                          Print this primer
+    baseline <report> -o <file>    Write a baseline: run settings and summaries
+    check <report> -b <file>       Check a report against a baseline, exit 0 pass,
+                                   1 regressions, 2 usage errors. Options:
+                                   --rate-tolerance <n> (default 0.1),
+                                   --median-ratio <n> (default 2),
+                                   --slack-ms <n> (default 5), --json
 
 Anything after \`--\` is passed through as extra args to the server command.
 
