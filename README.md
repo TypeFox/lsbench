@@ -539,7 +539,7 @@ The baseline keeps the run settings (`iterations`, `warmup`, `restart_between_it
 - **Run settings**: `iterations`, `warmup` and `restart_between_iterations` must match, since timings of different settings are not comparable.
 - **Methods**: a method added to or missing from `summary` fails. This catches changed delivery too, such as `diagnostics/open` turning into `diagnostics/pull/open`.
 - **Rates**: `timeout_rate`, `skip_rate`, `empty_rate`, `null_rate` and `failure_rate` fail when they differ by more than `--rate-tolerance` (default 0.1).
-- **Median**: `median_ms` fails outside `[max(0, base / ratio - slack), base * ratio + slack]`, with `--median-ratio` (default 2) and `--slack-ms` (default 5). Faster fails too, since a placeholder answer looks like a speedup. The slack absorbs the noise of methods taking a few milliseconds.
+- **Median**: `median_ms` fails outside `[max(0, base / ratio - slack), base * ratio + slack]`, with `--median-ratio` (default 2) and `--slack-ms` (default 5). Faster fails too, since a placeholder answer looks like a speedup. The slack absorbs the noise of methods taking a few milliseconds. The rule is skipped for a method whose `count` is below `--min-count` (default 3) in the baseline or the report, since the median of one or two samples is noise. Without `--restart`, `lifecycle/spawn`, `lifecycle/initialize` and `lifecycle/shutdown` run once, so their medians are not compared, while their method and rates still are. `--min-count 1` compares every median.
 - **Null median**: a `null` median (every call timed out or was skipped) must stay `null`, and a number must not become `null`.
 
 ```
@@ -555,6 +555,7 @@ Options:
   --rate-tolerance <n>    Largest allowed absolute difference of a rate (default: 0.1)
   --median-ratio <n>      median_ms may grow by this factor or shrink by its inverse (default: 2)
   --slack-ms <n>          Milliseconds added on both sides of the median bounds (default: 5)
+  --min-count <n>         Skip the median rule for methods with a count below this in the baseline or report (default: 3)
   --json                  Print a machine readable verdict
 ```
 

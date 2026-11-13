@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.3.0-next.5 (preview)
+
+`lsbench check` no longer fails on the median of a single sample, such as the lifecycle methods of a run without `--restart`.
+
+### Regression checks
+
+- `check --min-count <n>` (default 3) skips the median rule for a method whose `count` is below `n` in the baseline or the report. In next.4 `lifecycle/spawn`, `lifecycle/initialize` and `lifecycle/shutdown`, measured once per run without `--restart`, failed on noise like a shutdown going from 0.84 ms to 7.2 ms. The method set, the rates, the `null` median rule and the run settings are still checked for every method. `--min-count 1` restores the next.4 behavior, and a value that is not a positive integer exits 2.
+- `validateCheckedRun` requires a numeric `count` per method, and `CheckOptions` and `DEFAULT_CHECK_OPTIONS` add `minCount`.
+
 ## v0.3.0-next.4 (preview)
 
 Reports can be checked against a committed baseline, failing on changed behavior or timings, to gate server and lsbench upgrades.
