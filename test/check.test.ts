@@ -165,6 +165,11 @@ describe('checkReport', () => {
             expect(checkReport(run({ m: stats({ median_ms: 6 }) }), fast).pass).toBe(false);
         });
 
+        it('clamps the lower bound at 0', () => {
+            const fast = run({ m: stats({ median_ms: 0.4 }) });
+            expect(checkReport(run({ m: stats({ median_ms: 6 }) }), fast).failures[0].rule).toBe('outside [0, 5.8]');
+        });
+
         it('honors a custom ratio and slack', () => {
             const actual = run({ m: stats({ median_ms: 140 }) });
             expect(checkReport(actual, base, { medianRatio: 1.5, slackMs: 0 }).pass).toBe(true);

@@ -149,7 +149,8 @@ function compareMethod(
         }
         return failures;
     }
-    const low = baseMedian / opts.medianRatio - opts.slackMs;
+    // a median is never negative, so the lower bound stops at 0
+    const low = Math.max(0, baseMedian / opts.medianRatio - opts.slackMs);
     const high = baseMedian * opts.medianRatio + opts.slackMs;
     if (median < low || median > high) {
         failures.push({
