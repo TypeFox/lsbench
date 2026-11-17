@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
-import { BenchContextImpl } from './context.js';
+import { BenchContextImpl, SilenceTracker } from './context.js';
 import { type DiagnosticsDelivery, LspHarness } from './harness.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
@@ -151,7 +151,13 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     let ctx: BenchContextImpl | null = null;
     // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
     const harnessOptions = { serverLog: opts.serverLog };
-    const ctxOptions = { contentModifiedRetries: opts.contentModifiedRetries, skipUnsupported: opts.skipUnsupported };
+    // one silence tracker for the run, so silent waits add up across warmups and restarts
+    const silence = new SilenceTracker();
+    const ctxOptions = {
+        contentModifiedRetries: opts.contentModifiedRetries,
+        skipUnsupported: opts.skipUnsupported,
+        silence,
+    };
     let lifecycle: RequestTiming[] | undefined;
     // with restart, the diagnostics delivery the previous iteration's server was learned to
     // use, seeded into the next harness so warmups teach it and timed iterations skip the
@@ -300,6 +306,10 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         }
     };
     addExits();
+    const silentWaits = silence.silentWaits();
+    if (silentWaits) {
+        report.silent_waits = silentWaits;
+    }
     if (opts.output) {
         writeReport(report, opts.output);
     }

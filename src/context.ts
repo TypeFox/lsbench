@@ -23,6 +23,7 @@ import type {
     WaitForDiagnosticsOptions,
     WaitForDiagnosticsResult,
     WaitForIdleOptions,
+    SilentWaits,
     WaitForIdleResult,
 } from './types.js';
 
@@ -77,6 +78,50 @@ interface AutoPull {
     refresh?: boolean;
 }
 
+/** Silent waits in a row of one kind after which lsbench hints the server may never publish */
+export const SILENT_WAIT_STREAK = 3;
+
+/**
+ * Counts push waits that timed out without any current publish, per timing method
+ * (`diagnostics/open`, `diagnostics/edit`, `diagnostics/wait`). One tracker spans a whole
+ * run, warmups and restarts included, so it can tell a server that never publishes for a
+ * clean document from one that is merely slow. A wait that resolved, or timed out after
+ * publishes failing `until`, ends the streak of its method
+ */
+export class SilenceTracker {
+    private stats = new Map<string, { waits: number; streak: number; longest: number }>();
+
+    /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
+    record(method: string, silent: boolean): boolean {
+        let entry = this.stats.get(method);
+        if (!entry) {
+            entry = { waits: 0, streak: 0, longest: 0 };
+            this.stats.set(method, entry);
+        }
+        if (!silent) {
+            entry.streak = 0;
+            return false;
+        }
+        entry.waits++;
+        entry.streak++;
+        const reached = entry.streak === SILENT_WAIT_STREAK && entry.longest < SILENT_WAIT_STREAK;
+        entry.longest = Math.max(entry.longest, entry.streak);
+        return reached;
+    }
+
+    /** The methods whose silent waits reached SILENT_WAIT_STREAK in a row, undefined when none did */
+    silentWaits(): Record<string, SilentWaits> | undefined {
+        let result: Record<string, SilentWaits> | undefined;
+        for (const [method, entry] of this.stats) {
+            if (entry.longest >= SILENT_WAIT_STREAK) {
+                result ??= {};
+                result[method] = { waits: entry.waits, longest_streak: entry.longest };
+            }
+        }
+        return result;
+    }
+}
+
 export interface BenchContextOptions {
     /** How often a request rejected with ContentModified is retried (default 3) */
     contentModifiedRetries?: number;
@@ -84,6 +129,8 @@ export interface BenchContextOptions {
     retryBackoffMs?: number;
     /** Skip requests whose provider the server does not advertise, recording them as skipped (default true) */
     skipUnsupported?: boolean;
+    /** Tracks push waits that saw no publish across the run, a private one when absent */
+    silence?: SilenceTracker;
 }
 
 /**
@@ -100,6 +147,7 @@ export class BenchContextImpl implements BenchContext {
     private contentModifiedRetries: number;
     private retryBackoffMs: number;
     private skipUnsupported: boolean;
+    private silence: SilenceTracker;
     private _lastError: RequestError | undefined;
     /** the latest pulled diagnostics per URI, for previousResultId and unchanged reports */
     private pulled = new Map<string, PulledDiagnostics>();
@@ -111,6 +159,7 @@ export class BenchContextImpl implements BenchContext {
         this.contentModifiedRetries = options.contentModifiedRetries ?? 3;
         this.retryBackoffMs = options.retryBackoffMs ?? 20;
         this.skipUnsupported = options.skipUnsupported ?? true;
+        this.silence = options.silence ?? new SilenceTracker();
     }
 
     get lastError(): RequestError | undefined {
@@ -754,7 +803,17 @@ export class BenchContextImpl implements BenchContext {
                 `${heldPublishes.size > 0 ? `, ${heldPublishes.size} empty publishes held while the server was not quiescent` : ''}` +
                 `${closeWindowMs !== undefined ? `, ${closeWindowMs.toFixed(1)}ms held in the close window (not included)` : ''}`,
         );
-        if (timedOut && publishes === 0 && method === 'diagnostics/open' && doc && doc.closePublishes > 0) {
+        // a reopen that saw only close publishes is hinted below and neither silent nor resolved
+        const reopenOnly =
+            timedOut && publishes === 0 && method === 'diagnostics/open' && !!doc && doc.closePublishes > 0;
+        if (!reopenOnly && this.silence.record(method, timedOut && publishes === 0)) {
+            this.log(
+                `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row: it may never ` +
+                    'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
+                    'Use `until` or a short timeout for this wait',
+            );
+        }
+        if (reopenOnly && doc) {
             const seen = doc.closePublishes === 1 ? 'the publish' : `the ${doc.closePublishes} publishes`;
             if (doc.closePublishesAfterReopen === doc.closePublishes) {
                 // nothing arrived while the document was closed, every publish was credited by the learned rule

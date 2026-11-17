@@ -730,6 +730,10 @@ The JSON report (and the printed summary) contains:
                        is labeled with that iteration)
   - tolerated_exits    servers that exited after a replied shutdown with a code allowed by
                        --allow-exit-code (only when any did, these do not fail the run)
+  - silent_waits       diagnostics push waits per method that timed out without any
+                       publish, warmups included (only for methods with 3 such waits in
+                       a row: the server may never publish for a clean document, so the
+                       timeouts mean no diagnostics, not slow ones)
 
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started

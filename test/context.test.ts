@@ -25,6 +25,8 @@ import {
     detectLanguageId,
     linkPlaceholders,
     ProgressTracker,
+    SILENT_WAIT_STREAK,
+    SilenceTracker,
 } from 'lsbench';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1287,6 +1289,86 @@ describe('BenchContextImpl', () => {
                 });
                 expect(lines.some((l) => l.includes('timeout'))).toBe(true);
                 expect(lines.some((l) => l.includes('may not republish'))).toBe(false);
+            });
+
+            describe('silent servers', () => {
+                const hint = 'has not published for diagnostics/open in 3 waits in a row';
+
+                /** open, time out on and close sample.ts `n` times with `ctx` */
+                async function silentOpens(verbose: BenchContextImpl, n: number): Promise<void> {
+                    for (let i = 0; i < n; i++) {
+                        await verbose.openDocument('sample.ts');
+                        expect((await verbose.waitForDiagnostics('sample.ts', 10)).timedOut).toBe(true);
+                        await verbose.closeDocument('sample.ts');
+                    }
+                }
+
+                it('hints once when open waits time out without a publish in a row', async () => {
+                    const lines = await ctxLogs((verbose) => silentOpens(verbose, 4));
+                    expect(lines.filter((l) => l.includes(hint))).toHaveLength(1);
+                });
+
+                it('does not hint below the streak', async () => {
+                    const lines = await ctxLogs((verbose) => silentOpens(verbose, SILENT_WAIT_STREAK - 1));
+                    expect(lines.some((l) => l.includes('has not published'))).toBe(false);
+                });
+
+                it('restarts the streak after a resolved wait', async () => {
+                    const lines = await ctxLogs(async (verbose) => {
+                        await silentOpens(verbose, 2);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('found')]);
+                        expect((await verbose.waitForDiagnostics('sample.ts', 1000)).timedOut).toBe(false);
+                        await verbose.closeDocument('sample.ts');
+                        await silentOpens(verbose, 2);
+                    });
+                    expect(lines.some((l) => l.includes('has not published'))).toBe(false);
+                });
+
+                it('does not count timeouts after publishes failing until', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('one')]);
+                        const result = await verbose.waitForDiagnostics('sample.ts', {
+                            timeout: 10,
+                            until: (d) => d.length > 1,
+                        });
+                        expect(result).toMatchObject({ timedOut: true, publishes: 1 });
+                        await verbose.closeDocument('sample.ts');
+                    }
+                    expect(silence.silentWaits()).toBeUndefined();
+                });
+
+                it('does not count a reopen that saw only close publishes', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, [], 1);
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        await verbose.closeDocument('sample.ts');
+                        harness.setDiagnostics(uri, []);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, []);
+                        expect((await verbose.waitForDiagnostics('sample.ts', 10)).timedOut).toBe(true);
+                    }
+                    expect(silence.silentWaits()).toBeUndefined();
+                });
+
+                it('adds up silent waits across contexts sharing a tracker, as with restart', async () => {
+                    const silence = new SilenceTracker();
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        harness = new FakeHarness();
+                        const fresh = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, {
+                            silence,
+                        });
+                        await silentOpens(fresh, 1);
+                    }
+                    expect(silence.silentWaits()).toEqual({
+                        'diagnostics/open': { waits: SILENT_WAIT_STREAK, longest_streak: SILENT_WAIT_STREAK },
+                    });
+                });
             });
 
             it('accepts an empty publish after reopen once the close window has passed', async () => {

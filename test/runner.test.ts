@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { BenchOptions } from 'lsbench';
+import type { BenchOptions, BenchReport } from 'lsbench';
 import { loadActionScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -303,6 +303,94 @@ describe('runBenchmark without restart and a server crashing during an iteration
         const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
         expect(written.runs).toEqual([]);
         expect(written.abnormal_exits).toHaveLength(1);
+    });
+});
+
+/**
+ * a fake server that publishes a diagnostic on didOpen only when argv has "publish", not an
+ * empty publish, which a reopen would credit to the close
+ */
+const quietServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const publish = process.argv.includes('publish');
+conn.onRequest('initialize', () => ({ capabilities: { textDocumentSync: 1 } }));
+conn.onNotification('textDocument/didOpen', (p) => {
+    if (publish) {
+        conn.sendNotification('textDocument/publishDiagnostics', {
+            uri: p.textDocument.uri,
+            diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'x' }],
+        });
+    }
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('runBenchmark with a server silent on clean files', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-silent-'));
+        fs.writeFileSync(path.join(tmpDir, 'clean.ts'), 'export const x = 1;\n', 'utf-8');
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.openDocument('clean.ts');
+                await ctx.waitForDiagnostics('clean.ts', 100);
+                await ctx.closeDocument('clean.ts');
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    async function run(publish: boolean, restart: boolean): Promise<{ report: BenchReport; lines: string[] }> {
+        const lines: string[] = [];
+        const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+            lines.push(args.map(String).join(' '));
+        });
+        const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+        try {
+            const report = await runBenchmark({
+                server: process.execPath,
+                serverArgs: ['--input-type=module', '-e', quietServer, ...(publish ? ['publish'] : [])],
+                workspace: tmpDir,
+                script,
+                iterations: 1,
+                warmup: 2,
+                output: '',
+                restart,
+                verbose: false,
+            });
+            return { report, lines };
+        } finally {
+            log.mockRestore();
+            write.mockRestore();
+        }
+    }
+
+    it('records silent waits counted across warmups and restarts, and notes them in the summary', async () => {
+        const { report, lines } = await run(false, true);
+        expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 1 });
+        expect(report.silent_waits).toEqual({ 'diagnostics/open': { waits: 3, longest_streak: 3 } });
+        expect(lines.some((l) => l.includes('diagnostics/open: the server did not publish in 3 waits'))).toBe(true);
+    });
+
+    it('records no silent waits for a server that publishes', async () => {
+        const { report, lines } = await run(true, false);
+        expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 0 });
+        expect(report.silent_waits).toBeUndefined();
+        expect(lines.some((l) => l.includes('did not publish'))).toBe(false);
     });
 });
 

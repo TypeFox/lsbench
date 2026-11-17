@@ -461,6 +461,24 @@ describe('printSummary', () => {
         expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
     });
 
+    it('notes silent waits only when the report has them', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [timing({ method: 'diagnostics/open', duration_ms: 3000, success: false, result: 'timeout' })];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 3000 }], 3000);
+        printSummary(report);
+        expect(lines.some((line) => line.includes('did not publish'))).toBe(false);
+
+        report.silent_waits = { 'diagnostics/open': { waits: 4, longest_streak: 4 } };
+        printSummary(report);
+        expect(lines).toContain(
+            '  diagnostics/open: the server did not publish in 4 waits (4 in a row, warmups included), ' +
+                'it may never publish for a clean document',
+        );
+    });
+
     it('leaves out the null and empty columns when every result is ok', () => {
         expect(header([timing()])).not.toMatch(/Null%|Empty%/);
     });

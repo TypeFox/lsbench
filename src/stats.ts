@@ -346,5 +346,19 @@ export function printSummary(report: BenchReport): void {
         }
     }
 
+    // push waits that never saw a publish, warmups included, which summary rows cannot tell
+    if (report.silent_waits) {
+        console.log();
+        for (const [method, silent] of Object.entries(report.silent_waits)) {
+            console.log(
+                `  ${method}: the server did not publish in ${silent.waits} waits ` +
+                    `(${silent.longest_streak} in a row, warmups included), it may never publish for a clean document`,
+            );
+        }
+        console.log(
+            '  Their timeouts mean no diagnostics, not slow ones: use `until` or a short timeout for such waits',
+        );
+    }
+
     console.log();
 }

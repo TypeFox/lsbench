@@ -238,6 +238,21 @@ export interface BenchReport {
      * allowExitCodes (--allow-exit-code), absent when none did. They do not fail the run
      */
     tolerated_exits?: AbnormalExit[];
+    /**
+     * Diagnostics push waits per timing method (`diagnostics/open`, `diagnostics/edit`,
+     * `diagnostics/wait`) that timed out without any current publish, warmups included, for
+     * methods where at least 3 did so in a row. Such a server likely never publishes for a
+     * clean document, so its timeouts mean no diagnostics. Absent when no method did
+     */
+    silent_waits?: Record<string, SilentWaits>;
+}
+
+/** Push waits of one timing method that timed out without any current publish, see BenchReport.silent_waits */
+export interface SilentWaits {
+    /** silent waits in the run, warmups included */
+    waits: number;
+    /** most silent waits in a row, not interrupted by a resolved wait or one that saw publishes */
+    longest_streak: number;
 }
 
 /** A server exit recorded in abnormal_exits or tolerated_exits */

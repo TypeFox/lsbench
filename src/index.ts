@@ -24,6 +24,8 @@ export {
     classifyResult,
     detectLanguageId,
     isCurrentPublish,
+    SILENT_WAIT_STREAK,
+    SilenceTracker,
 } from './context.js';
 export type {
     ClosePublishBehavior,
@@ -82,6 +84,7 @@ export type {
     RequestTiming,
     ServerCapabilities,
     ServerConfig,
+    SilentWaits,
     WaitForDiagnosticsOptions,
     WaitForDiagnosticsResult,
     WaitForIdleOptions,
