@@ -245,7 +245,9 @@ export interface AbnormalExit {
     /**
      * When the exit was seen, e.g. "iteration 3" or "warmup 1" for a server that exited during
      * an iteration, "teardown of iteration 3" or "teardown of warmup 1" for one that exited while
-     * being stopped with restart, or "final teardown" without restart
+     * being stopped with restart, or "final teardown" for one that exited while being stopped
+     * after the last iteration without restart. Without restart, an exit during an iteration
+     * ends the run, so no iteration follows it
      */
     during: string;
     code: number | null;

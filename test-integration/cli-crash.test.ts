@@ -191,9 +191,10 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
         const result = runCrashOnHover(output, false);
         expect(result.signal).toBeNull();
         expect(result.status).toBe(1);
-        expect(result.stderr).toMatch(/exited abnormally during final teardown \(exit code 5\)/);
+        expect(result.stderr).toMatch(/exited abnormally during iteration 1 \(exit code 5\)/);
         const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
-        expect(report.runs).toHaveLength(2);
+        // the run stops after the crash, so iteration 2 never runs
+        expect(report.runs).toHaveLength(1);
         for (const run of report.runs) {
             const hover = run.requests.find((t: { method: string }) => t.method === 'textDocument/hover');
             expect(hover).toMatchObject({ success: false, result: 'error' });

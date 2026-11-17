@@ -258,6 +258,18 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             await ctx?.resetDocuments();
         }
 
+        // without restart, a server that exited during this iteration (or the reset after it)
+        // ends the run: label the exit with the iteration, keep the runs collected so far and
+        // skip iterations that would only fail against the dead server
+        if (!opts.restart && harness?.exit) {
+            console.error(`  Server exited during ${during}, stopping the run`);
+            await teardown(harness, during);
+            lifecycle?.push(...harness.takeLifecycleTimings());
+            harness = null;
+            ctx = null;
+            break;
+        }
+
         // If restarting, stop the server, keeping collected runs if teardown fails.
         // shutdown falls outside total_ms but is still attributed to this run
         if (opts.restart && harness) {

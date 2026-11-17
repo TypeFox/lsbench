@@ -16,6 +16,10 @@ Langium open waits no longer time out after a reopen because lsbench mistook its
 - lsbench advertises `workspace.diagnostics.refreshSupport`, as it has handled `workspace/diagnostic/refresh` since next.3. Per the LSP spec a server may only send the refresh when the client advertises it, so servers that check the flag may now send refreshes, which make pending auto diagnostics waits pull. Diagnostics delivery and timings may change for such servers, rerun their baselines. rust-analyzer sent the refresh without it.
 - `--advertise-pull` (`advertisePullDiagnostics` on `ServerConfig` and `BenchOptions`) advertises the `textDocument.diagnostic` client capability with `dynamicRegistration` and `relatedDocumentSupport` off. It stays off by default: servers built on `vscode-languageserver` (the VS Code CSS, HTML and JSON servers, ESLint) stop pushing when it is present, so their `diagnostics/open` turns into `diagnostics/pull/open` and `lsbench check` fails against a baseline recorded without it. A `--client-capabilities-file` is merged over it. The run header prints `Pull diag:` when it is set, and `pullDiagnosticClientCapabilities` is exported.
 
+### Server exits
+
+- Without `--restart`, a server that exits during an iteration ends the run. The exit in `abnormal_exits` is labeled with that iteration (`iteration N` or `warmup N`) instead of `final teardown`, and no further iterations run. In next.5 the remaining iterations ran against the dead server, each request failing at once, so the report had a run of error iterations and did not say when the server died. The report is still written with the runs completed so far, including the crashed one, and lsbench exits non zero.
+
 ### Settings
 
 - The README, `--help` and the primer note that `--settings-file` sends only the listed keys, unlike VS Code, which sends every setting with its default, so a server may read a missing key as `false`. With only `"json.format.enable": true`, vscode-json-language-server turned schema validation off and every `edit-diagnostics` wait timed out. Verbose mode logs the expanded settings sent with `workspace/didChangeConfiguration`.

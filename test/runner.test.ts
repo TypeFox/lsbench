@@ -233,6 +233,79 @@ describe('runBenchmark with restart and a server crashing during an iteration', 
     });
 });
 
+describe('runBenchmark without restart and a server crashing during an iteration', () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-crash-keep-'));
+        fs.writeFileSync(
+            path.join(tmpDir, 'actions.ts'),
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    // exits 1 on its nth hover, without replying
+    function crashOnHover(n: number): string {
+        return crashOnShutdownServer.replace(
+            "conn.onRequest('textDocument/hover', () => null);",
+            `let hovers = 0;
+            conn.onRequest('textDocument/hover', () => { if (++hovers === ${n}) { process.exit(1); } return null; });`,
+        );
+    }
+
+    function options(n: number, output: string): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', crashOnHover(n)],
+            workspace: tmpDir,
+            script: path.join(tmpDir, 'actions.ts'),
+            iterations: 4,
+            warmup: 1,
+            output,
+            restart: false,
+            verbose: false,
+        };
+    }
+
+    it('labels the exit with the iteration and stops the run', async () => {
+        const output = path.join(tmpDir, 'report-iteration.json');
+        // hover 3 is the request of timed iteration 2
+        const report = await runBenchmark(options(3, output));
+
+        expect(report.runs.map((r) => r.iteration)).toEqual([1, 2]);
+        const hovers = report.runs.map((r) => r.requests.find((t) => t.method === 'textDocument/hover'));
+        expect(hovers.map((t) => t?.success)).toEqual([true, false]);
+        expect(hovers[1]?.error).toMatch(/server exited unexpectedly \(code 1\)/);
+        expect(report.abnormal_exits).toEqual([
+            { during: 'iteration 2', code: 1, signal: null, reason: 'exited unexpectedly (code 1)' },
+        ]);
+        expect(report.lifecycle?.map((t) => t.method)).not.toContain('lifecycle/shutdown');
+
+        const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(written.runs).toHaveLength(2);
+        expect(written.abnormal_exits).toEqual(report.abnormal_exits);
+    });
+
+    it('labels a crash during a warmup and writes the report with no runs', async () => {
+        const output = path.join(tmpDir, 'report-warmup.json');
+        const report = await runBenchmark(options(1, output));
+
+        expect(report.runs).toEqual([]);
+        expect(report.abnormal_exits?.map((e) => [e.code, e.during])).toEqual([[1, 'warmup 1']]);
+
+        const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(written.runs).toEqual([]);
+        expect(written.abnormal_exits).toHaveLength(1);
+    });
+});
+
 /** a fake server that replies to shutdown and exits cleanly */
 const cleanServer = `
 import * as rpc from 'vscode-jsonrpc/node';

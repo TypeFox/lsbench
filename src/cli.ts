@@ -724,8 +724,10 @@ The JSON report (and the printed summary) contains:
   - lifecycle          keep alive mode only: spawn, initialize, idle and final shutdown
                        timings of the single server
   - abnormal_exits     servers that crashed or exited unexpectedly (only when any did,
-                       lsbench then exits non zero but still writes the report). An exit
-                       without a shutdown reply is always abnormal, whatever its code
+                       lsbench then exits non zero but still writes the report. An exit
+                       without a shutdown reply is always abnormal, whatever its code.
+                       Without --restart, a crash during an iteration ends the run and
+                       is labeled with that iteration)
   - tolerated_exits    servers that exited after a replied shutdown with a code allowed by
                        --allow-exit-code (only when any did, these do not fail the run)
 
