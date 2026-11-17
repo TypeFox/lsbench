@@ -2,86 +2,62 @@
 
 ## v0.3.0
 
-Changes since 0.2.0, for readers upgrading from it. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, hold placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips requests the server does not support, keeps the report when a server crashes, and can check a report against a committed baseline. The preview sections below describe the same changes step by step and are kept for reference.
+Changes since 0.2.0. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, ignore placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips unsupported requests, keeps the report when a server crashes, and can check a report against a baseline. The preview sections below have the details.
+
+Checked for compatibility against rust-analyzer, zls, Langium, lua-language-server, bash-language-server, pyright, vscode-json-language-server and TypeScript 7.
 
 ### Breaking changes
 
-- `waitForDiagnostics` resolves with an object instead of the diagnostics array: `{ diagnostics, timedOut, publishes, source, pulls, ms }`, plus `tentative`, `graceMs` and `closeWindowMs` when they apply. Scripts that used the array need `(await ctx.waitForDiagnostics(path)).diagnostics`. Its second argument may be an options object `{ timeout, until, settleMs, mode, pullAfterMs }`, and a bare timeout number still works.
-- A timed out wait is reported (`timedOut: true`, result `timeout`) instead of silently resolving with the cached diagnostics. The timeout comes from the timer itself, never from elapsed time.
-- `MethodStats` latency fields (`avg_ms`, `median_ms`, `p95_ms`, `p99_ms`, `min_ms`, `max_ms`, `stddev_ms`) are `number | null`. They are `null`, printed `n/a`, when no durations remain because every call timed out or was skipped. Code reading them needs a `null` check, as `examples/compare-servers.ts` does.
-- `success` is `false` for `skipped` and `timeout` results as well as for errors.
-- Timed requests whose provider the server does not advertise are no longer sent (see Unsupported requests). This includes `willSaveWaitUntil`, which 0.2.0 always sent. Pass `--no-skip-unsupported` (or `skipUnsupported: false`) for the old behavior.
-- lsbench exits non zero when a server exited abnormally, listed in the report's `abnormal_exits`. Known exit codes after a replied `shutdown` can be tolerated with `--allow-exit-code`. Without `--restart`, a server that exits during an iteration ends the run: no further iterations run, and the report is still written with the runs completed so far, the crashed one included.
-- Verbose request timings are prefixed `[lsbench:ctx]` instead of `  [ctx]`, so all of lsbench's own lines start with `[lsbench`. Server output is prefixed `[server]` (previously `[server stderr]`, `[server]` and `[server msg]`). Under `-v`, `Running iteration N...` ends with a newline and the iteration time follows as its own `Iteration N: Xms` line. Non verbose output is unchanged apart from the new columns and notes (see Report format).
+- `waitForDiagnostics` resolves with an object (`{ diagnostics, timedOut, publishes, source, pulls, ms, ... }`) instead of an array, and accepts an options object `{ timeout, until, settleMs, mode, pullAfterMs }` as well as a bare timeout.
+- Timed out waits are reported as `timeout` instead of resolving with cached diagnostics.
+- `MethodStats` latencies are `number | null`, `null` when every call timed out or was skipped.
+- `success` is `false` for `skipped` and `timeout` results.
+- Requests the server does not advertise are skipped, `willSaveWaitUntil` included. Use `--no-skip-unsupported` for the old behavior.
+- lsbench exits non zero when a server exits abnormally. Without `--restart`, a crash ends the run but the report is still written.
+- Log prefixes are now `[lsbench...]` for lsbench and `[server]` for server output.
 
 ### Behavior changes that move numbers
 
-- Client capabilities: lsbench advertises `workspace.didChangeWatchedFiles` with dynamic registration, `window.workDoneProgress`, rust-analyzer's `experimental.serverStatusNotification` and `workspace.diagnostics.refreshSupport`. Servers may leave file watching to the client, report progress, and send `workspace/diagnostic/refresh` as a result, which can change their timings and delivery. `textDocument.diagnostic` stays unadvertised by default (see `--advertise-pull`). Rerun baselines recorded with 0.2.0.
-- Language ids: `.mts` and `.cts` open as `typescript`, `.mjs` and `.cjs` as `javascript`, and `.jsonc` as `jsonc`, where they used to fall back to `plaintext`.
-- Requests rejected with `ContentModified` are retried up to `--content-modified-retries` times (default 3) with a short backoff. The timing records `retries` and covers only the final attempt.
-- Timeouts and skips are left out of the duration stats and of `failure_rate`.
-- Pending requests fail with `server exited unexpectedly (...)` when the server exits, recorded as an `error` timing, instead of hanging the benchmark. Later requests and notifications of the script fail at once.
-- `stop()` always settles: `shutdown` is raced against the process exiting and `--shutdown-timeout` (default 5000 ms), then the server is killed if needed.
+- More client capabilities are advertised (watched files, work done progress, server status, diagnostic refresh), which can change server timings. Rerun 0.2.0 baselines.
+- `.mts`, `.cts`, `.mjs`, `.cjs` and `.jsonc` get proper language ids.
+- `ContentModified` rejections are retried (`--content-modified-retries`, default 3), timing only the final attempt.
+- Timeouts and skips are left out of duration stats and `failure_rate`.
+- Pending requests fail when the server exits instead of hanging, and `stop()` always settles within `--shutdown-timeout`.
 
-### Diagnostics waits
+### Diagnostics
 
-- Each wait records a timing, `diagnostics/open` or `diagnostics/edit` by the latest sync of the document (`diagnostics/wait` for a document that is not open), measured from that `didOpen` or `didChange` to the matching publish and carrying the diagnostic count in `diagnostics`.
-- Waits are version aware. A publish counts when it carries the current document version, or carries no version and arrived after the latest `didOpen` or `didChange` of the current open generation. Publishes for other versions and for closed documents are ignored, and a matching publish that already arrived resolves the wait at once.
-- Publish URIs are matched to documents after decoding percent encoding, and case insensitively on darwin and win32. Elsewhere matching stays case sensitive, and a publish for an unopened URI that matches an open document apart from case logs a hint once per URI.
-- `until: (diagnostics) => boolean` resolves on the first current publish passing it, for example `(d) => d.length > 0` to skip the empty syntax pass of rust-analyzer or zls. `settleMs` keeps waiting after the resolving publish until no current publish arrived for that long and resolves with the latest. `timeout` caps both. With `settleMs`, `ms` is the time to the latest publish, and a timeout during the quiet period is not a timeout. `publishes` counts every current publish the wait saw, including those failing `until`.
-- Close window rule: an empty, unversioned publish after a quick reopen is no longer dropped outright as the clearing publish of the close. lsbench learns per server whether it publishes on close. Only an empty publish for a closed document within 1000 ms of its `didClose`, the first since that `didClose` and with no `didOpen`, `didChange` or `didClose` of another document in between, teaches that it does. Until that is learned, an empty publish after a reopen is held for the rest of the window, superseded by any later publish, and otherwise accepted. Once learned, further empty, unversioned publishes in the window are credited to the close when the server versions its publishes for open documents, and held as close candidates otherwise. Servers that never clear closed documents (such as Langium) no longer time out on reopens of clean files, and rust-analyzer's late clearing publishes no longer resolve reopen waits.
-- A push wait that held an empty publish in the close window records the hold as `close_window_ms` (`closeWindowMs` in the result). It is not included in `duration_ms`, which runs to the publish's receipt, but it is in the iteration total.
-- A `diagnostics/open` wait that times out having seen only the publishes clearing the latest close logs a hint that the server may not republish clean files on reopen, suggesting `until` or a short timeout.
-
-### Push and pull delivery
-
-- `mode: 'push' | 'pull' | 'auto'` (default `auto`) and `pullAfterMs` (default 1000). Pulls go through `textDocument/diagnostic`, repeat with a short backoff until `until` passes or the timeout, send `previousResultId`, and resolve `unchanged` reports to the previous diagnostics. Pulled waits are recorded as `diagnostics/pull/open`, `diagnostics/pull/edit` or `diagnostics/pull/wait`. `source` (`push` or `pull`) tells which one resolved the wait, and `pulls` counts the requests sent. A pull wait on a server without `diagnosticProvider` is recorded as `skipped` and resolves with the cached diagnostics.
-- In `auto` mode lsbench learns per server how it delivers diagnostics. Until it knows, a wait on a server advertising `diagnosticProvider` pulls after `pullAfterMs` without a push (at half the timeout when that is not longer). Push is learned only from a publish for a document the client opened. A pull with diagnostics settles the server as pull only. A pull with no diagnostics learns pull only tentatively, marked `tentative` in the timing and the result, since a server still loading may answer with an empty placeholder and push later; a later publish flips it to push and stops pulls in flight.
-- Auto mode pulls are timed like push waits, from the latest `didOpen` or `didChange` to the resolving response. The grace spent waiting for a push is part of `duration_ms` and also recorded as `grace_ms` (`graceMs` in the result). For pull only servers, pass `mode: 'pull'` or a short `pullAfterMs` to avoid the grace, and keep a warmup iteration with `--restart`. `mode: 'pull'` waits are timed from the first pull request.
-- With `--restart`, the learned delivery carries over to the next iteration's server, so warmup iterations teach it and timed ones pull at once.
-- Placeholders of a busy server: while the server reports `experimental/serverStatus` with `quiescent: false`, an empty publish for the open document and an empty pull report are held instead of resolving the wait, in every mode. Once the server is quiescent, the wait resolves with a newer publish, or pulls again, or resolves with the placeholder, timed to the quiescence. In `auto` mode, servers without a status count as busy while a `$/progress` token is open for held pulls. Timings carry `held_pulls` and `held_publishes`. Servers that never report being busy are not affected.
-- A `workspace/diagnostic/refresh` makes an auto wait that is waiting for a push pull once. A refresh pull returning diagnostics settles the server as pull only. Verbose mode logs each refresh.
-
-### Silent servers and failing `until`
-
-- After 3 push waits of one method (`diagnostics/open`, `diagnostics/edit` or `diagnostics/wait`) in a row time out without any publish, counted across warmups and restarts, verbose mode logs that the server may never publish for a clean document, so those timeouts mean no diagnostics, not slow ones. The report records them in `silent_waits`. Waits are not shortened.
-- After 3 push waits of one method time out after publishes that all failed `until`, counted across warmups and restarts and not reset by waits that resolve in between, verbose mode logs that the server may never report what `until` expects, and the report records them in `until_rejected`. Verbose mode adds `all failing until (last: N diagnostics)` to the line of each such wait. A wait that also held a placeholder publish is not counted.
+- Each wait records a timing (`diagnostics/open`, `diagnostics/edit` or `diagnostics/wait`) from the latest sync to the matching publish.
+- Only publishes for the current document version count. URIs are matched after decoding, and case insensitively on darwin and win32.
+- `until` resolves on the first publish passing a predicate, and `settleMs` waits for publishes to go quiet.
+- Empty publishes shortly after a close and reopen are handled per server, so servers that do or do not clear closed documents both time correctly.
+- `mode: 'push' | 'pull' | 'auto'` selects delivery. `auto` learns per server whether it pushes or pulls, carrying that across `--restart`. Pulled waits are recorded as `diagnostics/pull/...`.
+- Empty results from a server reporting itself busy are held until it is quiescent.
+- Verbose mode and the report flag waits that repeatedly time out with no publish (`silent_waits`) or with publishes that all fail `until` (`until_rejected`).
 
 ### New features
 
-- `lsbench baseline <report> -o <file>` writes a baseline of the run settings, `summary` and `iteration_summary`. `lsbench check <report> -b <file>` fails on mismatched run settings, an added or missing method (which also catches a change of delivery), a rate differing by more than `--rate-tolerance` (default 0.1), a `median_ms` outside `[max(0, base / ratio - slack), base * ratio + slack]` with `--median-ratio` (default 2) and `--slack-ms` (default 5), and a `null` median turning into a number or back. The median rule is skipped for methods with fewer than `--min-count` samples (default 3). `check` exits 0 on pass, 1 on regressions and 2 on usage errors, and prints a table of the broken rules or, with `--json`, `{ pass, failures: [{ method, field, baseline, actual, rule }] }`.
-- `--trace <file>` writes every LSP message sent and received as JSON lines `{"t","dir","msg"}`, with a line per server start and a marker per iteration.
-- `--advertise-pull` advertises the `textDocument.diagnostic` client capability. Servers built on `vscode-languageserver` stop pushing when it is present, so their `diagnostics/open` turns into `diagnostics/pull/open`.
-- `--allow-exit-code <n>` (repeatable, `ServerConfig.allowExitCodes`) tolerates a known non zero exit code after a replied `shutdown`, such as TypeScript 7 exiting 1. Such exits go in `tolerated_exits`.
-- `--wait-idle [ms]` (default 30000) waits for idle after `initialized` and after each restart, recorded as `lifecycle/idle`. `ctx.waitForIdle(options?)` (`{ timeout, quietMs }`) does the same from a script, recorded as `server/idle`. Idle means no `$/progress` token is active and the latest `experimental/serverStatus`, if any, is quiescent.
-- `--client-capabilities-file <path>` deep merges a JSON file over the default client capabilities. `--settings-file <path>` gives the server settings keyed by section, answers `workspace/configuration` and sends them via `workspace/didChangeConfiguration`. Only the listed keys are sent, unlike VS Code, which sends every setting with its default, so a server may read a missing key as `false`. `ServerConfig.clientCapabilities` and `ServerConfig.settings` do the same programmatically.
-- `--server-log <file>` appends server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` to a file instead of the console. `-v` logs each `textDocument/publishDiagnostics` as one line with its tracker status.
-- `ctx.capabilities`, `ctx.registrations`, `ctx.supports(method)`, `ctx.lastError` and the `openDocument(path, { languageId })` option.
-- Action scripts may be `.js` or `.mjs` ES modules as well as `.ts`.
-- Exports for use from code: `detectLanguageId`, `defaultClientCapabilities`, `mergeCapabilities`, `expandSettings`, `pullDiagnosticClientCapabilities`, `createBaseline`, `checkReport`, `formatCheckResult`, `validateCheckedRun`, `DEFAULT_CHECK_OPTIONS`, `SilenceTracker`, `SILENT_WAIT_STREAK`, `WireTrace` and related types.
-
-### Unsupported requests
-
-- A timed request whose provider is not advertised, statically or by dynamic registration, returns `null` without a round trip and records `result: "skipped"` with `duration_ms: 0`. Verbose mode prints the supported requests after startup and logs dynamic registrations.
+- `lsbench baseline` and `lsbench check` record a baseline and fail on regressions in run settings, methods, rates or medians, with configurable tolerances.
+- `--trace <file>` records every LSP message as JSON lines.
+- `--advertise-pull`, `--allow-exit-code`, `--wait-idle`, `--client-capabilities-file`, `--settings-file` and `--server-log`.
+- `ctx.waitForIdle`, `ctx.capabilities`, `ctx.registrations`, `ctx.supports`, `ctx.lastError`, and a `languageId` option for `openDocument`.
+- Action scripts may be `.js` or `.mjs` as well as `.ts`.
+- New exports for baselines, capabilities, settings, tracing and silence tracking.
 
 ### Report format
 
-All additions are optional fields or new method names, so readers of 0.2.0 reports keep working apart from the nullable latencies and the stricter `success`.
+New fields are optional, so 0.2.0 readers keep working apart from nullable latencies and the stricter `success`.
 
-- Per timing: `result` (`ok`, `empty`, `null`, `error`, `skipped` or `timeout`), `retries`, `diagnostics`, `tentative`, `grace_ms`, `held_pulls`, `held_publishes` and `close_window_ms`.
-- `MethodStats`: `null_rate`, `empty_rate`, `timeout_rate`, `skipped` and `skip_rate`, plus `graced` and `grace_median_ms`, `held`, `held_publishes`, and `close_windowed` and `close_window_median_ms` when any timing has them. Latencies may be `null`.
-- Top level: `lifecycle` (without `--restart`), `abnormal_exits`, `tolerated_exits`, `silent_waits` and `until_rejected`. Exits are labeled `iteration N`, `warmup N`, `teardown of iteration N` or `final teardown`.
-- New methods: `diagnostics/open`, `diagnostics/edit`, `diagnostics/wait`, `diagnostics/pull/open`, `diagnostics/pull/edit`, `diagnostics/pull/wait`, `lifecycle/spawn`, `lifecycle/initialize`, `lifecycle/shutdown`, `lifecycle/idle` and `server/idle`. With `--restart` the lifecycle methods are part of each run.
-- The printed table adds Null%, Empty%, Tmout% and Skip% columns when any is nonzero, shows abnormal and tolerated exit counts, and notes graced, held, close windowed, silent and `until` rejected methods below the table.
-- Baseline files carry `lsbench_baseline: 1`.
+- Timings add `result` (`ok`, `empty`, `null`, `error`, `skipped`, `timeout`), retries and diagnostics details.
+- `MethodStats` adds null, empty, timeout and skip rates, plus grace, hold and close window figures when present.
+- Top level adds `lifecycle`, `abnormal_exits`, `tolerated_exits`, `silent_waits` and `until_rejected`.
+- New `diagnostics/*`, `lifecycle/*` and `server/idle` methods.
+- The printed table adds rate columns and notes below it.
 
 ### Timings not comparable with 0.2.0
 
-- Diagnostics: 0.2.0 recorded no timing for `waitForDiagnostics`, could resolve on stale or closed publishes, and resolved timeouts with cached diagnostics. Any 0.2.0 diagnostics figure came from a script's own measurement or the iteration total.
-- rust-analyzer cold start: 0.2.0 timed an empty placeholder (1194 ms for S1). 0.3.0 waits until the server is quiescent, about 2.6 to 3.0 s, recorded as `diagnostics/pull/open`.
-- Pull only servers in `auto` mode include the push grace in `duration_ms` unless the delivery was carried over from a warmup.
-- Iteration totals and request timings may change with the new client capabilities and with skipped unsupported requests, and methods with timeouts or skips now leave those out of their latency stats.
-- Close window holds count in the iteration total but not in `duration_ms`.
+- 0.2.0 did not time diagnostics waits and could resolve on stale publishes.
+- Cold start diagnostics now wait for the real result rather than a loading placeholder, so they may be much slower.
+- Iteration totals and request timings may shift with the new capabilities, skipped requests and excluded timeouts.
 
 ## v0.3.0-next.6 (preview)
 
