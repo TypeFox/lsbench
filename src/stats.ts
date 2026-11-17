@@ -340,7 +340,7 @@ export function printSummary(report: BenchReport): void {
                     `(median ${s.close_window_median_ms}ms, not included above)`,
             );
         }
-        // a server answering empty while busy loads and may push, pull mode would measure its placeholders
+        // a server answering empty while busy loads and may still push, it is not pull only
         if (graced.length > 0 && held.length === 0 && heldPublishes.length === 0) {
             console.log("  Pass mode: 'pull' or a short pullAfterMs to waitForDiagnostics for a pull only server");
         }

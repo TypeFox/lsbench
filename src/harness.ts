@@ -1519,6 +1519,11 @@ export class LspHarness {
         return this.progress.busy;
     }
 
+    /** Whether the latest experimental/serverStatus reports quiescent:false, false when none arrived */
+    isServerNotQuiescent(): boolean {
+        return this.progress.serverStatus?.quiescent === false;
+    }
+
     /** Call `listener` whenever the server stops being busy, see ProgressTracker.onNotBusy */
     onServerNotBusy(listener: () => void): () => void {
         return this.progress.onNotBusy(listener);

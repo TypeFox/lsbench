@@ -148,6 +148,10 @@ class FakeHarness {
         return this.progress.busy;
     }
 
+    isServerNotQuiescent(): boolean {
+        return this.progress.serverStatus?.quiescent === false;
+    }
+
     onServerNotBusy(listener: () => void): () => void {
         return this.progress.onNotBusy(listener);
     }
@@ -2190,14 +2194,119 @@ describe('BenchContextImpl', () => {
                     ]);
                 });
 
-                it('does not hold an empty publish in push mode', async () => {
+                it('holds an empty publish in push mode until quiescence, without pulling', async () => {
+                    servePulls(full('1', diag('pulled')));
                     busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'push' });
+                    await tick(10);
+                    harness.setDiagnostics(uri, [], 1);
+                    await tick(40);
+                    quiescent();
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', diagnostics: [], publishes: 1 });
+                    // timed to the quiescence, not to the placeholder
+                    expect(result.ms).toBeGreaterThanOrEqual(45);
+                    expect(pulls()).toEqual([]);
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/open', success: true, result: 'empty', held_publishes: 1 },
+                    ]);
+                });
+
+                it('resolves push mode with a newer publish after a held placeholder', async () => {
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'push' });
+                    harness.setDiagnostics(uri, [], 1);
+                    await tick(20);
+                    harness.setDiagnostics(uri, [diag('unused')], 1);
+                    const result = await waiting;
+                    expect(messages(result)).toEqual(['unused']);
+                    expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 2 });
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/open', success: true, diagnostics: 1, held_publishes: 1 },
+                    ]);
+                });
+
+                it('times out push mode with the held placeholder when the server never turns quiescent', async () => {
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 80, mode: 'push' });
+                    harness.setDiagnostics(uri, [], 1);
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: true, source: 'push', diagnostics: [], publishes: 1 });
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/open', success: false, result: 'timeout', held_publishes: 1 },
+                    ]);
+                });
+
+                it('resolves push mode at once on an empty publish while only $/progress is open', async () => {
+                    harness.progress.progress({ token: 'load', value: { kind: 'begin', title: 'loading' } });
                     await ctx.openDocument('sample.ts');
                     const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'push' });
                     harness.setDiagnostics(uri, [], 1);
                     const result = await waiting;
                     expect(result).toMatchObject({ timedOut: false, source: 'push', publishes: 1 });
+                    expect(result.ms).toBeLessThan(500);
                     expect(ctx.collectTimings()[0].held_publishes).toBeUndefined();
+                });
+
+                it('holds an empty pull in pull mode and pulls again once the server is quiescent', async () => {
+                    servePulls(full('placeholder'), full('2'));
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const waiting = ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'pull' });
+                    await tick(50);
+                    expect(pulls()).toHaveLength(1);
+                    quiescent();
+                    const result = await waiting;
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', diagnostics: [], pulls: 2 });
+                    // timed from the first pull, the wait for quiescence included
+                    expect(result.ms).toBeGreaterThanOrEqual(45);
+                    // the placeholder's resultId is not sent with the next pull
+                    expect(previousResultIds()).toEqual([undefined, undefined]);
+                    // pull mode learns nothing
+                    expect(harness.diagnosticsDelivery()).toBe('unknown');
+                    expect(ctx.collectTimings()).toMatchObject([
+                        { method: 'diagnostics/pull/open', success: true, result: 'empty', held_pulls: 1 },
+                    ]);
+                });
+
+                it('times out pull mode with the placeholder when the server stays busy', async () => {
+                    servePulls(full('1'));
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 80, mode: 'pull' });
+                    expect(result).toMatchObject({ timedOut: true, source: 'pull', diagnostics: [], pulls: 1 });
+                    expect(ctx.collectTimings()).toMatchObject([
+                        {
+                            method: 'diagnostics/pull/open',
+                            success: false,
+                            result: 'timeout',
+                            diagnostics: 0,
+                            held_pulls: 1,
+                        },
+                    ]);
+                });
+
+                it('resolves pull mode at once on a non-empty pull while not quiescent', async () => {
+                    servePulls(full('1', diag('error')));
+                    busy();
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'pull' });
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
+                    expect(ctx.collectTimings()[0].held_pulls).toBeUndefined();
+                });
+
+                it('resolves pull mode at once on an empty pull of a server without a server status', async () => {
+                    // ts7 never reports being busy, and an open $/progress token does not hold an explicit pull
+                    servePulls(full('1'));
+                    harness.progress.progress({ token: 'load', value: { kind: 'begin', title: 'loading' } });
+                    await ctx.openDocument('sample.ts');
+                    const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'pull' });
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull', diagnostics: [], pulls: 1 });
+                    expect(result.ms).toBeLessThan(500);
+                    expect(ctx.collectTimings()[0].held_pulls).toBeUndefined();
                 });
             });
 

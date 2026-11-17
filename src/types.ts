@@ -130,16 +130,15 @@ export interface RequestTiming {
      */
     grace_ms?: number;
     /**
-     * Auto mode diagnostics waits only: how many empty pull answers the wait held back as
-     * placeholders, because the server reported it was still loading when they arrived
-     * (experimental/serverStatus not quiescent, or an open $/progress token for a server that
-     * never sends a status). The wait then waited for a push or for the server to be no
-     * longer busy, which `duration_ms` includes. Absent when nothing was held
+     * Diagnostics waits only: how many empty pull answers the wait held back as placeholders,
+     * because the server reported it was still loading when they arrived (experimental/serverStatus
+     * not quiescent, and in auto mode also an open $/progress token for a server that never sends
+     * a status). The wait then waited for a push (auto mode) or for the server to be no longer
+     * busy, which `duration_ms` includes. Absent when nothing was held
      */
     held_pulls?: number;
     /**
-     * Auto mode diagnostics waits only: how many empty publishes for the open document the wait
-     * held back as placeholders, because the server reported experimental/serverStatus
+     * Diagnostics waits only: how many empty publishes for the open document the wait held back as placeholders, because the server reported experimental/serverStatus
      * quiescent:false when they arrived. The wait then waited for a further publish or for the
      * server to be quiescent, which `duration_ms` includes. Absent when nothing was held
      */
@@ -194,12 +193,12 @@ export interface MethodStats {
     graced?: number;
     grace_median_ms?: number;
     /**
-     * Diagnostics waits only, present when some auto mode wait held back empty pull answers of a
-     * busy server: how many timings did, timeouts included, see RequestTiming.held_pulls
+     * Diagnostics waits only, present when some wait held back empty pull answers of a busy
+     * server: how many timings did, timeouts included, see RequestTiming.held_pulls
      */
     held?: number;
     /**
-     * Diagnostics waits only, present when some auto mode wait held back a placeholder publish
+     * Diagnostics waits only, present when some wait held back a placeholder publish
      * of a server not quiescent: how many timings did, timeouts included, see
      * RequestTiming.held_publishes
      */
@@ -335,7 +334,9 @@ export interface WaitForDiagnosticsOptions {
      * pulled when it sent no publish within `pullAfterMs`, one learned to be pull only is
      * pulled at once. Any publish for an opened document makes later auto waits wait for
      * pushes, and switches an auto wait that is pulling to wait for pushes for the rest of
-     * its timeout
+     * its timeout. Every mode holds empty answers of a server reporting experimental/serverStatus
+     * quiescent:false as placeholders until it is quiescent, see RequestTiming.held_pulls and
+     * RequestTiming.held_publishes
      */
     mode?: DiagnosticsMode;
     /**
@@ -389,7 +390,8 @@ export interface WaitForDiagnosticsResult {
      * start of the wait. Auto mode pulls are timed the same way to the resolving response,
      * a push grace before the pull (`graceMs`) and re-pulls included; a repeated pull of a
      * document not synced since its previous pull is timed from the start of the wait.
-     * `mode: 'pull'` waits are timed from the first pull request to the resolving response
+     * `mode: 'pull'` waits are timed from the first pull request to the resolving response,
+     * the wait for a server to be quiescent after a held placeholder included
      */
     ms: number;
 }

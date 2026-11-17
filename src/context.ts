@@ -584,11 +584,11 @@ export class BenchContextImpl implements BenchContext {
      * otherwise the wait goes on waiting for a push.
      * An empty publish for the open document received while the server reports
      * experimental/serverStatus quiescent:false is a placeholder too (see
-     * DiagnosticsPublish.placeholder): it does not resolve an auto mode wait and does not teach
-     * push. Once the server is quiescent, the wait resolves with a newer publish, or pulls when
-     * a held pull would, or else with the placeholder, timed to the quiescence. Timing out
-     * reports the placeholder. Timings record held pulls and publishes as `held_pulls` and
-     * `held_publishes`
+     * DiagnosticsPublish.placeholder): it does not resolve an auto or push mode wait and does
+     * not teach push. Once the server is quiescent, the wait resolves with a newer publish, or
+     * pulls when a held pull would (auto mode), or else with the placeholder, timed to the
+     * quiescence. Timing out reports the placeholder. Timings record held pulls and publishes
+     * as `held_pulls` and `held_publishes`
      */
     async waitForDiagnostics(
         relativePath: string,
@@ -621,8 +621,7 @@ export class BenchContextImpl implements BenchContext {
         let earlierPulls = 0;
         // seqs of the placeholder publishes held back, see isHeldPublish
         const heldPublishes = new Set<number>();
-        const isHeldPublish = (p: DiagnosticsPublish) =>
-            mode === 'auto' && p.placeholder === true && p.trustedAt === undefined;
+        const isHeldPublish = (p: DiagnosticsPublish) => p.placeholder === true && p.trustedAt === undefined;
         // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
         let refresh = false;
         let wait: PublishWaitResult;
@@ -752,10 +751,10 @@ export class BenchContextImpl implements BenchContext {
         }
 
         // only the timer firing means a timeout, elapsed time is never compared to it. A
-        // placeholder resolves an auto wait only from when the server turned quiescent
+        // placeholder resolves a wait only from when the server turned quiescent
         let endedAt = process.hrtime.bigint();
         if (publish && !timedOut) {
-            endedAt = mode === 'auto' ? (publish.trustedAt ?? publish.receivedAt) : publish.receivedAt;
+            endedAt = publish.trustedAt ?? publish.receivedAt;
         }
         const diagnostics = publish?.diagnostics ?? this.harness.getDiagnostics(uri);
         // time the wait spent on a close window candidate held until the window ended, which
@@ -848,7 +847,10 @@ export class BenchContextImpl implements BenchContext {
      * like a failing `until`, other rejections end the wait as an error. The timing is
      * labeled `diagnostics/pull/open`, `diagnostics/pull/edit` or `diagnostics/pull/wait`.
      * An explicit `pull` mode wait is timed from the first request to the resolving response,
-     * the round trip the script asked to measure.
+     * the round trip the script asked to measure. An empty report while the server reports
+     * experimental/serverStatus quiescent:false is a placeholder: the wait forgets it and pulls
+     * again once the server is quiescent, the hold included in the timing and counted as
+     * `held_pulls`. Timing out while still not quiescent records a timeout with the placeholder.
      *
      * An auto mode wait passes `auto`. Its timing runs to the resolving response like a push
      * wait's: from the latest didOpen or didChange of an open document not yet pulled since,
@@ -888,6 +890,8 @@ export class BenchContextImpl implements BenchContext {
         let outcome: Exclude<PullOutcome, 'skipped'> = 'timeout';
         let endedAt: bigint | undefined;
         let backoffMs = PULL_BACKOFF_MS;
+        // placeholders an explicit pull mode wait held back, see below
+        let heldHere = 0;
         // in auto mode, a publish teaching push cuts the pending request or backoff short
         let pushed = false;
         let onPushed = () => {};
@@ -931,8 +935,12 @@ export class BenchContextImpl implements BenchContext {
                 failure = undefined;
                 diagnostics = this.storePulled(uri, response.value, previous);
                 const passed = !until || until(diagnostics);
+                // an explicit pull mode wait holds only while experimental/serverStatus reports
+                // quiescent:false, so servers that never send it are not affected
                 const placeholder =
-                    passed && auto !== undefined && diagnostics.length === 0 && this.isLoadingPlaceholder();
+                    passed &&
+                    diagnostics.length === 0 &&
+                    (auto !== undefined ? this.isLoadingPlaceholder() : this.harness.isServerNotQuiescent());
                 if (placeholder || (!passed && auto?.refresh)) {
                     // forget the answer, so the next pull sends no resultId of it and is still
                     // timed from the latest sync; a pull on refresh does not re-pull
@@ -940,6 +948,20 @@ export class BenchContextImpl implements BenchContext {
                         this.pulled.set(uri, previous);
                     } else {
                         this.pulled.delete(uri);
+                    }
+                    if (placeholder && auto === undefined) {
+                        // explicit pull mode has no outer wait, it pulls again once the server is quiescent
+                        heldHere++;
+                        this.log(
+                            `Server answered a pull for ${relativePath} with no diagnostics while not quiescent, ` +
+                                'held as a placeholder: pulling again once the server is quiescent',
+                        );
+                        await this.waitServerNotBusy(remainingMs());
+                        if (this.harness.isServerNotQuiescent()) {
+                            // the deadline passed first, the wait times out with the placeholder
+                            break;
+                        }
+                        continue;
                     }
                     outcome = placeholder ? 'held' : 'unresolved';
                     break;
@@ -1023,8 +1045,9 @@ export class BenchContextImpl implements BenchContext {
         if (tentative) {
             timing.tentative = true;
         }
-        if (auto !== undefined && auto.held > 0) {
-            timing.held_pulls = auto.held;
+        const heldPulls = (auto?.held ?? 0) + heldHere;
+        if (heldPulls > 0) {
+            timing.held_pulls = heldPulls;
         }
         if (auto !== undefined && auto.heldPublishes > 0) {
             timing.held_publishes = auto.heldPublishes;
@@ -1039,7 +1062,7 @@ export class BenchContextImpl implements BenchContext {
                 `${tentative ? ' (tentative, the server may still push)' : ''}, ` +
                 `${result.length} diagnostics, ${pulls} pulls` +
                 `${graceMs !== undefined ? `, ${graceMs.toFixed(1)}ms of it waiting for a push` : ''}` +
-                `${auto !== undefined && auto.held > 0 ? `, ${auto.held} empty answers held while the server was busy` : ''}` +
+                `${heldPulls > 0 ? `, ${heldPulls} empty answers held while the server was busy` : ''}` +
                 `${auto !== undefined && auto.heldPublishes > 0 ? `, ${auto.heldPublishes} empty publishes held while the server was not quiescent` : ''}` +
                 `${failure ? ` ERROR: ${failure.message}` : ''}`,
         );
@@ -1079,6 +1102,22 @@ export class BenchContextImpl implements BenchContext {
         const settledPull =
             this.harness.diagnosticsDelivery() === 'pull' && !this.harness.diagnosticsDeliveryTentative();
         return !settledPull && this.harness.isServerBusy();
+    }
+
+    /**
+     * Wait until the server is no longer busy (see ProgressTracker.busy) or `timeoutMs` ran
+     * out, whichever comes first
+     */
+    private async waitServerNotBusy(timeoutMs: number): Promise<void> {
+        if (!this.harness.isServerBusy()) {
+            return;
+        }
+        let stop = () => {};
+        const notBusy = new Promise<void>((resolve) => {
+            stop = this.harness.onServerNotBusy(resolve);
+        });
+        await raceDeadline(notBusy, timeoutMs);
+        stop();
     }
 
     /**
