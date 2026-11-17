@@ -998,8 +998,11 @@ describe('DiagnosticsTracker', () => {
             const stale = tracker.receive({ uri, diagnostics: [] });
             const wait = tracker.waitFor(uri, current(tracker), 5000);
             expect(tracker.latestPublish(uri)?.seq).not.toBe(stale.seq);
-            tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
+            const fresh = tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
             expect((await wait)?.diagnostics.map((d) => d.message)).toEqual(['fresh']);
+            // neither the superseded candidate nor a publish delivered on receipt is stamped
+            expect(stale.acceptedAt).toBeUndefined();
+            expect(fresh.acceptedAt).toBeUndefined();
             expect(tracker.closeBehavior).toBe('publishes');
             expect(logs.some((l) => l.includes('Server publishes on close'))).toBe(true);
         });
@@ -1012,6 +1015,9 @@ describe('DiagnosticsTracker', () => {
             const accepted = await wait;
             expect(accepted).toBe(candidate);
             expect(process.hrtime.bigint() - candidate.receivedAt).toBeGreaterThan(20_000_000n);
+            // stamped with its delivery at the end of the window
+            expect(candidate.acceptedAt).toBeDefined();
+            expect((candidate.acceptedAt ?? 0n) - candidate.receivedAt).toBeGreaterThan(20_000_000n);
             expect(tracker.closeBehavior).toBe('silent');
             expect(logs.some((l) => l.includes('the close window rule is off'))).toBe(true);
         });
@@ -1090,6 +1096,7 @@ describe('DiagnosticsTracker', () => {
             expect(tracker.latestPublish(uri)).not.toBe(late);
             // not superseded: accepted with its receipt time, without unlearning publishes on close
             expect(await tracker.waitFor(uri, current(tracker), 5000)).toBe(late);
+            expect(late.acceptedAt).toBeDefined();
             expect(tracker.closeBehavior).toBe('publishes');
         });
 

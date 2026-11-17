@@ -1262,6 +1262,24 @@ describe('BenchContextImpl', () => {
                 expect(lines.some((l) => l.includes('may not republish'))).toBe(false);
             });
 
+            it('logs the close window hold on the wait line', async () => {
+                harness.tracker = new DiagnosticsTracker(() => {}, 40);
+                const lines = await ctxLogs(async (verbose) => {
+                    await verbose.openDocument('sample.ts');
+                    await verbose.resetDocuments();
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, []);
+                    expect((await verbose.waitForDiagnostics('sample.ts', 5000)).closeWindowMs).toBeDefined();
+                });
+                expect(
+                    lines.some(
+                        (l) =>
+                            l.includes('diagnostics/open sample.ts:') &&
+                            /ms held in the close window \(not included\)/.test(l),
+                    ),
+                ).toBe(true);
+            });
+
             it('gives no reopen hint for a timeout without close publishes', async () => {
                 const lines = await ctxLogs(async (verbose) => {
                     await verbose.openDocument('sample.ts');
@@ -1292,9 +1310,45 @@ describe('BenchContextImpl', () => {
                 const start = Date.now();
                 const result = await ctx.waitForDiagnostics('sample.ts', 5000);
                 expect(Date.now() - start).toBeGreaterThanOrEqual(40);
+                const waitedMs = Date.now() - start;
+                expect(waitedMs).toBeGreaterThanOrEqual(40);
                 expect(result).toMatchObject({ diagnostics: [], timedOut: false, publishes: 1 });
                 expect(result.ms).toBeLessThan(30);
+                // the hold until the window ended is recorded apart from the duration
+                expect(result.closeWindowMs).toBeGreaterThanOrEqual(30);
+                expect(result.ms + (result.closeWindowMs ?? 0)).toBeLessThanOrEqual(waitedMs + 5);
+                const [timing] = ctx.collectTimings().filter((t) => t.method === 'diagnostics/open');
+                expect(timing?.close_window_ms).toBe(result.closeWindowMs);
                 expect(harness.tracker.closeBehavior).toBe('silent');
+            });
+
+            it('records no close window hold when the window ended before the wait', async () => {
+                harness.tracker = new DiagnosticsTracker(() => {}, 20);
+                await ctx.openDocument('sample.ts');
+                await ctx.resetDocuments();
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, []);
+                await new Promise((r) => setTimeout(r, 50));
+                const result = await ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(result).toMatchObject({ diagnostics: [], timedOut: false, publishes: 1 });
+                expect(result.closeWindowMs).toBeUndefined();
+                expect(ctx.collectTimings().some((t) => t.close_window_ms !== undefined)).toBe(false);
+            });
+
+            it('records the close window hold of a further empty publish for a server not versioning', async () => {
+                harness.tracker = new DiagnosticsTracker(() => {}, 60);
+                await ctx.openDocument('sample.ts');
+                await ctx.closeDocument('sample.ts');
+                // the server clears the closed document, teaching that it publishes on close
+                harness.setDiagnostics(uri, []);
+                expect(harness.tracker.closeBehavior).toBe('publishes');
+                await ctx.openDocument('sample.ts');
+                // a further empty publish, held since the server does not version its publishes
+                harness.setDiagnostics(uri, []);
+                const result = await ctx.waitForDiagnostics('sample.ts', 5000);
+                expect(result).toMatchObject({ diagnostics: [], timedOut: false, publishes: 1 });
+                expect(result.closeWindowMs).toBeGreaterThanOrEqual(30);
+                expect(harness.tracker.closeBehavior).toBe('publishes');
             });
 
             it('does not resolve a wait for a newer version with an old version publish', async () => {
@@ -1572,6 +1626,8 @@ describe('BenchContextImpl', () => {
                 const result = await wait;
                 expect(messages(result)).toEqual(['fresh']);
                 expect(result.publishes).toBe(1);
+                expect(result.closeWindowMs).toBeUndefined();
+                expect(ctx.collectTimings().some((t) => t.close_window_ms !== undefined)).toBe(false);
             });
 
             it('rejects when until throws', async () => {

@@ -709,6 +709,16 @@ export class BenchContextImpl implements BenchContext {
             endedAt = mode === 'auto' ? (publish.trustedAt ?? publish.receivedAt) : publish.receivedAt;
         }
         const diagnostics = publish?.diagnostics ?? this.harness.getDiagnostics(uri);
+        // time the wait spent on a close window candidate held until the window ended, which
+        // the duration leaves out since it runs to the publish's receipt
+        let closeWindowMs: number | undefined;
+        if (publish?.acceptedAt !== undefined && !timedOut) {
+            const heldFrom = publish.receivedAt > calledAt ? publish.receivedAt : calledAt;
+            const heldNs = publish.acceptedAt - heldFrom;
+            if (heldNs > 0n) {
+                closeWindowMs = Math.round(Number(heldNs) / 1000) / 1000; // 3 decimal places
+            }
+        }
 
         // the document state at resolution is what the accepted publish matched
         const doc = this.harness.documentState(uri);
@@ -733,12 +743,16 @@ export class BenchContextImpl implements BenchContext {
         if (heldPublishes.size > 0) {
             timing.held_publishes = heldPublishes.size;
         }
+        if (closeWindowMs !== undefined) {
+            timing.close_window_ms = closeWindowMs;
+        }
         this.timings.push(timing);
         this.log(
             `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
                 `${diagnostics.length} diagnostics, ${publishes} publishes` +
                 `${held > 0 ? `, ${held} empty pull answers held while the server was busy` : ''}` +
-                `${heldPublishes.size > 0 ? `, ${heldPublishes.size} empty publishes held while the server was not quiescent` : ''}`,
+                `${heldPublishes.size > 0 ? `, ${heldPublishes.size} empty publishes held while the server was not quiescent` : ''}` +
+                `${closeWindowMs !== undefined ? `, ${closeWindowMs.toFixed(1)}ms held in the close window (not included)` : ''}`,
         );
         if (timedOut && publishes === 0 && method === 'diagnostics/open' && doc && doc.closePublishes > 0) {
             const seen = doc.closePublishes === 1 ? 'the publish' : `the ${doc.closePublishes} publishes`;
@@ -756,7 +770,15 @@ export class BenchContextImpl implements BenchContext {
             }
         }
 
-        return { diagnostics, timedOut, publishes, source: 'push', pulls: 0, ms: timing.duration_ms };
+        return {
+            diagnostics,
+            timedOut,
+            publishes,
+            source: 'push',
+            pulls: 0,
+            ms: timing.duration_ms,
+            ...(closeWindowMs !== undefined ? { closeWindowMs } : {}),
+        };
     }
 
     /**

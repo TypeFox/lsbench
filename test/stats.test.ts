@@ -167,6 +167,43 @@ describe('computeMethodStats', () => {
         expect(stats).not.toHaveProperty('grace_median_ms');
     });
 
+    it('counts push waits that held an empty publish in the close window, with their median hold', () => {
+        const open = (duration_ms: number, close_window_ms?: number) =>
+            timing({
+                method: 'diagnostics/open',
+                duration_ms,
+                ...(close_window_ms !== undefined ? { close_window_ms } : {}),
+            });
+        const stats = computeMethodStats([
+            open(56, 940),
+            open(60, 950),
+            open(58, 930),
+            open(70),
+            timing({
+                method: 'diagnostics/open',
+                duration_ms: 5000,
+                success: false,
+                result: 'timeout',
+                close_window_ms: 900,
+            }),
+            timing({
+                method: 'diagnostics/open',
+                duration_ms: 0,
+                success: false,
+                result: 'skipped',
+                close_window_ms: 900,
+            }),
+        ]);
+        // timeouts and skipped timings are left out, like from the durations
+        expect(stats).toMatchObject({ count: 6, close_windowed: 3, close_window_median_ms: 940, max_ms: 70 });
+    });
+
+    it('leaves the close window fields out when no wait held an empty publish', () => {
+        const stats = computeMethodStats([timing({ method: 'diagnostics/open', duration_ms: 4 })]);
+        expect(stats).not.toHaveProperty('close_windowed');
+        expect(stats).not.toHaveProperty('close_window_median_ms');
+    });
+
     it('reports a method where every wait timed out with null latencies and a timeout rate of 1', () => {
         const timeout = timing({ method: 'diagnostics/open', duration_ms: 15000, success: false, result: 'timeout' });
         const stats = computeMethodStats([timeout, timeout, timeout]);
@@ -400,6 +437,27 @@ describe('printSummary', () => {
         expect(lines).toContain(
             '  diagnostics/open: 1 wait held back empty publishes until the server was quiescent (included above)',
         );
+        expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
+    });
+
+    it('notes waits that held an empty publish in the close window, without the pull mode hint', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [
+            timing({ method: 'diagnostics/open', duration_ms: 56, close_window_ms: 940 }),
+            timing({ method: 'diagnostics/open', duration_ms: 60, close_window_ms: 950 }),
+            timing({ method: 'diagnostics/open', duration_ms: 58, close_window_ms: 930 }),
+            timing({ method: 'diagnostics/edit', duration_ms: 4 }),
+        ];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 2010 }], 2010);
+        expect(report.summary['diagnostics/open']).toMatchObject({ close_windowed: 3, close_window_median_ms: 940 });
+        printSummary(report);
+        expect(lines).toContain(
+            '  diagnostics/open: 3 waits held an empty publish in the close window (median 940ms, not included above)',
+        );
+        expect(lines.some((line) => line.includes('diagnostics/edit:'))).toBe(false);
         expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
     });
 

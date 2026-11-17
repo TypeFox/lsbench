@@ -131,6 +131,14 @@ export interface RequestTiming {
      * server to be quiescent, which `duration_ms` includes. Absent when nothing was held
      */
     held_publishes?: number;
+    /**
+     * Push diagnostics waits only: milliseconds the wait spent holding an empty unversioned
+     * publish after a reopen as the possible clearing publish of the close, until the close
+     * window ended without a further publish, from the publish's receipt (or the start of the
+     * wait, when later) to the end of the window. Not included in `duration_ms`, which runs to
+     * the publish's receipt, but in the iteration total. Absent when nothing was held
+     */
+    close_window_ms?: number;
 }
 
 export interface IterationResult {
@@ -183,6 +191,13 @@ export interface MethodStats {
      * RequestTiming.held_publishes
      */
     held_publishes?: number;
+    /**
+     * Push diagnostics waits only, present when some wait held an empty publish in the close
+     * window: how many timings did (timeouts and skipped left out, like the durations) and
+     * their median `close_window_ms`, which their durations do not include
+     */
+    close_windowed?: number;
+    close_window_median_ms?: number;
 }
 
 export interface BenchReport {
@@ -331,6 +346,12 @@ export interface WaitForDiagnosticsResult {
      * `ms`, see RequestTiming.grace_ms. Absent when the wait pulled at once
      */
     graceMs?: number;
+    /**
+     * push waits only: milliseconds the wait held the resolving empty publish in the close
+     * window of an earlier didClose, not included in `ms`, see RequestTiming.close_window_ms.
+     * Absent when nothing was held
+     */
+    closeWindowMs?: number;
     /**
      * Milliseconds from the latest didOpen or didChange of the document to the resolving
      * publish (or to the timeout). With `settleMs` that is the latest publish before the

@@ -76,6 +76,11 @@ export interface DiagnosticsPublish {
     placeholder?: true;
     /** process.hrtime.bigint() when the server turned quiescent after a placeholder was received */
     trustedAt?: bigint;
+    /**
+     * process.hrtime.bigint() when a publish held as a close window candidate was delivered at
+     * the end of the window, absent for a publish delivered on receipt
+     */
+    acceptedAt?: bigint;
 }
 
 /**
@@ -671,6 +676,7 @@ export class DiagnosticsTracker {
             if (this._closeBehavior !== 'publishes') {
                 this.learn('silent', `the empty publish after reopening ${uri} was not superseded`);
             }
+            candidate.acceptedAt = process.hrtime.bigint();
             this.deliver(candidate);
         } else if (!doc.publishedSinceClose) {
             this.learn('silent', `no publish for ${uri} within ${this.closeWindowMs}ms of didClose`);

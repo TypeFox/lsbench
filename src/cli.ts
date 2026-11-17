@@ -556,7 +556,9 @@ Synchronization
                                           and one already received resolves at once. The first empty,
                                           unversioned publish after a reopen within 1000ms of the close
                                           is held: a later publish in that window supersedes it as the
-                                          close publish, otherwise it is accepted when the window ends.
+                                          close publish, otherwise it is accepted when the window ends,
+                                          ms still counting to its receipt. The hold until then is
+                                          recorded as close_window_ms (closeWindowMs in the result).
                                           lsbench learns per server whether it publishes on close, then
                                           treats such a publish as stale at once, or drops the rule.
                                           Each wait is recorded as diagnostics/open or diagnostics/edit
@@ -744,6 +746,11 @@ waitForDiagnostics call:
                        grace_ms is the part spent waiting for a push first, and
                        the summary entry adds graced (how many) and
                        grace_median_ms. mode 'pull': from the first pull
+                       request. A push wait that held an empty publish after a
+                       reopen until the close window ended records the hold as
+                       close_window_ms, not included in duration_ms, and the
+                       summary entry adds close_windowed and
+                       close_window_median_ms.
 These timings carry the diagnostic count in \`diagnostics\`.
 
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
