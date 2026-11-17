@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## Unreleased
+
+Langium open waits no longer time out after a reopen because lsbench mistook its revalidation publishes for close publishes.
+
+### Close window rule
+
+- Only an empty publish for a closed document within the close window, the first since its `didClose` and with no `didOpen`, `didChange` or `didClose` of another document in between, teaches that the server publishes on close. In next.5 any publish for a closed document taught it, so Langium, which publishes for closed documents when a document importing them is opened, had the empty publish after a later reopen credited to the close, and one `diagnostics/open` in three of the langium `open-diagnostics`, `navigation` and `workspace` checks ran into its 15 s timeout. Verbose mode logs a publish for a closed document that follows another sync as possible revalidation.
+- A publish for a closed document no longer turns a learned `silent` into `publishes`.
+- The reopen timeout hint no longer claims the server did not republish when every publish it saw arrived after the reopen and was credited to the close by the learned rule. `DocumentSyncState` adds `closePublishesAfterReopen`.
+
 ## v0.3.0-next.5 (preview)
 
 `lsbench check` no longer fails on the median of a single sample, such as the lifecycle methods of a run without `--restart`.

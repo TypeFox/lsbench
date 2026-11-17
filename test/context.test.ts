@@ -1241,6 +1241,27 @@ describe('BenchContextImpl', () => {
                 ).toBe(true);
             });
 
+            it('says a reopen publish may have been credited to the close by the learned rule', async () => {
+                const lines = await ctxLogs(async (verbose) => {
+                    await verbose.openDocument('sample.ts');
+                    await verbose.closeDocument('sample.ts');
+                    // learn that the server publishes on close
+                    harness.setDiagnostics(uri, []);
+                    await verbose.openDocument('sample.ts');
+                    await verbose.closeDocument('sample.ts');
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, []);
+                    const result = await verbose.waitForDiagnostics('sample.ts', 50);
+                    expect(result).toMatchObject({ timedOut: true, publishes: 0 });
+                });
+                expect(
+                    lines.some((l) =>
+                        l.includes('sample.ts saw only the publish after the reopen credited to its close'),
+                    ),
+                ).toBe(true);
+                expect(lines.some((l) => l.includes('may not republish'))).toBe(false);
+            });
+
             it('gives no reopen hint for a timeout without close publishes', async () => {
                 const lines = await ctxLogs(async (verbose) => {
                     await verbose.openDocument('sample.ts');

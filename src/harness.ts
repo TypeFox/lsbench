@@ -128,6 +128,11 @@ export interface DocumentSyncState {
      * document was closed, or after the reopen and credited to the close. 0 before a close
      */
     closePublishes: number;
+    /**
+     * how many of `closePublishes` arrived after the reopen and were credited to the close
+     * because the server was learned to publish on close. 0 before a close
+     */
+    closePublishesAfterReopen: number;
 }
 
 interface TrackedDocument extends DocumentSyncState {
@@ -139,6 +144,8 @@ interface TrackedDocument extends DocumentSyncState {
     publishedSinceClose?: boolean;
     /** a publish after the reopen that may still be the clearing publish of the close */
     candidate?: DiagnosticsPublish;
+    /** the tracker's sync count right after the latest didClose, see DiagnosticsTracker.syncs */
+    closeSync?: number;
 }
 
 /**
@@ -152,7 +159,10 @@ interface TrackedDocument extends DocumentSyncState {
  * a tentative candidate: a further publish before the window ends supersedes it, otherwise
  * it is accepted with its own receipt time when the window ends. What happens teaches the
  * tracker whether the server publishes on close, and only then is the candidate dropped
- * right away (`publishes`) or the rule turned off (`silent`). Some servers clear a closed
+ * right away (`publishes`) or the rule turned off (`silent`). A publish for a closed document
+ * teaches `publishes` only when it is empty, the first since the didClose and no other document
+ * was synced in between, since servers revalidating dependent documents publish for closed
+ * ones too. Some servers clear a closed
  * document more than once, so once the server is known to publish on close, a further
  * empty, unversioned publish within the window is credited to the close too when the server
  * versions its other publishes, and held as a candidate otherwise. It also learns whether the
@@ -170,6 +180,8 @@ export class DiagnosticsTracker {
     private latest = new Map<string, DiagnosticsPublish>();
     private listeners = new Map<string, Set<(publish: DiagnosticsPublish) => void>>();
     private seq = 0;
+    /** counts didOpen, didChange and didClose notifications of any document */
+    private syncs = 0;
     private _closeBehavior: ClosePublishBehavior = 'unknown';
     private _delivery: DiagnosticsDelivery = 'unknown';
     private _deliveryTentative = false;
@@ -237,6 +249,7 @@ export class DiagnosticsTracker {
             syncedAt: 0n,
             syncSeq: 0,
             closePublishes: 0,
+            closePublishesAfterReopen: 0,
         };
         if (method === 'textDocument/didOpen') {
             doc.generation++;
@@ -251,6 +264,10 @@ export class DiagnosticsTracker {
             this.startCloseWindow(textDocument.uri, doc);
         } else {
             return;
+        }
+        this.syncs++;
+        if (method === 'textDocument/didClose') {
+            doc.closeSync = this.syncs;
         }
         this.documents.set(uri, doc);
     }
@@ -269,7 +286,7 @@ export class DiagnosticsTracker {
         if (doc && doc.generation > 0 && !doc.open) {
             status = 'closed';
             doc.closePublishes++;
-            this.learn('publishes', `publish for ${params.uri} while it is closed`);
+            this.learnFromClosedPublish(params, doc);
         } else if (doc?.candidate) {
             // a further publish after the reopen: the candidate was the close publish
             this.log(`Publish for ${params.uri} supersedes the tentative empty publish after didClose`);
@@ -316,6 +333,7 @@ export class DiagnosticsTracker {
         }
         if (doc && generation < doc.generation) {
             doc.closePublishes++;
+            doc.closePublishesAfterReopen++;
         }
         if (params.version !== undefined && doc && doc.generation > 0) {
             this.versionsPublishes = true;
@@ -467,8 +485,9 @@ export class DiagnosticsTracker {
         if (!doc) {
             return undefined;
         }
-        const { generation, open, version, syncedAt, syncSeq, syncedBy, closePublishes } = doc;
-        return { generation, open, version, syncedAt, syncSeq, syncedBy, closePublishes };
+        const { generation, open, version, syncedAt, syncSeq, syncedBy, closePublishes, closePublishesAfterReopen } =
+            doc;
+        return { generation, open, version, syncedAt, syncSeq, syncedBy, closePublishes, closePublishesAfterReopen };
     }
 
     /** The latest publish received for a URI */
@@ -633,6 +652,7 @@ export class DiagnosticsTracker {
         doc.closedAt = process.hrtime.bigint();
         doc.publishedSinceClose = false;
         doc.closePublishes = 0;
+        doc.closePublishesAfterReopen = 0;
         doc.closeTimer = setTimeout(() => this.endCloseWindow(uri, doc), this.closeWindowMs);
         // a pending window must not keep the process alive
         doc.closeTimer.unref();
@@ -655,6 +675,31 @@ export class DiagnosticsTracker {
         } else if (!doc.publishedSinceClose) {
             this.learn('silent', `no publish for ${uri} within ${this.closeWindowMs}ms of didClose`);
         }
+    }
+
+    /**
+     * Learn `publishes` from a publish for a closed document only when it is plausibly the
+     * close's clearing publish: the first publish since the didClose, within the close window,
+     * empty, and with no other document synced since. Servers revalidating dependent documents
+     * (Langium on didOpen or didChange of a referencing one) publish for closed documents
+     * without clearing them on close, so a publish following another sync proves nothing.
+     * It never overrides a learned `silent`
+     */
+    private learnFromClosedPublish(params: PublishDiagnosticsParams, doc: TrackedDocument): void {
+        if (this._closeBehavior !== 'unknown') {
+            return;
+        }
+        if (doc.closedAt === undefined || doc.publishedSinceClose || params.diagnostics.length > 0) {
+            return;
+        }
+        if (doc.closeSync !== this.syncs) {
+            this.log(
+                `Publish for ${params.uri} while it is closed follows a sync of another document, ` +
+                    'it may be revalidation, not learning that the server publishes on close',
+            );
+            return;
+        }
+        this.learn('publishes', `empty publish for ${params.uri} right after its didClose`);
     }
 
     private learn(behavior: Exclude<ClosePublishBehavior, 'unknown'>, reason: string): void {

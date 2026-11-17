@@ -742,10 +742,18 @@ export class BenchContextImpl implements BenchContext {
         );
         if (timedOut && publishes === 0 && method === 'diagnostics/open' && doc && doc.closePublishes > 0) {
             const seen = doc.closePublishes === 1 ? 'the publish' : `the ${doc.closePublishes} publishes`;
-            this.log(
-                `The reopen of ${relativePath} saw only ${seen} clearing its close: the server may not ` +
-                    'republish a clean file on reopen, use `until` or a short timeout for this wait',
-            );
+            if (doc.closePublishesAfterReopen === doc.closePublishes) {
+                // nothing arrived while the document was closed, every publish was credited by the learned rule
+                this.log(
+                    `The reopen of ${relativePath} saw only ${seen} after the reopen credited to its close, ` +
+                        'since the server was learned to publish on close: the reopen publish may have been among them',
+                );
+            } else {
+                this.log(
+                    `The reopen of ${relativePath} saw only ${seen} clearing its close: the server may not ` +
+                        'republish a clean file on reopen, use `until` or a short timeout for this wait',
+                );
+            }
         }
 
         return { diagnostics, timedOut, publishes, source: 'push', pulls: 0, ms: timing.duration_ms };

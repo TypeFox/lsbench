@@ -1118,6 +1118,109 @@ describe('DiagnosticsTracker', () => {
             tracker.clear();
             expect(tracker.closeBehavior).toBe('unknown');
         });
+
+        describe('revalidation publishes for closed documents', () => {
+            const other = 'file:///w/b.ts';
+            const openOther = { textDocument: { uri: other, languageId: 'typescript', version: 1, text: '' } };
+
+            /** open and close `uri`, then sync `other` with `method` before a publish arrives for `uri` */
+            function closedThenOtherSynced(method: 'didOpen' | 'didChange' | 'didClose', logs: string[] = []) {
+                const statuses: PublishStatus[] = [];
+                const tracker = new DiagnosticsTracker(
+                    (msg) => logs.push(msg),
+                    1000,
+                    (_p, status) => statuses.push(status),
+                );
+                if (method !== 'didOpen') {
+                    tracker.noteNotification('textDocument/didOpen', openOther);
+                }
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                if (method === 'didChange') {
+                    tracker.noteNotification('textDocument/didChange', {
+                        textDocument: { uri: other, version: 2 },
+                        contentChanges: [],
+                    });
+                } else if (method === 'didClose') {
+                    tracker.noteNotification('textDocument/didClose', { textDocument: { uri: other } });
+                } else {
+                    tracker.noteNotification('textDocument/didOpen', openOther);
+                }
+                return { tracker, statuses };
+            }
+
+            it.each(['didOpen', 'didChange', 'didClose'] as const)(
+                'does not learn publishes from a publish for a closed document after a %s of another',
+                (method) => {
+                    const logs: string[] = [];
+                    const { tracker, statuses } = closedThenOtherSynced(method, logs);
+                    tracker.receive({ uri, diagnostics: [] });
+                    expect(statuses).toEqual(['closed']);
+                    expect(tracker.document(uri)?.closePublishes).toBe(1);
+                    expect(tracker.closeBehavior).toBe('unknown');
+                    expect(logs.some((l) => l.includes('may be revalidation'))).toBe(true);
+                    expect(logs.some((l) => l.includes('Server publishes on close'))).toBe(false);
+                    tracker.clear();
+                },
+            );
+
+            it('accepts the reopen publish after a revalidation publish as current', async () => {
+                const { tracker, statuses } = closedThenOtherSynced('didOpen');
+                tracker.receive({ uri, diagnostics: [] });
+                tracker.noteNotification('textDocument/didClose', { textDocument: { uri: other } });
+                tracker.noteNotification('textDocument/didOpen', open());
+                const wait = tracker.waitFor(uri, current(tracker), 5000);
+                const reopen = tracker.receive({ uri, diagnostics: [] });
+                expect(statuses.at(-1)).toBe('current');
+                expect(reopen.generation).toBe(2);
+                expect(await wait).toBe(reopen);
+                tracker.clear();
+            });
+
+            it('does not learn publishes from a non empty publish for a closed document', () => {
+                const tracker = new DiagnosticsTracker(() => {}, 1000);
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.receive({ uri, diagnostics: [{ range: {}, message: 'x' }] });
+                expect(tracker.closeBehavior).toBe('unknown');
+                tracker.clear();
+            });
+
+            it('does not learn publishes from a publish for a closed document after the close window', async () => {
+                const tracker = new DiagnosticsTracker(() => {}, 10);
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                await sleep(30);
+                expect(tracker.closeBehavior).toBe('silent');
+                tracker.receive({ uri, diagnostics: [] });
+                expect(tracker.closeBehavior).toBe('silent');
+            });
+
+            it('does not flip a learned silent to publishes', async () => {
+                const tracker = new DiagnosticsTracker(() => {}, 10);
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                await sleep(30);
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.receive({ uri, diagnostics: [] });
+                expect(tracker.closeBehavior).toBe('silent');
+                tracker.clear();
+            });
+
+            it('counts publishes credited to the close after the reopen', () => {
+                const tracker = new DiagnosticsTracker(() => {}, 1000);
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.receive({ uri, diagnostics: [] });
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.receive({ uri, diagnostics: [] });
+                expect(tracker.document(uri)).toMatchObject({ closePublishes: 1, closePublishesAfterReopen: 1 });
+                tracker.clear();
+            });
+        });
     });
 
     it('resolves from the cache, and unregisters a wait once it settles', async () => {
