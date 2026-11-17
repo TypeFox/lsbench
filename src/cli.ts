@@ -754,6 +754,10 @@ The JSON report (and the printed summary) contains:
                        publish, warmups included (only for methods with 3 such waits in
                        a row: the server may never publish for a clean document, so the
                        timeouts mean no diagnostics, not slow ones)
+  - until_rejected     diagnostics push waits per method that timed out after publishes
+                       that all failed the wait's until, warmups included (only for
+                       methods with 3 such waits: the server may never report what until
+                       expects, so the timeouts do not mean a slow server)
 
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started

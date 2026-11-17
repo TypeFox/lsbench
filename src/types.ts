@@ -249,6 +249,7 @@ export interface BenchReport {
      * clean document, so its timeouts mean no diagnostics. Absent when no method did
      */
     silent_waits?: Record<string, SilentWaits>;
+    until_rejected?: Record<string, UntilRejectedWaits>;
 }
 
 /** Push waits of one timing method that timed out without any current publish, see BenchReport.silent_waits */
@@ -257,6 +258,10 @@ export interface SilentWaits {
     waits: number;
     /** most silent waits in a row, not interrupted by a resolved wait or one that saw publishes */
     longest_streak: number;
+}
+
+export interface UntilRejectedWaits {
+    waits: number;
 }
 
 /** A server exit recorded in abnormal_exits or tolerated_exits */

@@ -317,6 +317,10 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         if (silentWaits) {
             report.silent_waits = silentWaits;
         }
+        const untilRejected = silence.untilRejected();
+        if (untilRejected) {
+            report.until_rejected = untilRejected;
+        }
         if (opts.output) {
             writeReport(report, opts.output);
         }

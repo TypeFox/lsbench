@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## Unreleased
+
+### Publishes failing until
+
+- lsbench notices push waits that time out after publishes that all failed `until`. Verbose mode adds `all failing until (last: N diagnostics)` to the `diagnostics/...` line of such a wait. After 3 of them for one method (`diagnostics/open`, `diagnostics/edit` or `diagnostics/wait`), counted across warmups and restarts and not reset by resolving waits in between, verbose mode logs that the server may never report what `until` expects. The report records such methods in the new optional field `until_rejected` (`waits` per method), and the printed summary notes them below the table. A wait that also held a placeholder publish is not counted, since that publish passed `until`. In next.6 bash-language-server `edit-diagnostics` without shellcheck timed out on every other wait with nothing but `timeout_rate` 0.5 to show for it. `silent_waits` is unchanged. `SilenceTracker` adds `recordUntilRejected` and `untilRejected`, and `UntilRejectedWaits` is exported.
+
 ## v0.3.0-next.6 (preview)
 
 Langium open waits no longer time out after a reopen because lsbench mistook its revalidation publishes for close publishes.

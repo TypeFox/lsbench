@@ -360,5 +360,16 @@ export function printSummary(report: BenchReport): void {
         );
     }
 
+    if (report.until_rejected) {
+        console.log();
+        for (const [method, rejected] of Object.entries(report.until_rejected)) {
+            console.log(
+                `  ${method}: ${rejected.waits} waits timed out after publishes that all failed until ` +
+                    '(warmups included), the server may never report what until expects',
+            );
+        }
+        console.log('  Their timeouts do not mean a slow server: check what the server reports for such waits');
+    }
+
     console.log();
 }

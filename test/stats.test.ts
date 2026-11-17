@@ -479,6 +479,24 @@ describe('printSummary', () => {
         );
     });
 
+    it('notes waits failing until only when the report has them', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [timing({ method: 'diagnostics/edit', duration_ms: 3000, success: false, result: 'timeout' })];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 3000 }], 3000);
+        printSummary(report);
+        expect(lines.some((line) => line.includes('failed until'))).toBe(false);
+
+        report.until_rejected = { 'diagnostics/edit': { waits: 5 } };
+        printSummary(report);
+        expect(lines).toContain(
+            '  diagnostics/edit: 5 waits timed out after publishes that all failed until (warmups included), ' +
+                'the server may never report what until expects',
+        );
+    });
+
     it('leaves out the null and empty columns when every result is ok', () => {
         expect(header([timing()])).not.toMatch(/Null%|Empty%/);
     });

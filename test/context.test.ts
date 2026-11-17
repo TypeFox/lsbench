@@ -1375,6 +1375,115 @@ describe('BenchContextImpl', () => {
                 });
             });
 
+            describe('publishes failing until', () => {
+                const hint = 'waits timed out after publishes that all failed `until`';
+
+                async function trackedLogs(
+                    silence: SilenceTracker,
+                    body: (verbose: BenchContextImpl) => Promise<void>,
+                ): Promise<string[]> {
+                    const lines: string[] = [];
+                    const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                        lines.push(String(line));
+                    });
+                    try {
+                        await body(new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true, { silence }));
+                    } finally {
+                        spy.mockRestore();
+                    }
+                    return lines;
+                }
+
+                async function alternate(verbose: BenchContextImpl, n: number): Promise<void> {
+                    for (let i = 0; i < n; i++) {
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('one')]);
+                        const rejected = await verbose.waitForDiagnostics('sample.ts', {
+                            timeout: 10,
+                            until: (d) => d.length > 1,
+                        });
+                        expect(rejected).toMatchObject({ timedOut: true, publishes: 1 });
+                        const resolved = await verbose.waitForDiagnostics('sample.ts', {
+                            timeout: 1000,
+                            until: (d) => d.length === 1,
+                        });
+                        expect(resolved.timedOut).toBe(false);
+                        await verbose.closeDocument('sample.ts');
+                    }
+                }
+
+                it('logs a timeout after publishes all failing until', async () => {
+                    const lines = await trackedLogs(new SilenceTracker(), (verbose) => alternate(verbose, 1));
+                    expect(
+                        lines.filter((l) => l.includes('1 publishes, all failing until (last: 1 diagnostics)')),
+                    ).toHaveLength(1);
+                    expect(lines.filter((l) => l.includes('all failing until'))).toHaveLength(1);
+                });
+
+                it('counts such timeouts alternating with resolving waits of the same method', async () => {
+                    const silence = new SilenceTracker();
+                    const lines = await trackedLogs(silence, (verbose) => alternate(verbose, SILENT_WAIT_STREAK + 1));
+                    expect(silence.untilRejected()).toEqual({
+                        'diagnostics/open': { waits: SILENT_WAIT_STREAK + 1 },
+                    });
+                    expect(silence.silentWaits()).toBeUndefined();
+                    expect(
+                        lines.filter((l) => l.includes(`${SILENT_WAIT_STREAK} diagnostics/open ${hint}`)),
+                    ).toHaveLength(1);
+                });
+
+                it('does not note them below the threshold', async () => {
+                    const silence = new SilenceTracker();
+                    const lines = await trackedLogs(silence, (verbose) => alternate(verbose, SILENT_WAIT_STREAK - 1));
+                    expect(silence.untilRejected()).toBeUndefined();
+                    expect(lines.some((l) => l.includes(hint))).toBe(false);
+                });
+
+                it('does not note resolving waits or silent timeouts', async () => {
+                    const silence = new SilenceTracker();
+                    const lines = await trackedLogs(silence, async (verbose) => {
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            await verbose.openDocument('sample.ts');
+                            expect((await verbose.waitForDiagnostics('sample.ts', { timeout: 10 })).timedOut).toBe(
+                                true,
+                            );
+                            harness.setDiagnostics(uri, [diag('one')]);
+                            const resolved = await verbose.waitForDiagnostics('sample.ts', {
+                                timeout: 1000,
+                                until: (d) => d.length > 0,
+                            });
+                            expect(resolved.timedOut).toBe(false);
+                            await verbose.closeDocument('sample.ts');
+                        }
+                    });
+                    expect(silence.untilRejected()).toBeUndefined();
+                    expect(lines.some((l) => l.includes('failing until'))).toBe(false);
+                });
+
+                it('does not count a timeout that held a placeholder passing until', async () => {
+                    const silence = new SilenceTracker();
+                    harness.capabilities = { textDocumentSync: 2 };
+                    harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
+                    const lines = await trackedLogs(silence, async (verbose) => {
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            await verbose.openDocument('sample.ts');
+                            const waiting = verbose.waitForDiagnostics('sample.ts', {
+                                timeout: 30,
+                                until: (d) => d.length === 0,
+                            });
+                            harness.setDiagnostics(uri, [diag('one')], 1);
+                            harness.setDiagnostics(uri, [], 1);
+                            const result = await waiting;
+                            expect(result).toMatchObject({ timedOut: true, publishes: 2 });
+                            await verbose.closeDocument('sample.ts');
+                        }
+                    });
+                    expect(silence.untilRejected()).toBeUndefined();
+                    expect(lines.some((l) => l.includes('empty publishes held'))).toBe(true);
+                    expect(lines.some((l) => l.includes('failing until'))).toBe(false);
+                });
+            });
+
             it('accepts an empty publish after reopen once the close window has passed', async () => {
                 harness.tracker = new DiagnosticsTracker(() => {}, 0);
                 await ctx.openDocument('sample.ts');

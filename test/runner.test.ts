@@ -334,6 +334,7 @@ conn.listen();
 describe('runBenchmark with a server silent on clean files', () => {
     let tmpDir: string;
     let script: string;
+    let untilScript: string;
 
     beforeAll(() => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-silent-'));
@@ -348,13 +349,27 @@ describe('runBenchmark with a server silent on clean files', () => {
             }`,
             'utf-8',
         );
+        untilScript = path.join(tmpDir, 'until.ts');
+        fs.writeFileSync(
+            untilScript,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.openDocument('clean.ts');
+                await ctx.waitForDiagnostics('clean.ts', { timeout: 100, until: (d: unknown[]) => d.length > 1 });
+                await ctx.closeDocument('clean.ts');
+            }`,
+            'utf-8',
+        );
     });
 
     afterAll(() => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    async function run(publish: boolean, restart: boolean): Promise<{ report: BenchReport; lines: string[] }> {
+    async function run(
+        publish: boolean,
+        restart: boolean,
+        actions = script,
+    ): Promise<{ report: BenchReport; lines: string[] }> {
         const lines: string[] = [];
         const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
             lines.push(args.map(String).join(' '));
@@ -365,7 +380,7 @@ describe('runBenchmark with a server silent on clean files', () => {
                 server: process.execPath,
                 serverArgs: ['--input-type=module', '-e', quietServer, ...(publish ? ['publish'] : [])],
                 workspace: tmpDir,
-                script,
+                script: actions,
                 iterations: 1,
                 warmup: 2,
                 output: '',
@@ -390,7 +405,19 @@ describe('runBenchmark with a server silent on clean files', () => {
         const { report, lines } = await run(true, false);
         expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 0 });
         expect(report.silent_waits).toBeUndefined();
+        expect(report.until_rejected).toBeUndefined();
         expect(lines.some((l) => l.includes('did not publish'))).toBe(false);
+        expect(lines.some((l) => l.includes('failed until'))).toBe(false);
+    });
+
+    it('records waits timing out after publishes all failing until, and notes them in the summary', async () => {
+        const { report, lines } = await run(true, true, untilScript);
+        expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 1 });
+        expect(report.until_rejected).toEqual({ 'diagnostics/open': { waits: 3 } });
+        expect(report.silent_waits).toBeUndefined();
+        expect(
+            lines.some((l) => l.includes('diagnostics/open: 3 waits timed out after publishes that all failed until')),
+        ).toBe(true);
     });
 });
 

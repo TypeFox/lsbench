@@ -24,6 +24,7 @@ import type {
     WaitForDiagnosticsResult,
     WaitForIdleOptions,
     SilentWaits,
+    UntilRejectedWaits,
     WaitForIdleResult,
 } from './types.js';
 
@@ -90,6 +91,7 @@ export const SILENT_WAIT_STREAK = 3;
  */
 export class SilenceTracker {
     private stats = new Map<string, { waits: number; streak: number; longest: number }>();
+    private rejected = new Map<string, number>();
 
     /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
     record(method: string, silent: boolean): boolean {
@@ -116,6 +118,23 @@ export class SilenceTracker {
             if (entry.longest >= SILENT_WAIT_STREAK) {
                 result ??= {};
                 result[method] = { waits: entry.waits, longest_streak: entry.longest };
+            }
+        }
+        return result;
+    }
+
+    recordUntilRejected(method: string): boolean {
+        const waits = (this.rejected.get(method) ?? 0) + 1;
+        this.rejected.set(method, waits);
+        return waits === SILENT_WAIT_STREAK;
+    }
+
+    untilRejected(): Record<string, UntilRejectedWaits> | undefined {
+        let result: Record<string, UntilRejectedWaits> | undefined;
+        for (const [method, waits] of this.rejected) {
+            if (waits >= SILENT_WAIT_STREAK) {
+                result ??= {};
+                result[method] = { waits };
             }
         }
         return result;
@@ -622,6 +641,7 @@ export class BenchContextImpl implements BenchContext {
         // seqs of the placeholder publishes held back, see isHeldPublish
         const heldPublishes = new Set<number>();
         const isHeldPublish = (p: DiagnosticsPublish) => p.placeholder === true && p.trustedAt === undefined;
+        let lastRejected: DiagnosticsPublish | undefined;
         // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
         let refresh = false;
         let wait: PublishWaitResult;
@@ -706,6 +726,9 @@ export class BenchContextImpl implements BenchContext {
                     // a placeholder that would resolve the wait is held until the server is quiescent
                     until: (p: DiagnosticsPublish) => {
                         const passed = !until || until(p.diagnostics);
+                        if (!passed) {
+                            lastRejected = p;
+                        }
                         if (passed && isHeldPublish(p)) {
                             if (!heldPublishes.has(p.seq)) {
                                 heldPublishes.add(p.seq);
@@ -795,9 +818,11 @@ export class BenchContextImpl implements BenchContext {
             timing.close_window_ms = closeWindowMs;
         }
         this.timings.push(timing);
+        const untilRejected = timedOut && publishes > 0 && lastRejected !== undefined && heldPublishes.size === 0;
         this.log(
             `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
                 `${diagnostics.length} diagnostics, ${publishes} publishes` +
+                `${untilRejected ? `, all failing until (last: ${lastRejected?.diagnostics.length} diagnostics)` : ''}` +
                 `${held > 0 ? `, ${held} empty pull answers held while the server was busy` : ''}` +
                 `${heldPublishes.size > 0 ? `, ${heldPublishes.size} empty publishes held while the server was not quiescent` : ''}` +
                 `${closeWindowMs !== undefined ? `, ${closeWindowMs.toFixed(1)}ms held in the close window (not included)` : ''}`,
@@ -810,6 +835,12 @@ export class BenchContextImpl implements BenchContext {
                 `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row: it may never ` +
                     'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
                     'Use `until` or a short timeout for this wait',
+            );
+        }
+        if (untilRejected && this.silence.recordUntilRejected(method)) {
+            this.log(
+                `${SILENT_WAIT_STREAK} ${method} waits timed out after publishes that all failed \`until\`: ` +
+                    'the server may never report what `until` expects, so these timeouts do not mean a slow server',
             );
         }
         if (reopenOnly && doc) {

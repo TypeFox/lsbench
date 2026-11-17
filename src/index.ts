@@ -87,6 +87,7 @@ export type {
     ServerCapabilities,
     ServerConfig,
     SilentWaits,
+    UntilRejectedWaits,
     WaitForDiagnosticsOptions,
     WaitForDiagnosticsResult,
     WaitForIdleOptions,
