@@ -196,7 +196,7 @@ if (items.length > 0) {
 
 lsbench advertises `resolveSupport` for completion items, code actions, inlay hints, and workspace symbols, so some servers return partial items and defer that work to the resolve request.
 
-`documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability, since servers built on `vscode-languageserver` (such as the VS Code CSS, HTML and JSON servers, and ESLint) stop pushing diagnostics when it is present, which would silently turn push timings into pull timings. Servers that advertise `diagnosticProvider` regardless are pulled by `waitForDiagnostics` (see [pull diagnostics](#pull-diagnostics)). To advertise it anyway, set `textDocument.diagnostic` through `--client-capabilities-file`.
+`documentDiagnostic` and `workspaceDiagnostic` only work against servers that expose `diagnosticProvider`. lsbench does not advertise the `textDocument.diagnostic` client capability by default, since servers built on `vscode-languageserver` (such as the VS Code CSS, HTML and JSON servers, and ESLint) stop pushing diagnostics when it is present, which would silently turn push timings into pull timings. Servers that advertise `diagnosticProvider` regardless are pulled by `waitForDiagnostics` (see [pull diagnostics](#pull-diagnostics)). Pass `--advertise-pull` (`advertisePullDiagnostics: true` in code) to advertise `{ "dynamicRegistration": false, "relatedDocumentSupport": false }`, and expect such servers to switch from `diagnostics/open` to `diagnostics/pull/open`. A `--client-capabilities-file` still overrides it. `workspace.diagnostics.refreshSupport` is always advertised, since lsbench handles `workspace/diagnostic/refresh`.
 
 ### Waiting for diagnostics
 
@@ -359,6 +359,7 @@ Options:
   --init-options-file <path>  JSON file with LSP initializationOptions
   --client-capabilities-file <path>
                               JSON file deep merged over the default client capabilities
+  --advertise-pull            Advertise textDocument.diagnostic, servers may switch from push to pull
   --settings-file <path>      JSON file with client settings keyed by section. Only the listed keys are sent,
                               and servers may read a missing key as false (e.g. json.validate.enable)
   --restart                   Restart the server between iterations

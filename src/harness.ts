@@ -1262,7 +1262,13 @@ export class LspHarness {
             rootUri: workspaceUri,
             rootPath: this.workspaceRoot,
             workspaceFolders: [{ uri: workspaceUri, name: path.basename(this.workspaceRoot) }],
-            capabilities: mergeCapabilities(defaultClientCapabilities(), this.config.clientCapabilities ?? {}),
+            // defaults, then the pull capability when opted in, then the configured capabilities, so those win
+            capabilities: mergeCapabilities(
+                this.config.advertisePullDiagnostics
+                    ? mergeCapabilities(defaultClientCapabilities(), pullDiagnosticClientCapabilities())
+                    : defaultClientCapabilities(),
+                this.config.clientCapabilities ?? {},
+            ),
             initializationOptions: this.config.initializationOptions ?? {},
         };
 
@@ -1609,6 +1615,8 @@ export function defaultClientCapabilities(): Record<string, unknown> {
         workspace: {
             workspaceFolders: true,
             configuration: true,
+            // lsbench acknowledges workspace/diagnostic/refresh and makes pending auto waits pull on it
+            diagnostics: { refreshSupport: true },
             didChangeConfiguration: { dynamicRegistration: true },
             // advertised so servers rely on the client for file watching, as they do under VS Code;
             // the resulting registrations are tracked but no file events are ever sent
@@ -1746,15 +1754,26 @@ export function defaultClientCapabilities(): Record<string, unknown> {
                 overlappingTokenSupport: false,
                 multilineTokenSupport: false,
             },
-            // textDocument.diagnostic is intentionally not advertised: servers built on
+            // textDocument.diagnostic is not advertised by default: servers built on
             // vscode-languageserver (the VS Code CSS, HTML and JSON servers, ESLint) stop pushing
             // when it is present, which would turn push timings into pull timings. Servers that
-            // advertise diagnosticProvider anyway are pulled by waitForDiagnostics in auto mode
+            // advertise diagnosticProvider anyway are pulled by waitForDiagnostics in auto mode.
+            // ServerConfig.advertisePullDiagnostics adds it, see pullDiagnosticClientCapabilities
             publishDiagnostics: {
                 relatedInformation: true,
                 tagSupport: { valueSet: [1, 2] },
             },
         },
+    };
+}
+
+/**
+ * The pull diagnostics client capability, merged over the defaults when
+ * ServerConfig.advertisePullDiagnostics is set (--advertise-pull).
+ */
+export function pullDiagnosticClientCapabilities(): Record<string, unknown> {
+    return {
+        textDocument: { diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false } },
     };
 }
 

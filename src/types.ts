@@ -14,6 +14,11 @@ export interface ServerConfig {
     /** Client capabilities deep merged over the defaults: objects merge recursively, arrays and scalars replace */
     clientCapabilities?: Record<string, unknown>;
     /**
+     * Advertise the textDocument.diagnostic client capability (pull diagnostics), merged over the
+     * defaults before clientCapabilities. Servers built on vscode-languageserver then stop pushing
+     */
+    advertisePullDiagnostics?: boolean;
+    /**
      * Client settings keyed by section, answering workspace/configuration and sent once via
      * workspace/didChangeConfiguration after initialized. Dotted keys ("html.format") are expanded
      * into nested objects first, as VS Code does. Only the given keys are sent, unlike VS Code,
@@ -51,6 +56,8 @@ export interface BenchOptions {
     initializationOptions?: unknown;
     /** Client capabilities deep merged over the defaults sent during initialize */
     clientCapabilities?: Record<string, unknown>;
+    /** Advertise the pull diagnostics client capability, see ServerConfig.advertisePullDiagnostics */
+    advertisePullDiagnostics?: boolean;
     /** Client settings keyed by section, see ServerConfig.settings */
     settings?: Record<string, unknown>;
     /** Non zero exit codes tolerated after a replied shutdown, see ServerConfig.allowExitCodes */

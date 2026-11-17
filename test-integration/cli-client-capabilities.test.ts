@@ -43,7 +43,7 @@ describe('lsbench CLI with --client-capabilities-file', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    function runCli(capsFile: string) {
+    function runCli(capsFile: string, extraArgs: string[] = []) {
         return spawnSync(
             process.execPath,
             [
@@ -59,6 +59,7 @@ describe('lsbench CLI with --client-capabilities-file', () => {
                 '0',
                 '--client-capabilities-file',
                 capsFile,
+                ...extraArgs,
                 '--',
                 '--input-type=module',
                 '-e',
@@ -91,6 +92,22 @@ describe('lsbench CLI with --client-capabilities-file', () => {
             relativePatternSupport: true,
         });
         expect(received.experimental).toEqual({ serverStatusNotification: true, custom: true });
+    });
+
+    it('advertises pull diagnostics with --advertise-pull, and refresh support always', () => {
+        const capsFile = writeCaps('empty.json', '{}');
+        let result = runCli(capsFile);
+        expect(result.status, result.stderr).toBe(0);
+        let received = JSON.parse(fs.readFileSync(dumpFile, 'utf-8'));
+        expect(received.textDocument.diagnostic).toBeUndefined();
+        expect(received.workspace.diagnostics).toEqual({ refreshSupport: true });
+
+        result = runCli(capsFile, ['--advertise-pull']);
+        expect(result.status, result.stderr).toBe(0);
+        received = JSON.parse(fs.readFileSync(dumpFile, 'utf-8'));
+        expect(received.textDocument.diagnostic).toEqual({ dynamicRegistration: false, relatedDocumentSupport: false });
+        expect(received.workspace.diagnostics).toEqual({ refreshSupport: true });
+        expect(result.stdout).toMatch(/Pull diag:\s+textDocument\.diagnostic advertised/);
     });
 
     it('rejects a missing file', () => {

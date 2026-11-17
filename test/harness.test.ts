@@ -6,10 +6,11 @@ import {
     defaultClientCapabilities,
     expandSettings,
     LspHarness,
-    mergeCapabilities,
     linkPlaceholders,
+    mergeCapabilities,
     ProgressTracker,
     pathToUri,
+    pullDiagnosticClientCapabilities,
     resolveConfigurationSection,
     uriToPath,
 } from 'lsbench';
@@ -589,6 +590,19 @@ describe('defaultClientCapabilities', () => {
         expect(textDocument.diagnostic).toBeUndefined();
         expect(textDocument.publishDiagnostics).toBeDefined();
     });
+
+    it('advertises diagnostics refresh support, which lsbench handles', () => {
+        const workspace = defaultClientCapabilities().workspace as Record<string, unknown>;
+        expect(workspace.diagnostics).toEqual({ refreshSupport: true });
+    });
+});
+
+describe('pullDiagnosticClientCapabilities', () => {
+    it('is the textDocument.diagnostic capability without dynamic registration or related documents', () => {
+        expect(pullDiagnosticClientCapabilities()).toEqual({
+            textDocument: { diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false } },
+        });
+    });
 });
 
 /** a fake server that echoes the client capabilities and registers a file watcher */
@@ -616,12 +630,13 @@ conn.listen();
 `;
 
 describe('LspHarness client capabilities', () => {
-    function echoHarness(clientCapabilities?: Record<string, unknown>): LspHarness {
+    function echoHarness(clientCapabilities?: Record<string, unknown>, advertisePullDiagnostics?: boolean): LspHarness {
         return new LspHarness(
             {
                 command: process.execPath,
                 args: ['--input-type=module', '-e', echoCapabilitiesServer],
                 clientCapabilities,
+                advertisePullDiagnostics,
             },
             process.cwd(),
         );
@@ -656,6 +671,36 @@ describe('LspHarness client capabilities', () => {
                 (defaultClientCapabilities().textDocument as Record<string, unknown>).completion,
             );
             expect(received.experimental).toEqual({ serverStatusNotification: true, custom: true });
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('advertises pull diagnostics over the defaults when opted in', async () => {
+        const harness = echoHarness(undefined, true);
+        try {
+            await harness.start();
+            const received = harness.capabilities?.received as Record<string, Record<string, unknown>>;
+            expect(received.textDocument.diagnostic).toEqual({
+                dynamicRegistration: false,
+                relatedDocumentSupport: false,
+            });
+            expect(received.textDocument.publishDiagnostics).toBeDefined();
+            expect(received.workspace.diagnostics).toEqual({ refreshSupport: true });
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('lets the configured capabilities override the opted in pull capability', async () => {
+        const harness = echoHarness({ textDocument: { diagnostic: { relatedDocumentSupport: true } } }, true);
+        try {
+            await harness.start();
+            const received = harness.capabilities?.received as Record<string, Record<string, unknown>>;
+            expect(received.textDocument.diagnostic).toEqual({
+                dynamicRegistration: false,
+                relatedDocumentSupport: true,
+            });
         } finally {
             await harness.stop();
         }

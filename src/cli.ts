@@ -49,6 +49,11 @@ program
     .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
     .option('--client-capabilities-file <path>', 'Path to a JSON file deep merged over the default client capabilities')
     .option(
+        '--advertise-pull',
+        'Advertise the textDocument.diagnostic client capability, so servers may switch from pushing to pull diagnostics',
+        false,
+    )
+    .option(
         '--settings-file <path>',
         'Path to a JSON file with client settings keyed by section. Only the listed keys are sent, and servers may read a missing key as false (e.g. json.validate.enable)',
     )
@@ -96,6 +101,7 @@ program
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
             clientCapabilities,
+            advertisePullDiagnostics: rawOpts.advertisePull as boolean,
             settings,
             allowExitCodes: (rawOpts.allowExitCode as number[]).length
                 ? (rawOpts.allowExitCode as number[])
@@ -523,10 +529,11 @@ Workspace, hierarchies, pull diagnostics  (timed)
   workspaceDiagnostic(prevResultIds?)     workspace/diagnostic (prevResultIds is [{uri,value}], default [])
 
   Pull diagnostics need a server with diagnosticProvider. lsbench does not
-  advertise the textDocument.diagnostic client capability, since servers built
-  on vscode-languageserver would then stop pushing diagnostics. waitForDiagnostics
-  pulls from servers that advertise diagnosticProvider anyway (see below). To
-  advertise it, set textDocument.diagnostic via --client-capabilities-file.
+  advertise the textDocument.diagnostic client capability by default, since
+  servers built on vscode-languageserver would then stop pushing diagnostics.
+  waitForDiagnostics pulls from servers that advertise diagnosticProvider anyway
+  (see below). To advertise it, pass --advertise-pull. workspace.diagnostics
+  refreshSupport is always advertised.
 
 Resolve  (timed, the item from the matching request is sent back as the params)
   completionItemResolve(item)             completionItem/resolve
@@ -670,6 +677,8 @@ experimental/serverStatus (verbose mode logs progress titles).
           --init-options-file <p>  JSON file with LSP initializationOptions
           --client-capabilities-file <p>
                                    JSON file deep merged over the client capabilities
+          --advertise-pull         Advertise textDocument.diagnostic (pull diagnostics),
+                                   servers may stop pushing                         (default: false)
           --settings-file <p>      JSON file with client settings keyed by section,
                                    dotted keys expanded, for workspace/configuration and
                                    sent once via workspace/didChangeConfiguration.

@@ -56,6 +56,12 @@ describe('resolveServerConfig', () => {
             'allowExitCodes',
         );
     });
+
+    it('sets advertisePullDiagnostics only when requested', () => {
+        const args = ['cmd', undefined, undefined, undefined, undefined, undefined] as const;
+        expect(resolveServerConfig(...args, true).advertisePullDiagnostics).toBe(true);
+        expect(resolveServerConfig(...args, false)).not.toHaveProperty('advertisePullDiagnostics');
+    });
 });
 
 describe('loadActionScript', () => {

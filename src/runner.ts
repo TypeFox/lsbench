@@ -27,6 +27,7 @@ export function resolveServerConfig(
     clientCapabilities?: Record<string, unknown>,
     settings?: Record<string, unknown>,
     allowExitCodes?: number[],
+    advertisePullDiagnostics?: boolean,
 ): ServerConfig {
     const parts = serverArg.split(/\s+/).filter(Boolean);
     const command = parts[0];
@@ -35,6 +36,9 @@ export function resolveServerConfig(
     const config: ServerConfig = { command, args, initializationOptions, clientCapabilities, settings };
     if (allowExitCodes && allowExitCodes.length > 0) {
         config.allowExitCodes = allowExitCodes;
+    }
+    if (advertisePullDiagnostics) {
+        config.advertisePullDiagnostics = true;
     }
     return config;
 }
@@ -88,6 +92,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         opts.clientCapabilities,
         opts.settings,
         opts.allowExitCodes,
+        opts.advertisePullDiagnostics,
     );
     const actionFn = await loadActionScript(opts.script);
 
@@ -104,6 +109,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     }
     if (serverConfig.allowExitCodes) {
         console.log(`  Allow exit: ${serverConfig.allowExitCodes.join(', ')} after shutdown`);
+    }
+    if (serverConfig.advertisePullDiagnostics) {
+        console.log('  Pull diag:  textDocument.diagnostic advertised');
     }
     if (opts.serverLog) {
         console.log(`  Server log: ${path.resolve(opts.serverLog)}`);
