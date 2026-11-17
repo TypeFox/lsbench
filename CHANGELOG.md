@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.3.0-next.6 (preview)
 
 Langium open waits no longer time out after a reopen because lsbench mistook its revalidation publishes for close publishes.
 
