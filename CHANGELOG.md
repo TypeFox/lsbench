@@ -8,6 +8,12 @@
 - Shortened waits stay timeouts, so `timeout_rate` and the medians are unchanged unless a server publishes after `ms`. The timing adds `shortened: true` (also in the `waitForDiagnostics` result), `MethodStats` adds `shortened`, `silent_waits` and `until_rejected` add a `shortened` count, and the new optional report field `reopen_waits` (`ReopenWaits`) lists methods with a shortened reopen wait. The printed summary notes them below the table, and verbose mode logs `timeout (shortened)`. All new fields are optional, and without the flag the report is unchanged.
 - `SilenceTracker` adds `recordReopen`, `recordUntilResolved`, `reopenWaits`, `shortens` and `recordShortened`, `DiagnosticsTracker` and `LspHarness` add `closeWindowEndsAt`, and `ShortenedKind` and `ReopenWaits` are exported.
 
+### Skipping the close window hold for servers clearing each close once
+
+- Once a server publishing on close without versions cleared 3 closes in a row with exactly one publish each, and the empty publish held after it was accepted at the end of the close window each time, the empty, unversioned publish after the reopen is accepted at once instead of held until 1000 ms after the `didClose`. Durations do not change, `close_window_ms` disappears from those waits and iteration totals drop. In the second next.6 full run, such holds took 311 s, mostly for zls, yaml-language-server, typescript-language-server and the vscode css, html and json servers.
+- A close cleared by two or more publishes, a candidate superseded after a clearing publish, or a second empty publish after one accepted at once turns this off for the rest of the server process. Publishes for a closed document following a sync of another document (revalidation) do not count. rust-analyzer and servers learned not to publish on close (Langium) are unaffected.
+- Verbose mode logs `Server clears each close once (...)` when it is learned and `accepted at once` for each such publish. `DiagnosticsTracker` adds `closeClears`, and `CloseClears` is exported. The close window of a document whose reopen publish was accepted at once no longer postpones `--shorten-silent-waits`.
+
 ## v0.3.0
 
 Changes since 0.2.0. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, ignore placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips unsupported requests, keeps the report when a server crashes, and can check a report against a baseline. The preview sections below have the details.

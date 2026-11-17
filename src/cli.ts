@@ -602,6 +602,9 @@ Synchronization
                                           recorded as close_window_ms (closeWindowMs in the result).
                                           lsbench learns per server whether it publishes on close, then
                                           treats such a publish as stale at once, or drops the rule.
+                                          Once 3 closes in a row were each cleared by one publish,
+                                          a further empty publish after it is accepted at once,
+                                          without the hold.
                                           Each wait is recorded as diagnostics/open or diagnostics/edit
                                           (diagnostics/wait for a document that is not open, timed from
                                           the call), with the count in \`diagnostics\` and result ok, empty

@@ -1207,6 +1207,206 @@ describe('DiagnosticsTracker', () => {
             expect(tracker.closeBehavior).toBe('unknown');
         });
 
+        describe('servers clearing each close once', () => {
+            const other = 'file:///w/b.ts';
+
+            function tracking(windowMs: number) {
+                const logs: string[] = [];
+                const statuses: PublishStatus[] = [];
+                const tracker = new DiagnosticsTracker(
+                    (msg) => logs.push(msg),
+                    windowMs,
+                    (_p, status) => statuses.push(status),
+                );
+                tracker.noteNotification('textDocument/didOpen', open());
+                return { tracker, logs, statuses };
+            }
+
+            function closeClearReopen(tracker: DiagnosticsTracker, clearAfterReopen = false): DiagnosticsPublish {
+                tracker.noteNotification('textDocument/didClose', close);
+                if (!clearAfterReopen) {
+                    tracker.receive({ uri, diagnostics: [] });
+                }
+                tracker.noteNotification('textDocument/didOpen', open());
+                if (clearAfterReopen) {
+                    tracker.receive({ uri, diagnostics: [] });
+                }
+                return tracker.receive({ uri, diagnostics: [] });
+            }
+
+            async function learnedOnce(windowMs = 20) {
+                const tracking_ = tracking(windowMs);
+                for (let i = 0; i < 3; i++) {
+                    closeClearReopen(tracking_.tracker, i === 1);
+                    await sleep(windowMs * 2);
+                }
+                return tracking_;
+            }
+
+            it('learns once after three closes in a row cleared by one publish, logging it once', async () => {
+                const { tracker, logs, statuses } = tracking(20);
+                for (let i = 0; i < 2; i++) {
+                    closeClearReopen(tracker, i === 1);
+                    await sleep(40);
+                }
+                expect(statuses.filter((s) => s === 'close candidate')).toHaveLength(2);
+                expect(tracker.closeClears).toBe('unknown');
+                closeClearReopen(tracker);
+                await sleep(40);
+                expect(tracker.closeClears).toBe('once');
+                expect(tracker.closeBehavior).toBe('publishes');
+                closeClearReopen(tracker);
+                await sleep(40);
+                expect(logs.filter((l) => l.includes('Server clears each close once'))).toHaveLength(1);
+                tracker.clear();
+            });
+
+            it('accepts a further empty publish at once once learned', async () => {
+                const { tracker, logs, statuses } = await learnedOnce();
+                for (const clearAfterReopen of [false, true]) {
+                    const reopen = closeClearReopen(tracker, clearAfterReopen);
+                    expect(statuses.at(-1)).toBe('current');
+                    expect(reopen.generation).toBe(tracker.document(uri)?.generation);
+                    expect(tracker.latestPublish(uri)).toBe(reopen);
+                    expect(await tracker.waitFor(uri, current(tracker), 5)).toBe(reopen);
+                    expect(reopen.acceptedAt).toBeUndefined();
+                    expect(tracker.closeWindowEndsAt(uri)).toBeUndefined();
+                    await sleep(40);
+                    expect(reopen.acceptedAt).toBeUndefined();
+                }
+                expect(logs.filter((l) => l.includes('after didClose, accepted at once'))).toHaveLength(2);
+                expect(tracker.closeClears).toBe('once');
+                tracker.clear();
+            });
+
+            it('learns more from a candidate held after a clear and superseded, holding candidates again', async () => {
+                const { tracker, logs, statuses } = tracking(20);
+                closeClearReopen(tracker);
+                expect(statuses.at(-1)).toBe('close candidate');
+                tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
+                expect(tracker.closeClears).toBe('more');
+                expect(logs.some((l) => l.includes('Server may clear a close more than once'))).toBe(true);
+                for (let i = 0; i < 4; i++) {
+                    await sleep(40);
+                    closeClearReopen(tracker);
+                    expect(statuses.at(-1)).toBe('close candidate');
+                }
+                tracker.clear();
+            });
+
+            it('learns more from a second empty publish after one was accepted at once', async () => {
+                const { tracker, logs, statuses } = await learnedOnce();
+                const reopen = closeClearReopen(tracker);
+                expect(statuses.at(-1)).toBe('current');
+                const second = tracker.receive({ uri, diagnostics: [] });
+                expect(statuses.at(-1)).toBe('close candidate');
+                expect(tracker.latestPublish(uri)).toBe(reopen);
+                expect(tracker.closeWindowEndsAt(uri)).toBeDefined();
+                expect(tracker.closeClears).toBe('more');
+                expect(logs.some((l) => l.includes('a second clear'))).toBe(true);
+                await sleep(40);
+                expect(tracker.latestPublish(uri)).toBe(second);
+                closeClearReopen(tracker);
+                expect(statuses.at(-1)).toBe('close candidate');
+                tracker.clear();
+            });
+
+            it('learns more from a close cleared twice while closed', () => {
+                const { tracker } = tracking(1000);
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.receive({ uri, diagnostics: [] });
+                expect(tracker.closeClears).toBe('unknown');
+                tracker.receive({ uri, diagnostics: [] });
+                expect(tracker.closeClears).toBe('more');
+                tracker.clear();
+            });
+
+            it('learns more from a further publish credited to the close for a versioning server', () => {
+                const statuses: PublishStatus[] = [];
+                const { tracker } = clearedAndReopened(1000, true, statuses);
+                tracker.receive({ uri, diagnostics: [] });
+                expect(statuses.at(-1)).toBe('stale');
+                expect(tracker.closeClears).toBe('more');
+                tracker.clear();
+            });
+
+            it('does not count revalidation publishes for a closed document towards once', async () => {
+                const { tracker, statuses } = tracking(20);
+                tracker.noteNotification('textDocument/didOpen', {
+                    textDocument: { uri: other, languageId: 'typescript', version: 1, text: '' },
+                });
+                closeClearReopen(tracker);
+                await sleep(40);
+                closeClearReopen(tracker);
+                await sleep(40);
+                for (let i = 0; i < 3; i++) {
+                    tracker.noteNotification('textDocument/didClose', close);
+                    tracker.noteNotification('textDocument/didChange', {
+                        textDocument: { uri: other, version: i + 2 },
+                        contentChanges: [],
+                    });
+                    tracker.receive({ uri, diagnostics: [] });
+                    tracker.noteNotification('textDocument/didOpen', open());
+                    tracker.receive({ uri, diagnostics: [] });
+                    expect(statuses.at(-1)).toBe('close candidate');
+                    await sleep(40);
+                }
+                expect(tracker.closeClears).toBe('unknown');
+                closeClearReopen(tracker);
+                await sleep(40);
+                closeClearReopen(tracker);
+                await sleep(40);
+                expect(tracker.closeClears).toBe('unknown');
+                closeClearReopen(tracker);
+                await sleep(40);
+                expect(tracker.closeClears).toBe('once');
+                tracker.clear();
+            });
+
+            it('changes nothing for a server learned silent', async () => {
+                const logs: string[] = [];
+                const tracker = reopened(20, logs);
+                tracker.receive({ uri, diagnostics: [] });
+                await sleep(40);
+                expect(tracker.closeBehavior).toBe('silent');
+                for (let i = 0; i < 4; i++) {
+                    tracker.noteNotification('textDocument/didClose', close);
+                    tracker.noteNotification('textDocument/didOpen', open());
+                    const publish = tracker.receive({ uri, diagnostics: [] });
+                    expect(tracker.latestPublish(uri)).toBe(publish);
+                    await sleep(40);
+                }
+                expect(tracker.closeClears).toBe('unknown');
+                expect(logs.some((l) => l.includes('after didClose, accepted at once'))).toBe(false);
+                tracker.clear();
+            });
+
+            it('still marks a publish accepted at once as a placeholder while the server is loading', async () => {
+                const { tracker, statuses } = await learnedOnce();
+                let loading = false;
+                tracker.markPlaceholdersWhile(() => loading);
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.receive({ uri, diagnostics: [] });
+                tracker.noteNotification('textDocument/didOpen', open());
+                loading = true;
+                const reopen = tracker.receive({ uri, diagnostics: [] });
+                expect(statuses.at(-1)).toBe('current');
+                expect(reopen.placeholder).toBe(true);
+                expect(tracker.delivery).toBe('push');
+                tracker.clear();
+            });
+
+            it('forgets once on clear', async () => {
+                const { tracker } = await learnedOnce();
+                tracker.clear();
+                expect(tracker.closeClears).toBe('unknown');
+                tracker.noteNotification('textDocument/didOpen', open());
+                closeClearReopen(tracker);
+                expect(tracker.closeClears).toBe('unknown');
+                tracker.clear();
+            });
+        });
+
         describe('revalidation publishes for closed documents', () => {
             const other = 'file:///w/b.ts';
             const openOther = { textDocument: { uri: other, languageId: 'typescript', version: 1, text: '' } };

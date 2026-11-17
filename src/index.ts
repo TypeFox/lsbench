@@ -28,6 +28,7 @@ export {
     SilenceTracker,
 } from './context.js';
 export type {
+    CloseClears,
     ClosePublishBehavior,
     Diagnostic,
     DiagnosticsDelivery,

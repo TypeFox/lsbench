@@ -48,6 +48,10 @@ export const CLOSE_PUBLISH_WINDOW_MS = 1000;
  */
 export type ClosePublishBehavior = 'unknown' | 'publishes' | 'silent';
 
+export type CloseClears = 'unknown' | 'once' | 'more';
+
+const CLOSE_CLEARS_ONCE_STREAK = 3;
+
 /**
  * How a tracker has learned its server delivers diagnostics: `push` once a publish for an
  * opened document arrived, `pull` once an auto mode pull resolved without a push in the
@@ -151,6 +155,8 @@ interface TrackedDocument extends DocumentSyncState {
     candidate?: DiagnosticsPublish;
     /** the tracker's sync count right after the latest didClose, see DiagnosticsTracker.syncs */
     closeSync?: number;
+    clears?: number;
+    acceptedAtOnce?: boolean;
 }
 
 /**
@@ -188,6 +194,8 @@ export class DiagnosticsTracker {
     /** counts didOpen, didChange and didClose notifications of any document */
     private syncs = 0;
     private _closeBehavior: ClosePublishBehavior = 'unknown';
+    private _closeClears: CloseClears = 'unknown';
+    private onceStreak = 0;
     private _delivery: DiagnosticsDelivery = 'unknown';
     private _deliveryTentative = false;
     /** whether the server sent a version with a publish for an opened document */
@@ -291,12 +299,17 @@ export class DiagnosticsTracker {
         if (doc && doc.generation > 0 && !doc.open) {
             status = 'closed';
             doc.closePublishes++;
+            const clearing = this.isClearingPublish(params, doc);
             this.learnFromClosedPublish(params, doc);
+            if (clearing) {
+                this.countClear(params.uri, doc);
+            }
         } else if (doc?.candidate) {
             // a further publish after the reopen: the candidate was the close publish
             this.log(`Publish for ${params.uri} supersedes the tentative empty publish after didClose`);
             doc.candidate = undefined;
             this.learn('publishes', `a publish superseded the empty one after closing ${params.uri}`);
+            this.countClear(params.uri, doc);
         } else if (doc?.closedAt !== undefined && params.diagnostics.length === 0 && params.version === undefined) {
             const sinceCloseMs = (Number(receivedAt - doc.closedAt) / 1_000_000).toFixed(1);
             if (!doc.publishedSinceClose) {
@@ -327,6 +340,21 @@ export class DiagnosticsTracker {
                         `Further unversioned empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
                             `credited to closed generation ${generation}: the server versions its publishes`,
                     );
+                } else if (doc.acceptedAtOnce) {
+                    doc.acceptedAtOnce = false;
+                    tentative = true;
+                    status = 'close candidate';
+                    this.log(
+                        `Further empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
+                            'after one was accepted at once: a second clear, held as tentative',
+                    );
+                    this.learnClears('more', `a second empty publish after reopening ${params.uri}`);
+                } else if (this._closeClears === 'once' && doc.clears === 1) {
+                    doc.acceptedAtOnce = true;
+                    this.log(
+                        `Further empty publish for ${params.uri} ${sinceCloseMs}ms after didClose, ` +
+                            'accepted at once: the server clears each close once',
+                    );
                 } else {
                     tentative = true;
                     status = 'close candidate';
@@ -339,6 +367,7 @@ export class DiagnosticsTracker {
         if (doc && generation < doc.generation) {
             doc.closePublishes++;
             doc.closePublishesAfterReopen++;
+            this.countClear(params.uri, doc);
         }
         if (params.version !== undefined && doc && doc.generation > 0) {
             this.versionsPublishes = true;
@@ -394,6 +423,10 @@ export class DiagnosticsTracker {
     /** What the tracker learned about the server publishing on close */
     get closeBehavior(): ClosePublishBehavior {
         return this._closeBehavior;
+    }
+
+    get closeClears(): CloseClears {
+        return this._closeClears;
     }
 
     /** What the tracker learned about how the server delivers diagnostics */
@@ -501,8 +534,9 @@ export class DiagnosticsTracker {
     }
 
     closeWindowEndsAt(uri: string): bigint | undefined {
-        const closedAt = this.documents.get(this.key(uri))?.closedAt;
-        if (closedAt === undefined || this._closeBehavior === 'silent') {
+        const doc = this.documents.get(this.key(uri));
+        const closedAt = doc?.closedAt;
+        if (closedAt === undefined || this._closeBehavior === 'silent' || doc?.acceptedAtOnce) {
             return undefined;
         }
         return closedAt + BigInt(Math.round(this.closeWindowMs * 1_000_000));
@@ -630,6 +664,8 @@ export class DiagnosticsTracker {
             clearTimeout(doc.closeTimer);
         }
         this._closeBehavior = 'unknown';
+        this._closeClears = 'unknown';
+        this.onceStreak = 0;
         this.versionsPublishes = false;
         this.setDelivery('unknown', false);
         this.documents.clear();
@@ -666,6 +702,8 @@ export class DiagnosticsTracker {
         doc.publishedSinceClose = false;
         doc.closePublishes = 0;
         doc.closePublishesAfterReopen = 0;
+        doc.clears = 0;
+        doc.acceptedAtOnce = false;
         doc.closeTimer = setTimeout(() => this.endCloseWindow(uri, doc), this.closeWindowMs);
         // a pending window must not keep the process alive
         doc.closeTimer.unref();
@@ -683,6 +721,8 @@ export class DiagnosticsTracker {
             // about whether the server publishes on close
             if (this._closeBehavior !== 'publishes') {
                 this.learn('silent', `the empty publish after reopening ${uri} was not superseded`);
+            } else {
+                this.learnFromAcceptedCandidate(uri, doc);
             }
             candidate.acceptedAt = process.hrtime.bigint();
             this.deliver(candidate);
@@ -714,6 +754,46 @@ export class DiagnosticsTracker {
             return;
         }
         this.learn('publishes', `empty publish for ${params.uri} right after its didClose`);
+    }
+
+    private isClearingPublish(params: PublishDiagnosticsParams, doc: TrackedDocument): boolean {
+        if (doc.closedAt === undefined || params.diagnostics.length > 0 || doc.closeSync !== this.syncs) {
+            return false;
+        }
+        return !doc.publishedSinceClose || (doc.clears ?? 0) > 0;
+    }
+
+    private countClear(uri: string, doc: TrackedDocument): void {
+        doc.clears = (doc.clears ?? 0) + 1;
+        if (doc.clears > 1) {
+            this.learnClears('more', `${doc.clears} publishes cleared closing ${uri}`);
+        }
+    }
+
+    private learnFromAcceptedCandidate(uri: string, doc: TrackedDocument): void {
+        if (this._closeClears !== 'unknown') {
+            return;
+        }
+        if (doc.clears !== 1) {
+            this.onceStreak = 0;
+            return;
+        }
+        this.onceStreak++;
+        if (this.onceStreak >= CLOSE_CLEARS_ONCE_STREAK) {
+            this.learnClears('once', `${this.onceStreak} closes in a row cleared by one publish, the latest of ${uri}`);
+        }
+    }
+
+    private learnClears(clears: Exclude<CloseClears, 'unknown'>, reason: string): void {
+        if (this._closeClears === clears || this._closeClears === 'more') {
+            return;
+        }
+        this._closeClears = clears;
+        this.log(
+            clears === 'once'
+                ? `Server clears each close once (${reason}), further empty publishes after a reopen are accepted at once`
+                : `Server may clear a close more than once (${reason}), further empty publishes after a reopen are not accepted at once`,
+        );
     }
 
     private learn(behavior: Exclude<ClosePublishBehavior, 'unknown'>, reason: string): void {
