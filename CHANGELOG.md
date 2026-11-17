@@ -1,22 +1,8 @@
 # CHANGELOG
 
-## Unreleased
-
-### Shortening diagnostics waits known to time out
-
-- `--shorten-silent-waits [ms]` (`shortenSilentWaits` in `BenchOptions`, `shortenSilentWaitsMs` in `BenchContextOptions`, default 500 ms for a bare flag, off without it) ends diagnostics push waits of a kind known to time out early, once 3 waits of that kind and method timed out in a row, warmups and restarts included. Silent waits (no publish, lua-language-server on clean files) and reopen waits that saw only the publishes clearing the close (rust-analyzer) end `ms` after their `didOpen` or `didChange`. Waits whose method kept timing out after publishes all failing `until` (bash-language-server `edit-diagnostics` without shellcheck) end `ms` after their latest rejected publish. A wait of a kind that resolves restores the full timeout for later waits of that kind. No wait is shortened while a placeholder is held or while the close window is open. In the second next.6 full run, such timeouts took 2207 s of 3679 s.
-- Shortened waits stay timeouts, so `timeout_rate` and the medians are unchanged unless a server publishes after `ms`. The timing adds `shortened: true` (also in the `waitForDiagnostics` result), `MethodStats` adds `shortened`, `silent_waits` and `until_rejected` add a `shortened` count, and the new optional report field `reopen_waits` (`ReopenWaits`) lists methods with a shortened reopen wait. The printed summary notes them below the table, and verbose mode logs `timeout (shortened)`. All new fields are optional, and without the flag the report is unchanged.
-- `SilenceTracker` adds `recordReopen`, `recordUntilResolved`, `reopenWaits`, `shortens` and `recordShortened`, `DiagnosticsTracker` and `LspHarness` add `closeWindowEndsAt`, and `ShortenedKind` and `ReopenWaits` are exported.
-
-### Skipping the close window hold for servers clearing each close once
-
-- Once a server publishing on close without versions cleared 3 closes in a row with exactly one publish each, and the empty publish held after it was accepted at the end of the close window each time, the empty, unversioned publish after the reopen is accepted at once instead of held until 1000 ms after the `didClose`. Durations do not change, `close_window_ms` disappears from those waits and iteration totals drop. In the second next.6 full run, such holds took 311 s, mostly for zls, yaml-language-server, typescript-language-server and the vscode css, html and json servers.
-- A close cleared by two or more publishes, a candidate superseded after a clearing publish, or a second empty publish after one accepted at once turns this off for the rest of the server process. Publishes for a closed document following a sync of another document (revalidation) do not count. rust-analyzer and servers learned not to publish on close (Langium) are unaffected.
-- Verbose mode logs `Server clears each close once (...)` when it is learned and `accepted at once` for each such publish. `DiagnosticsTracker` adds `closeClears`, and `CloseClears` is exported. The close window of a document whose reopen publish was accepted at once no longer postpones `--shorten-silent-waits`.
-
 ## v0.3.0
 
-Changes since 0.2.0. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, ignore placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips unsupported requests, keeps the report when a server crashes, and can check a report against a baseline. The preview sections below have the details.
+Changes since 0.2.0. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, ignore placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips unsupported requests, keeps the report when a server crashes, and can check a report against a baseline. The details since next.6 close this section, and the preview sections below have the rest.
 
 Checked for compatibility against rust-analyzer, zls, Langium, lua-language-server, bash-language-server, pyright, vscode-json-language-server and TypeScript 7.
 
@@ -47,12 +33,14 @@ Checked for compatibility against rust-analyzer, zls, Langium, lua-language-serv
 - `mode: 'push' | 'pull' | 'auto'` selects delivery. `auto` learns per server whether it pushes or pulls, carrying that across `--restart`. Pulled waits are recorded as `diagnostics/pull/...`.
 - Empty results from a server reporting itself busy are held until it is quiescent.
 - Verbose mode and the report flag waits that repeatedly time out with no publish (`silent_waits`) or with publishes that all fail `until` (`until_rejected`).
+- `--shorten-silent-waits [ms]` ends waits of a kind known to time out early. They still count as timeouts.
+- Servers that clear each close with one publish have the empty publish after a reopen accepted at once instead of held for the close window, so iteration totals drop.
 
 ### New features
 
 - `lsbench baseline` and `lsbench check` record a baseline and fail on regressions in run settings, methods, rates or medians, with configurable tolerances.
 - `--trace <file>` records every LSP message as JSON lines.
-- `--advertise-pull`, `--allow-exit-code`, `--wait-idle`, `--client-capabilities-file`, `--settings-file` and `--server-log`.
+- `--shorten-silent-waits`, `--advertise-pull`, `--allow-exit-code`, `--wait-idle`, `--client-capabilities-file`, `--settings-file` and `--server-log`.
 - `ctx.waitForIdle`, `ctx.capabilities`, `ctx.registrations`, `ctx.supports`, `ctx.lastError`, and a `languageId` option for `openDocument`.
 - Action scripts may be `.js` or `.mjs` as well as `.ts`.
 - New exports for baselines, capabilities, settings, tracing and silence tracking.
@@ -63,7 +51,7 @@ New fields are optional, so 0.2.0 readers keep working apart from nullable laten
 
 - Timings add `result` (`ok`, `empty`, `null`, `error`, `skipped`, `timeout`), retries and diagnostics details.
 - `MethodStats` adds null, empty, timeout and skip rates, plus grace, hold and close window figures when present.
-- Top level adds `lifecycle`, `abnormal_exits`, `tolerated_exits`, `silent_waits` and `until_rejected`.
+- Top level adds `lifecycle`, `abnormal_exits`, `tolerated_exits`, `silent_waits`, `until_rejected` and `reopen_waits`.
 - New `diagnostics/*`, `lifecycle/*` and `server/idle` methods.
 - The printed table adds rate columns and notes below it.
 
@@ -72,6 +60,20 @@ New fields are optional, so 0.2.0 readers keep working apart from nullable laten
 - 0.2.0 did not time diagnostics waits and could resolve on stale publishes.
 - Cold start diagnostics now wait for the real result rather than a loading placeholder, so they may be much slower.
 - Iteration totals and request timings may shift with the new capabilities, skipped requests and excluded timeouts.
+
+### Details since next.6
+
+#### Shortening diagnostics waits known to time out
+
+- `--shorten-silent-waits [ms]` (`shortenSilentWaits` in `BenchOptions`, `shortenSilentWaitsMs` in `BenchContextOptions`, default 500 ms for a bare flag, off without it) ends diagnostics push waits of a kind known to time out early, once 3 waits of that kind and method timed out in a row, warmups and restarts included. Silent waits (no publish, lua-language-server on clean files) and reopen waits that saw only the publishes clearing the close (rust-analyzer) end `ms` after their `didOpen` or `didChange`. Waits whose method kept timing out after publishes all failing `until` (bash-language-server `edit-diagnostics` without shellcheck) end `ms` after their latest rejected publish. A wait of a kind that resolves restores the full timeout for later waits of that kind. No wait is shortened while a placeholder is held or while the close window is open. In the second next.6 full run, such timeouts took 2207 s of 3679 s.
+- Shortened waits stay timeouts, so `timeout_rate` and the medians are unchanged unless a server publishes after `ms`. The timing adds `shortened: true` (also in the `waitForDiagnostics` result), `MethodStats` adds `shortened`, `silent_waits` and `until_rejected` add a `shortened` count, and the new optional report field `reopen_waits` (`ReopenWaits`) lists methods with a shortened reopen wait. The printed summary notes them below the table, and verbose mode logs `timeout (shortened)`. All new fields are optional, and without the flag the report is unchanged.
+- `SilenceTracker` adds `recordReopen`, `recordUntilResolved`, `reopenWaits`, `shortens` and `recordShortened`, `DiagnosticsTracker` and `LspHarness` add `closeWindowEndsAt`, and `ShortenedKind` and `ReopenWaits` are exported.
+
+#### Skipping the close window hold for servers clearing each close once
+
+- Once a server publishing on close without versions cleared 3 closes in a row with exactly one publish each, and the empty publish held after it was accepted at the end of the close window each time, the empty, unversioned publish after the reopen is accepted at once instead of held until 1000 ms after the `didClose`. Durations do not change, `close_window_ms` disappears from those waits and iteration totals drop. In the second next.6 full run, such holds took 311 s, mostly for zls, yaml-language-server, typescript-language-server and the vscode css, html and json servers.
+- A close cleared by two or more publishes, a candidate superseded after a clearing publish, or a second empty publish after one accepted at once turns this off for the rest of the server process. Publishes for a closed document following a sync of another document (revalidation) do not count. rust-analyzer and servers learned not to publish on close (Langium) are unaffected.
+- Verbose mode logs `Server clears each close once (...)` when it is learned and `accepted at once` for each such publish. `DiagnosticsTracker` adds `closeClears`, and `CloseClears` is exported. The close window of a document whose reopen publish was accepted at once no longer postpones `--shorten-silent-waits`.
 
 ## v0.3.0-next.6 (preview)
 
