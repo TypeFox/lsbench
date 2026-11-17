@@ -85,6 +85,7 @@ export interface BenchOptions {
      * (and after each restart) before the script runs, recorded as lifecycle/idle
      */
     waitIdle?: number;
+    shortenSilentWaits?: number;
 }
 
 // ── Timing & Results ────────────────────────────────────────────────────────
@@ -151,6 +152,7 @@ export interface RequestTiming {
      * the publish's receipt, but in the iteration total. Absent when nothing was held
      */
     close_window_ms?: number;
+    shortened?: true;
 }
 
 export interface IterationResult {
@@ -210,6 +212,7 @@ export interface MethodStats {
      */
     close_windowed?: number;
     close_window_median_ms?: number;
+    shortened?: number;
 }
 
 export interface BenchReport {
@@ -250,6 +253,7 @@ export interface BenchReport {
      */
     silent_waits?: Record<string, SilentWaits>;
     until_rejected?: Record<string, UntilRejectedWaits>;
+    reopen_waits?: Record<string, ReopenWaits>;
 }
 
 /** Push waits of one timing method that timed out without any current publish, see BenchReport.silent_waits */
@@ -258,10 +262,18 @@ export interface SilentWaits {
     waits: number;
     /** most silent waits in a row, not interrupted by a resolved wait or one that saw publishes */
     longest_streak: number;
+    shortened?: number;
 }
 
 export interface UntilRejectedWaits {
     waits: number;
+    shortened?: number;
+}
+
+export interface ReopenWaits {
+    waits: number;
+    longest_streak: number;
+    shortened: number;
 }
 
 /** A server exit recorded in abnormal_exits or tolerated_exits */
@@ -388,6 +400,7 @@ export interface WaitForDiagnosticsResult {
      * Absent when nothing was held
      */
     closeWindowMs?: number;
+    shortened?: true;
     /**
      * Milliseconds from the latest didOpen or didChange of the document to the resolving
      * publish (or to the timeout). With `settleMs` that is the latest publish before the

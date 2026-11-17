@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## Unreleased
+
+### Shortening diagnostics waits known to time out
+
+- `--shorten-silent-waits [ms]` (`shortenSilentWaits` in `BenchOptions`, `shortenSilentWaitsMs` in `BenchContextOptions`, default 500 ms for a bare flag, off without it) ends diagnostics push waits of a kind known to time out early, once 3 waits of that kind and method timed out in a row, warmups and restarts included. Silent waits (no publish, lua-language-server on clean files) and reopen waits that saw only the publishes clearing the close (rust-analyzer) end `ms` after their `didOpen` or `didChange`. Waits whose method kept timing out after publishes all failing `until` (bash-language-server `edit-diagnostics` without shellcheck) end `ms` after their latest rejected publish. A wait of a kind that resolves restores the full timeout for later waits of that kind. No wait is shortened while a placeholder is held or while the close window is open. In the second next.6 full run, such timeouts took 2207 s of 3679 s.
+- Shortened waits stay timeouts, so `timeout_rate` and the medians are unchanged unless a server publishes after `ms`. The timing adds `shortened: true` (also in the `waitForDiagnostics` result), `MethodStats` adds `shortened`, `silent_waits` and `until_rejected` add a `shortened` count, and the new optional report field `reopen_waits` (`ReopenWaits`) lists methods with a shortened reopen wait. The printed summary notes them below the table, and verbose mode logs `timeout (shortened)`. All new fields are optional, and without the flag the report is unchanged.
+- `SilenceTracker` adds `recordReopen`, `recordUntilResolved`, `reopenWaits`, `shortens` and `recordShortened`, `DiagnosticsTracker` and `LspHarness` add `closeWindowEndsAt`, and `ShortenedKind` and `ReopenWaits` are exported.
+
 ## v0.3.0
 
 Changes since 0.2.0. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, ignore placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips unsupported requests, keeps the report when a server crashes, and can check a report against a baseline. The preview sections below have the details.

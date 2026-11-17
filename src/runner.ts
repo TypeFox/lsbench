@@ -107,6 +107,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (opts.waitIdle !== undefined) {
         console.log(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
     }
+    if (opts.shortenSilentWaits !== undefined) {
+        console.log(`  Shorten:    diagnostics waits known to time out to ${opts.shortenSilentWaits}ms`);
+    }
     if (serverConfig.allowExitCodes) {
         console.log(`  Allow exit: ${serverConfig.allowExitCodes.join(', ')} after shutdown`);
     }
@@ -162,6 +165,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             contentModifiedRetries: opts.contentModifiedRetries,
             skipUnsupported: opts.skipUnsupported,
             silence,
+            ...(opts.shortenSilentWaits !== undefined ? { shortenSilentWaitsMs: opts.shortenSilentWaits } : {}),
         };
         let lifecycle: RequestTiming[] | undefined;
         // with restart, the diagnostics delivery the previous iteration's server was learned to
@@ -320,6 +324,10 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         const untilRejected = silence.untilRejected();
         if (untilRejected) {
             report.until_rejected = untilRejected;
+        }
+        const reopenWaits = silence.reopenWaits();
+        if (reopenWaits) {
+            report.reopen_waits = reopenWaits;
         }
         if (opts.output) {
             writeReport(report, opts.output);

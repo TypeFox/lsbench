@@ -36,6 +36,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
     const closeWindows: number[] = [];
     let held = 0;
     let heldPublishes = 0;
+    let shortened = 0;
     for (const t of timings) {
         if (t.result === 'skipped') {
             skipped++;
@@ -46,6 +47,9 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
         }
         if (t.held_publishes !== undefined) {
             heldPublishes++;
+        }
+        if (t.shortened) {
+            shortened++;
         }
         if (t.result === 'timeout') {
             timeouts++;
@@ -89,6 +93,7 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
                   close_window_median_ms: round(percentile(sorted(closeWindows), 50)),
               }
             : {}),
+        ...(shortened > 0 ? { shortened } : {}),
     };
 
     // no durations left (all timeouts or skipped): null rather than 0, which would read as instant
@@ -311,7 +316,14 @@ export function printSummary(report: BenchReport): void {
     const held = methods.filter((m) => report.summary[m].held !== undefined);
     const heldPublishes = methods.filter((m) => report.summary[m].held_publishes !== undefined);
     const closeWindowed = methods.filter((m) => report.summary[m].close_windowed !== undefined);
-    if (graced.length > 0 || held.length > 0 || heldPublishes.length > 0 || closeWindowed.length > 0) {
+    const shortened = methods.filter((m) => report.summary[m].shortened !== undefined);
+    if (
+        graced.length > 0 ||
+        held.length > 0 ||
+        heldPublishes.length > 0 ||
+        closeWindowed.length > 0 ||
+        shortened.length > 0
+    ) {
         console.log();
         for (const method of graced) {
             const s = report.summary[method];
@@ -340,6 +352,14 @@ export function printSummary(report: BenchReport): void {
                     `(median ${s.close_window_median_ms}ms, not included above)`,
             );
         }
+        for (const method of shortened) {
+            const s = report.summary[method];
+            const waits = s.shortened === 1 ? '1 wait' : `${s.shortened} waits`;
+            console.log(
+                `  ${method}: ${waits} of a kind known to time out shortened by --shorten-silent-waits ` +
+                    '(counted as timeouts above)',
+            );
+        }
         // a server answering empty while busy loads and may still push, it is not pull only
         if (graced.length > 0 && held.length === 0 && heldPublishes.length === 0) {
             console.log("  Pass mode: 'pull' or a short pullAfterMs to waitForDiagnostics for a pull only server");
@@ -352,7 +372,8 @@ export function printSummary(report: BenchReport): void {
         for (const [method, silent] of Object.entries(report.silent_waits)) {
             console.log(
                 `  ${method}: the server did not publish in ${silent.waits} waits ` +
-                    `(${silent.longest_streak} in a row, warmups included), it may never publish for a clean document`,
+                    `(${silent.longest_streak} in a row, warmups included${shortenedNote(silent.shortened)}), ` +
+                    'it may never publish for a clean document',
             );
         }
         console.log(
@@ -365,11 +386,26 @@ export function printSummary(report: BenchReport): void {
         for (const [method, rejected] of Object.entries(report.until_rejected)) {
             console.log(
                 `  ${method}: ${rejected.waits} waits timed out after publishes that all failed until ` +
-                    '(warmups included), the server may never report what until expects',
+                    `(warmups included${shortenedNote(rejected.shortened)}), the server may never report what until expects`,
             );
         }
         console.log('  Their timeouts do not mean a slow server: check what the server reports for such waits');
     }
 
+    if (report.reopen_waits) {
+        console.log();
+        for (const [method, reopen] of Object.entries(report.reopen_waits)) {
+            console.log(
+                `  ${method}: ${reopen.waits} reopen waits saw only the publishes clearing the close ` +
+                    `(${reopen.longest_streak} in a row, warmups included${shortenedNote(reopen.shortened)}), ` +
+                    'the server may not republish a clean file on reopen',
+            );
+        }
+    }
+
     console.log();
+}
+
+function shortenedNote(shortened: number | undefined): string {
+    return shortened ? `, ${shortened} shortened` : '';
 }

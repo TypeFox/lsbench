@@ -369,6 +369,7 @@ describe('runBenchmark with a server silent on clean files', () => {
         publish: boolean,
         restart: boolean,
         actions = script,
+        extra: Partial<BenchOptions> = {},
     ): Promise<{ report: BenchReport; lines: string[] }> {
         const lines: string[] = [];
         const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
@@ -386,6 +387,7 @@ describe('runBenchmark with a server silent on clean files', () => {
                 output: '',
                 restart,
                 verbose: false,
+                ...extra,
             });
             return { report, lines };
         } finally {
@@ -408,6 +410,23 @@ describe('runBenchmark with a server silent on clean files', () => {
         expect(report.until_rejected).toBeUndefined();
         expect(lines.some((l) => l.includes('did not publish'))).toBe(false);
         expect(lines.some((l) => l.includes('failed until'))).toBe(false);
+    });
+
+    it('shortens silent waits after the streak with shortenSilentWaits, and reports them', async () => {
+        const { report, lines } = await run(false, true, script, { iterations: 3, shortenSilentWaits: 10 });
+        expect(report.summary['diagnostics/open']).toMatchObject({ count: 3, timeout_rate: 1, shortened: 2 });
+        expect(report.silent_waits).toEqual({ 'diagnostics/open': { waits: 5, longest_streak: 5, shortened: 2 } });
+        expect(report.reopen_waits).toBeUndefined();
+        const timings = report.runs.flatMap((r) => r.requests).filter((t) => t.method === 'diagnostics/open');
+        expect(timings.map((t) => t.shortened === true)).toEqual([false, true, true]);
+        expect(lines.some((l) => l.includes('Shorten:    diagnostics waits known to time out to 10ms'))).toBe(true);
+        expect(lines.some((l) => l.includes('2 waits of a kind known to time out shortened'))).toBe(true);
+    });
+
+    it('shortens no waits of a server that publishes', async () => {
+        const { report } = await run(true, false, script, { iterations: 3, shortenSilentWaits: 10 });
+        expect(report.summary['diagnostics/open']).not.toHaveProperty('shortened');
+        expect(report.silent_waits).toBeUndefined();
     });
 
     it('records waits timing out after publishes all failing until, and notes them in the summary', async () => {

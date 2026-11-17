@@ -17,7 +17,7 @@ export {
     RUN_METHOD,
     validateCheckedRun,
 } from './check.js';
-export type { BenchContextOptions } from './context.js';
+export type { BenchContextOptions, ShortenedKind } from './context.js';
 export {
     addRegisteredLanguage,
     BenchContextImpl,
@@ -86,6 +86,7 @@ export type {
     RequestTiming,
     ServerCapabilities,
     ServerConfig,
+    ReopenWaits,
     SilentWaits,
     UntilRejectedWaits,
     WaitForDiagnosticsOptions,

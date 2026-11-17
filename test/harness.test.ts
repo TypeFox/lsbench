@@ -1055,6 +1055,24 @@ describe('DiagnosticsTracker', () => {
             return tracker;
         }
 
+        it('tells when the close window ends while it is open and the server may publish on close', async () => {
+            const tracker = new DiagnosticsTracker(() => {}, 40);
+            tracker.noteNotification('textDocument/didOpen', open());
+            expect(tracker.closeWindowEndsAt(uri)).toBeUndefined();
+            const before = process.hrtime.bigint();
+            tracker.noteNotification('textDocument/didClose', close);
+            const endsAt = tracker.closeWindowEndsAt(uri);
+            expect(endsAt).toBeDefined();
+            expect(endsAt! - before).toBeGreaterThanOrEqual(40_000_000n);
+            expect(endsAt! - process.hrtime.bigint()).toBeLessThanOrEqual(40_000_000n);
+            await sleep(60);
+            expect(tracker.closeWindowEndsAt(uri)).toBeUndefined();
+            expect(tracker.closeBehavior).toBe('silent');
+            tracker.noteNotification('textDocument/didOpen', open());
+            tracker.noteNotification('textDocument/didClose', close);
+            expect(tracker.closeWindowEndsAt(uri)).toBeUndefined();
+        });
+
         it('lets a later publish supersede the tentative empty one and learns the server publishes on close', async () => {
             const logs: string[] = [];
             const tracker = reopened(1000, logs);

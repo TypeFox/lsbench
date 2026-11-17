@@ -23,6 +23,7 @@ import type {
     WaitForDiagnosticsOptions,
     WaitForDiagnosticsResult,
     WaitForIdleOptions,
+    ReopenWaits,
     SilentWaits,
     UntilRejectedWaits,
     WaitForIdleResult,
@@ -82,6 +83,8 @@ interface AutoPull {
 /** Silent waits in a row of one kind after which lsbench hints the server may never publish */
 export const SILENT_WAIT_STREAK = 3;
 
+export type ShortenedKind = 'silent' | 'reopen' | 'until rejected';
+
 /**
  * Counts push waits that timed out without any current publish, per timing method
  * (`diagnostics/open`, `diagnostics/edit`, `diagnostics/wait`). One tracker spans a whole
@@ -90,14 +93,15 @@ export const SILENT_WAIT_STREAK = 3;
  * publishes failing `until`, ends the streak of its method
  */
 export class SilenceTracker {
-    private stats = new Map<string, { waits: number; streak: number; longest: number }>();
-    private rejected = new Map<string, number>();
+    private stats = new Map<string, { waits: number; streak: number; longest: number; shortened: number }>();
+    private rejected = new Map<string, { waits: number; streak: number; shortened: number }>();
+    private reopens = new Map<string, { waits: number; streak: number; longest: number; shortened: number }>();
 
     /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
     record(method: string, silent: boolean): boolean {
         let entry = this.stats.get(method);
         if (!entry) {
-            entry = { waits: 0, streak: 0, longest: 0 };
+            entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
             this.stats.set(method, entry);
         }
         if (!silent) {
@@ -117,27 +121,81 @@ export class SilenceTracker {
         for (const [method, entry] of this.stats) {
             if (entry.longest >= SILENT_WAIT_STREAK) {
                 result ??= {};
-                result[method] = { waits: entry.waits, longest_streak: entry.longest };
+                result[method] = {
+                    waits: entry.waits,
+                    longest_streak: entry.longest,
+                    ...(entry.shortened > 0 ? { shortened: entry.shortened } : {}),
+                };
             }
         }
         return result;
     }
 
     recordUntilRejected(method: string): boolean {
-        const waits = (this.rejected.get(method) ?? 0) + 1;
-        this.rejected.set(method, waits);
-        return waits === SILENT_WAIT_STREAK;
+        let entry = this.rejected.get(method);
+        if (!entry) {
+            entry = { waits: 0, streak: 0, shortened: 0 };
+            this.rejected.set(method, entry);
+        }
+        entry.waits++;
+        entry.streak++;
+        return entry.waits === SILENT_WAIT_STREAK;
+    }
+
+    recordUntilResolved(method: string): void {
+        const entry = this.rejected.get(method);
+        if (entry) {
+            entry.streak = 0;
+        }
     }
 
     untilRejected(): Record<string, UntilRejectedWaits> | undefined {
         let result: Record<string, UntilRejectedWaits> | undefined;
-        for (const [method, waits] of this.rejected) {
-            if (waits >= SILENT_WAIT_STREAK) {
+        for (const [method, entry] of this.rejected) {
+            if (entry.waits >= SILENT_WAIT_STREAK) {
                 result ??= {};
-                result[method] = { waits };
+                result[method] = { waits: entry.waits, ...(entry.shortened > 0 ? { shortened: entry.shortened } : {}) };
             }
         }
         return result;
+    }
+
+    recordReopen(method: string, reopenOnly: boolean): void {
+        let entry = this.reopens.get(method);
+        if (!entry) {
+            entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
+            this.reopens.set(method, entry);
+        }
+        if (!reopenOnly) {
+            entry.streak = 0;
+            return;
+        }
+        entry.waits++;
+        entry.streak++;
+        entry.longest = Math.max(entry.longest, entry.streak);
+    }
+
+    reopenWaits(): Record<string, ReopenWaits> | undefined {
+        let result: Record<string, ReopenWaits> | undefined;
+        for (const [method, entry] of this.reopens) {
+            if (entry.shortened > 0) {
+                result ??= {};
+                result[method] = { waits: entry.waits, longest_streak: entry.longest, shortened: entry.shortened };
+            }
+        }
+        return result;
+    }
+
+    shortens(kind: ShortenedKind, method: string): boolean {
+        const entry = (kind === 'silent' ? this.stats : kind === 'reopen' ? this.reopens : this.rejected).get(method);
+        return (entry?.streak ?? 0) >= SILENT_WAIT_STREAK;
+    }
+
+    recordShortened(kind: ShortenedKind, method: string): void {
+        const entry = (kind === 'silent' ? this.stats : kind === 'reopen' ? this.reopens : this.rejected).get(method);
+        if (entry) {
+            entry.shortened++;
+        }
     }
 }
 
@@ -150,6 +208,7 @@ export interface BenchContextOptions {
     skipUnsupported?: boolean;
     /** Tracks push waits that saw no publish across the run, a private one when absent */
     silence?: SilenceTracker;
+    shortenSilentWaitsMs?: number;
 }
 
 /**
@@ -167,6 +226,7 @@ export class BenchContextImpl implements BenchContext {
     private retryBackoffMs: number;
     private skipUnsupported: boolean;
     private silence: SilenceTracker;
+    private shortenSilentWaitsMs: number | undefined;
     private _lastError: RequestError | undefined;
     /** the latest pulled diagnostics per URI, for previousResultId and unchanged reports */
     private pulled = new Map<string, PulledDiagnostics>();
@@ -179,6 +239,7 @@ export class BenchContextImpl implements BenchContext {
         this.retryBackoffMs = options.retryBackoffMs ?? 20;
         this.skipUnsupported = options.skipUnsupported ?? true;
         this.silence = options.silence ?? new SilenceTracker();
+        this.shortenSilentWaitsMs = options.shortenSilentWaitsMs;
     }
 
     get lastError(): RequestError | undefined {
@@ -644,6 +705,7 @@ export class BenchContextImpl implements BenchContext {
         let lastRejected: DiagnosticsPublish | undefined;
         // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
         let refresh = false;
+        let shortened: { kind: ShortenedKind; method: string } | undefined;
         let wait: PublishWaitResult;
         for (;;) {
             const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
@@ -712,6 +774,49 @@ export class BenchContextImpl implements BenchContext {
                       abort.abort();
                   })
                 : () => {};
+            const shortenTimers = new Map<'cap' | 'rejected', NodeJS.Timeout>();
+            const shortMs = this.shortenSilentWaitsMs;
+            const expected = this.expectedWait(uri, calledAt);
+            const fullEndsAt = calledAt + BigInt(Math.round(timeout * 1_000_000));
+            const shortenAt = (slot: 'cap' | 'rejected', kind: ShortenedKind, at: bigint) => {
+                clearTimeout(shortenTimers.get(slot));
+                if (at >= fullEndsAt) {
+                    shortenTimers.delete(slot);
+                    return;
+                }
+                const delayMs = Math.max(0, Number(at - process.hrtime.bigint()) / 1_000_000);
+                const timer = setTimeout(() => {
+                    if (held > 0 || heldPublishes.size > 0) {
+                        return;
+                    }
+                    const windowEndsAt = this.harness.closeWindowEndsAt(uri);
+                    if (windowEndsAt !== undefined) {
+                        const now = process.hrtime.bigint();
+                        shortenAt(slot, kind, (windowEndsAt > now ? windowEndsAt : now) + 1_000_000n);
+                        return;
+                    }
+                    shortened = { kind, method: expected.method };
+                    abort.abort();
+                }, delayMs);
+                shortenTimers.set(slot, timer);
+            };
+            const stopShortening = (slot: 'cap' | 'rejected') => {
+                clearTimeout(shortenTimers.get(slot));
+                shortenTimers.delete(slot);
+            };
+            let shortenRejected = false;
+            if (shortMs !== undefined && delivery !== 'unknown') {
+                const capKind: ShortenedKind | undefined =
+                    expected.reopen && this.silence.shortens('reopen', expected.method)
+                        ? 'reopen'
+                        : this.silence.shortens('silent', expected.method)
+                          ? 'silent'
+                          : undefined;
+                if (capKind) {
+                    shortenAt('cap', capKind, expected.from + BigInt(Math.round(shortMs * 1_000_000)));
+                }
+                shortenRejected = until !== undefined && this.silence.shortens('until rejected', expected.method);
+            }
             const after = this.harness.currentPublishSeq();
             const waitStartedAt = process.hrtime.bigint();
             wait = await this.harness.waitForPublishes(
@@ -726,8 +831,18 @@ export class BenchContextImpl implements BenchContext {
                     // a placeholder that would resolve the wait is held until the server is quiescent
                     until: (p: DiagnosticsPublish) => {
                         const passed = !until || until(p.diagnostics);
+                        stopShortening('cap');
                         if (!passed) {
                             lastRejected = p;
+                            if (shortenRejected && shortMs !== undefined) {
+                                shortenAt(
+                                    'rejected',
+                                    'until rejected',
+                                    p.receivedAt + BigInt(Math.round(shortMs * 1_000_000)),
+                                );
+                            }
+                        } else {
+                            stopShortening('rejected');
                         }
                         if (passed && isHeldPublish(p)) {
                             if (!heldPublishes.has(p.seq)) {
@@ -745,8 +860,18 @@ export class BenchContextImpl implements BenchContext {
                 },
             );
             clearTimeout(graceTimer);
+            stopShortening('cap');
+            stopShortening('rejected');
             stopNotBusy();
             stopRefresh();
+            if (wait.aborted && shortened !== undefined) {
+                wait = {
+                    ...(wait.publish ? { publish: wait.publish } : {}),
+                    publishes: wait.publishes,
+                    timedOut: true,
+                };
+                break;
+            }
             if (!wait.aborted) {
                 break;
             }
@@ -817,10 +942,14 @@ export class BenchContextImpl implements BenchContext {
         if (closeWindowMs !== undefined) {
             timing.close_window_ms = closeWindowMs;
         }
+        if (shortened) {
+            timing.shortened = true;
+            this.silence.recordShortened(shortened.kind, shortened.method);
+        }
         this.timings.push(timing);
         const untilRejected = timedOut && publishes > 0 && lastRejected !== undefined && heldPublishes.size === 0;
         this.log(
-            `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}, ` +
+            `${method} ${relativePath}: ${ms.toFixed(1)}ms ${timing.result}${shortened ? ' (shortened)' : ''}, ` +
                 `${diagnostics.length} diagnostics, ${publishes} publishes` +
                 `${untilRejected ? `, all failing until (last: ${lastRejected?.diagnostics.length} diagnostics)` : ''}` +
                 `${held > 0 ? `, ${held} empty pull answers held while the server was busy` : ''}` +
@@ -836,6 +965,12 @@ export class BenchContextImpl implements BenchContext {
                     'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
                     'Use `until` or a short timeout for this wait',
             );
+        }
+        if (method === 'diagnostics/open' && doc && doc.generation > 1) {
+            this.silence.recordReopen(method, reopenOnly);
+        }
+        if (!timedOut && lastRejected !== undefined) {
+            this.silence.recordUntilResolved(method);
         }
         if (untilRejected && this.silence.recordUntilRejected(method)) {
             this.log(
@@ -867,7 +1002,19 @@ export class BenchContextImpl implements BenchContext {
             pulls: 0,
             ms: timing.duration_ms,
             ...(closeWindowMs !== undefined ? { closeWindowMs } : {}),
+            ...(shortened ? { shortened: true as const } : {}),
         };
+    }
+
+    private expectedWait(uri: string, calledAt: bigint): { method: string; from: bigint; reopen: boolean } {
+        const doc = this.harness.documentState(uri);
+        if (!doc?.open || doc.syncedBy === undefined) {
+            return { method: 'diagnostics/wait', from: calledAt, reopen: false };
+        }
+        if (doc.syncedBy === 'didOpen') {
+            return { method: 'diagnostics/open', from: doc.syncedAt, reopen: doc.generation > 1 };
+        }
+        return { method: 'diagnostics/edit', from: doc.syncedAt, reopen: false };
     }
 
     /**

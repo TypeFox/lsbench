@@ -500,6 +500,14 @@ export class DiagnosticsTracker {
         return this.latest.get(this.key(uri));
     }
 
+    closeWindowEndsAt(uri: string): bigint | undefined {
+        const closedAt = this.documents.get(this.key(uri))?.closedAt;
+        if (closedAt === undefined || this._closeBehavior === 'silent') {
+            return undefined;
+        }
+        return closedAt + BigInt(Math.round(this.closeWindowMs * 1_000_000));
+    }
+
     /** The current sequence number, a publish received after now has a larger seq */
     currentSeq(): number {
         return this.seq;
@@ -1465,6 +1473,10 @@ export class LspHarness {
     /** What lsbench last told the server about a document through didOpen, didChange and didClose */
     documentState(uri: string): DocumentSyncState | undefined {
         return this.diagnostics.document(uri);
+    }
+
+    closeWindowEndsAt(uri: string): bigint | undefined {
+        return this.diagnostics.closeWindowEndsAt(uri);
     }
 
     /** How the server was learned to deliver diagnostics, see DiagnosticsTracker.delivery */

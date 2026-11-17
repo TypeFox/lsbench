@@ -16,6 +16,7 @@ import { CLI_VERSION } from './version.js';
 
 /** idle wait timeout of --wait-idle without a value */
 const DEFAULT_WAIT_IDLE_MS = 30000;
+const DEFAULT_SHORTEN_SILENT_WAITS_MS = 500;
 
 const program = new Command();
 
@@ -71,6 +72,10 @@ program
         '--wait-idle [ms]',
         `Wait up to ms (default ${DEFAULT_WAIT_IDLE_MS}) for the server to finish background work after initialized`,
     )
+    .option(
+        '--shorten-silent-waits [ms]',
+        `Once 3 diagnostics waits of a kind known to time out did so in a row (no publish, only close publishes on reopen, publishes all failing until), end later ones after ms (default ${DEFAULT_SHORTEN_SILENT_WAITS_MS}), recorded as shortened timeouts`,
+    )
     .option('--server-log <file>', 'Append server stderr and log messages to this file instead of the console')
     .option(
         '--trace <file>',
@@ -102,7 +107,11 @@ program
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
             skipUnsupported: rawOpts.skipUnsupported as boolean,
-            waitIdle: parseWaitIdle(rawOpts.waitIdle as string | boolean | undefined),
+            waitIdle: parseOptionalMs(rawOpts.waitIdle as string | boolean | undefined, DEFAULT_WAIT_IDLE_MS),
+            shortenSilentWaits: parseOptionalMs(
+                rawOpts.shortenSilentWaits as string | boolean | undefined,
+                DEFAULT_SHORTEN_SILENT_WAITS_MS,
+            ),
             serverArgs: serverArgs.length ? serverArgs : undefined,
             initializationOptions,
             clientCapabilities,
@@ -148,6 +157,13 @@ program
         }
         if (opts.waitIdle !== undefined && (Number.isNaN(opts.waitIdle) || opts.waitIdle < 1)) {
             console.error('Error: --wait-idle must be a positive integer');
+            process.exit(1);
+        }
+        if (
+            opts.shortenSilentWaits !== undefined &&
+            (Number.isNaN(opts.shortenSilentWaits) || opts.shortenSilentWaits < 1)
+        ) {
+            console.error('Error: --shorten-silent-waits must be a positive integer');
             process.exit(1);
         }
         if (Number.isNaN(opts.contentModifiedRetries) || (opts.contentModifiedRetries ?? 0) < 0) {
@@ -315,13 +331,12 @@ function collectExitCode(value: string, previous: number[]): number[] {
     return previous.includes(code) ? previous : [...previous, code];
 }
 
-/** The --wait-idle timeout: undefined without the flag, the default for a bare flag */
-function parseWaitIdle(value: string | boolean | undefined): number | undefined {
+function parseOptionalMs(value: string | boolean | undefined, bare: number): number | undefined {
     if (value === undefined || value === false) {
         return undefined;
     }
     if (value === true) {
-        return DEFAULT_WAIT_IDLE_MS;
+        return bare;
     }
     return /^\d+$/.test(value) ? parseInt(value, 10) : Number.NaN;
 }
@@ -711,6 +726,13 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    advertise their provider
           --wait-idle [ms]         After initialized (and each restart), wait up to ms
                                    for the server to become idle before the script  (default: 30000)
+          --shorten-silent-waits [ms]
+                                   Once 3 diagnostics push waits of a kind known to
+                                   time out did so in a row (no publish, only close
+                                   publishes after a reopen, publishes all failing
+                                   until), end later ones of that kind after ms,
+                                   recorded as shortened timeouts. A wait of the
+                                   kind that resolves restores the full timeout     (default: 500)
           --server-log <file>      Append server stderr, window/logMessage, showMessage
                                    and $/logTrace to file, a header line per server
                                    start, instead of the console (even without -v)
@@ -758,6 +780,9 @@ The JSON report (and the printed summary) contains:
                        that all failed the wait's until, warmups included (only for
                        methods with 3 such waits: the server may never report what until
                        expects, so the timeouts do not mean a slow server)
+  - reopen_waits       --shorten-silent-waits only: reopen waits per method that timed
+                       out having seen only the publishes clearing the close (only for
+                       methods with a shortened wait)
 
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started
@@ -795,7 +820,10 @@ waitForDiagnostics call:
                        reopen until the close window ended records the hold as
                        close_window_ms, not included in duration_ms, and the
                        summary entry adds close_windowed and
-                       close_window_median_ms.
+                       close_window_median_ms. A wait ended early by
+                       --shorten-silent-waits is a timeout with shortened: true,
+                       the summary entry adds shortened (how many), and
+                       silent_waits, until_rejected and reopen_waits count them.
 These timings carry the diagnostic count in \`diagnostics\`.
 
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
@@ -830,7 +858,9 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
         that sits at the delay, so compare them against that delay
       silence: some servers never publish for clean files or for some error
         classes, so waits time out; give them a short timeout, and read
-        timeout_rate as "no diagnostics", not "slow"
+        timeout_rate as "no diagnostics", not "slow". --shorten-silent-waits
+        ends such waits early once 3 in a row timed out, which can raise
+        timeout_rate for a server publishing very late
       push vs pull: diagnostics/pull/* has no debounce, so do not compare it
         with diagnostics/open or /edit; pass mode 'push' or 'pull' to force one
       intermediate publishes: some servers (e.g. rust-analyzer) publish an

@@ -124,6 +124,10 @@ class FakeHarness {
         return this.tracker.document(uri);
     }
 
+    closeWindowEndsAt(uri: string): bigint | undefined {
+        return this.tracker.closeWindowEndsAt(uri);
+    }
+
     currentPublishSeq(): number {
         return this.tracker.currentSeq();
     }
@@ -1481,6 +1485,354 @@ describe('BenchContextImpl', () => {
                     expect(silence.untilRejected()).toBeUndefined();
                     expect(lines.some((l) => l.includes('empty publishes held'))).toBe(true);
                     expect(lines.some((l) => l.includes('failing until'))).toBe(false);
+                });
+            });
+
+            describe('shortening waits known to time out', () => {
+                const shortMs = 20;
+
+                function shortening(silence: SilenceTracker, verbose = false): BenchContextImpl {
+                    return new BenchContextImpl(harness as unknown as LspHarness, tmpDir, verbose, {
+                        silence,
+                        shortenSilentWaitsMs: shortMs,
+                    });
+                }
+
+                async function silentOpen(
+                    verbose: BenchContextImpl,
+                    timeout: number,
+                ): Promise<WaitForDiagnosticsResult> {
+                    await verbose.openDocument('sample.ts');
+                    const result = await verbose.waitForDiagnostics('sample.ts', timeout);
+                    await verbose.closeDocument('sample.ts');
+                    return result;
+                }
+
+                async function shortenedLogs(
+                    silence: SilenceTracker,
+                    body: (verbose: BenchContextImpl) => Promise<void>,
+                ): Promise<string[]> {
+                    const lines: string[] = [];
+                    const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                        lines.push(String(line));
+                    });
+                    try {
+                        await body(shortening(silence, true));
+                    } finally {
+                        spy.mockRestore();
+                    }
+                    return lines;
+                }
+
+                function useCloseWindow(ms: number): void {
+                    harness.tracker = new DiagnosticsTracker(() => {}, ms);
+                    linkPlaceholders(harness.tracker, harness.progress);
+                }
+
+                beforeEach(() => {
+                    useCloseWindow(0);
+                });
+
+                it('runs every silent wait to its full timeout without the option', async () => {
+                    const silence = new SilenceTracker();
+                    const plain = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    for (let i = 0; i < SILENT_WAIT_STREAK + 2; i++) {
+                        const result = await silentOpen(plain, 60);
+                        expect(result.timedOut).toBe(true);
+                        expect(result.ms).toBeGreaterThanOrEqual(55);
+                        expect(result).not.toHaveProperty('shortened');
+                    }
+                    expect(plain.collectTimings().some((t) => 'shortened' in t)).toBe(false);
+                    expect(silence.silentWaits()).toEqual({
+                        'diagnostics/open': { waits: SILENT_WAIT_STREAK + 2, longest_streak: SILENT_WAIT_STREAK + 2 },
+                    });
+                });
+
+                it('shortens silent waits once SILENT_WAIT_STREAK of a method timed out in a row', async () => {
+                    const silence = new SilenceTracker();
+                    const lines = await shortenedLogs(silence, async (verbose) => {
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            const result = await silentOpen(verbose, 60);
+                            expect(result.ms).toBeGreaterThanOrEqual(55);
+                            expect(result).not.toHaveProperty('shortened');
+                        }
+                        const result = await silentOpen(verbose, 5000);
+                        expect(result).toMatchObject({ timedOut: true, shortened: true, publishes: 0 });
+                        expect(result.ms).toBeGreaterThanOrEqual(shortMs - 5);
+                        expect(result.ms).toBeLessThan(1000);
+                        const timings = verbose.collectTimings();
+                        expect(timings.at(-1)).toMatchObject({
+                            method: 'diagnostics/open',
+                            result: 'timeout',
+                            success: false,
+                            shortened: true,
+                        });
+                        expect(timings.filter((t) => t.shortened)).toHaveLength(1);
+                    });
+                    expect(silence.silentWaits()).toEqual({
+                        'diagnostics/open': {
+                            waits: SILENT_WAIT_STREAK + 1,
+                            longest_streak: SILENT_WAIT_STREAK + 1,
+                            shortened: 1,
+                        },
+                    });
+                    expect(
+                        lines.some((l) =>
+                            /diagnostics\/open sample\.ts: [\d.]+ms timeout \(shortened\), 0 diagnostics/.test(l),
+                        ),
+                    ).toBe(true);
+                });
+
+                it('restores the full timeout after a silent kind wait resolves', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = shortening(silence);
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        silence.record('diagnostics/open', true);
+                    }
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, [diag('found')]);
+                    const resolved = await verbose.waitForDiagnostics('sample.ts', 5000);
+                    expect(resolved.timedOut).toBe(false);
+                    await verbose.closeDocument('sample.ts');
+                    const full = await silentOpen(verbose, 80);
+                    expect(full).toMatchObject({ timedOut: true });
+                    expect(full).not.toHaveProperty('shortened');
+                    expect(full.ms).toBeGreaterThanOrEqual(75);
+                });
+
+                it('does not shorten waits of a server that publishes', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = shortening(silence);
+                    for (let i = 0; i < SILENT_WAIT_STREAK + 3; i++) {
+                        await verbose.openDocument('sample.ts');
+                        setTimeout(() => harness.setDiagnostics(uri, i % 2 === 0 ? [] : [diag('found')]), shortMs * 2);
+                        const result = await verbose.waitForDiagnostics('sample.ts', 1000);
+                        expect(result.timedOut).toBe(false);
+                        await verbose.closeDocument('sample.ts');
+                    }
+                    expect(verbose.collectTimings().some((t) => t.shortened)).toBe(false);
+                    expect(silence.silentWaits()).toBeUndefined();
+                });
+
+                it('does not shorten a silent kind wait while the close window is open', async () => {
+                    useCloseWindow(120);
+                    const silence = new SilenceTracker();
+                    const verbose = shortening(silence);
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        silence.record('diagnostics/open', true);
+                    }
+                    await verbose.openDocument('sample.ts');
+                    await verbose.closeDocument('sample.ts');
+                    const closedAt = Date.now();
+                    await verbose.openDocument('sample.ts');
+                    const result = await verbose.waitForDiagnostics('sample.ts', 5000);
+                    expect(result).toMatchObject({ timedOut: true, shortened: true });
+                    expect(Date.now() - closedAt).toBeGreaterThanOrEqual(115);
+                    expect(Date.now() - closedAt).toBeLessThan(1000);
+                });
+
+                it('does not shorten a wait while a placeholder publish is held', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = shortening(silence);
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        silence.record('diagnostics/open', true);
+                    }
+                    harness.capabilities = { textDocumentSync: 2 };
+                    harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
+                    await verbose.openDocument('sample.ts');
+                    harness.setDiagnostics(uri, [], 1);
+                    const result = await verbose.waitForDiagnostics('sample.ts', 100);
+                    expect(result.timedOut).toBe(true);
+                    expect(result).not.toHaveProperty('shortened');
+                    expect(result.ms).toBeGreaterThanOrEqual(95);
+                    expect(verbose.collectTimings().at(-1)).toMatchObject({ held_publishes: 1 });
+                });
+
+                it('does not shorten a wait while a pull answer is held', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = shortening(silence);
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        silence.record('diagnostics/open', true);
+                    }
+                    harness.capabilities = { diagnosticProvider: { interFileDependencies: false } };
+                    harness.response = { kind: 'full', items: [] };
+                    harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
+                    await verbose.openDocument('sample.ts');
+                    const result = await verbose.waitForDiagnostics('sample.ts', { timeout: 150, pullAfterMs: 5 });
+                    expect(result.timedOut).toBe(true);
+                    expect(result).not.toHaveProperty('shortened');
+                    expect(result.ms).toBeGreaterThanOrEqual(145);
+                    expect(verbose.collectTimings().at(-1)).toMatchObject({ held_pulls: 1 });
+                });
+
+                it('does not shorten the push grace of a server whose delivery is unknown', async () => {
+                    const silence = new SilenceTracker();
+                    const verbose = shortening(silence);
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        silence.record('diagnostics/open', true);
+                    }
+                    harness.capabilities = { diagnosticProvider: { interFileDependencies: false } };
+                    harness.response = { kind: 'full', items: [diag('pulled')] };
+                    await verbose.openDocument('sample.ts');
+                    const result = await verbose.waitForDiagnostics('sample.ts', {
+                        timeout: 5000,
+                        pullAfterMs: shortMs * 3,
+                    });
+                    expect(result).toMatchObject({ timedOut: false, source: 'pull' });
+                    expect(result).not.toHaveProperty('shortened');
+                });
+
+                describe('reopen waits', () => {
+                    async function reopenOnly(
+                        verbose: BenchContextImpl,
+                        timeout: number,
+                    ): Promise<WaitForDiagnosticsResult> {
+                        await verbose.closeDocument('sample.ts');
+                        harness.setDiagnostics(uri, []);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, []);
+                        return verbose.waitForDiagnostics('sample.ts', timeout);
+                    }
+
+                    it('shortens reopen waits that saw only close publishes, no earlier than the close window ends', async () => {
+                        useCloseWindow(60);
+                        const silence = new SilenceTracker();
+                        const lines = await shortenedLogs(silence, async (verbose) => {
+                            await verbose.openDocument('sample.ts');
+                            harness.setDiagnostics(uri, [], 1);
+                            for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                                const result = await reopenOnly(verbose, 100);
+                                expect(result).toMatchObject({ timedOut: true, publishes: 0 });
+                                expect(result).not.toHaveProperty('shortened');
+                            }
+                            const closedAt = Date.now();
+                            const result = await reopenOnly(verbose, 5000);
+                            expect(result).toMatchObject({ timedOut: true, publishes: 0, shortened: true });
+                            expect(Date.now() - closedAt).toBeGreaterThanOrEqual(55);
+                            expect(Date.now() - closedAt).toBeLessThan(1000);
+                        });
+                        expect(silence.reopenWaits()).toEqual({
+                            'diagnostics/open': {
+                                waits: SILENT_WAIT_STREAK + 1,
+                                longest_streak: SILENT_WAIT_STREAK + 1,
+                                shortened: 1,
+                            },
+                        });
+                        expect(silence.silentWaits()).toBeUndefined();
+                        expect(lines.some((l) => l.includes('timeout (shortened)'))).toBe(true);
+                    });
+
+                    it('restores the full timeout after a reopen wait resolves', async () => {
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [], 1);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            silence.recordReopen('diagnostics/open', true);
+                        }
+                        await verbose.closeDocument('sample.ts');
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('found')]);
+                        expect((await verbose.waitForDiagnostics('sample.ts', 5000)).timedOut).toBe(false);
+                        const result = await reopenOnly(verbose, 80);
+                        expect(result.timedOut).toBe(true);
+                        expect(result).not.toHaveProperty('shortened');
+                        expect(result.ms).toBeGreaterThanOrEqual(75);
+                        expect(silence.reopenWaits()).toBeUndefined();
+                    });
+
+                    it('still resolves with a close candidate accepted when the close window ends', async () => {
+                        useCloseWindow(60);
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            silence.recordReopen('diagnostics/open', true);
+                        }
+                        await verbose.openDocument('sample.ts');
+                        await verbose.closeDocument('sample.ts');
+                        harness.setDiagnostics(uri, []);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, []);
+                        const result = await verbose.waitForDiagnostics('sample.ts', 5000);
+                        expect(result).toMatchObject({ timedOut: false, diagnostics: [] });
+                        expect(result.closeWindowMs).toBeDefined();
+                        expect(result).not.toHaveProperty('shortened');
+                    });
+                });
+
+                describe('waits with publishes failing until', () => {
+                    const rejecting = { until: (d: Diagnostic[]) => d.length > 1 };
+
+                    async function rejectedThenResolved(
+                        verbose: BenchContextImpl,
+                        timeout: number,
+                    ): Promise<WaitForDiagnosticsResult> {
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('one')]);
+                        const rejected = await verbose.waitForDiagnostics('sample.ts', { timeout, ...rejecting });
+                        const resolved = await verbose.waitForDiagnostics('sample.ts', {
+                            timeout: 1000,
+                            until: (d) => d.length === 1,
+                        });
+                        expect(resolved.timedOut).toBe(false);
+                        expect(resolved).not.toHaveProperty('shortened');
+                        await verbose.closeDocument('sample.ts');
+                        return rejected;
+                    }
+
+                    it('ends a wait after its rejected publish, alternating with resolving waits of the method', async () => {
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            const result = await rejectedThenResolved(verbose, 60);
+                            expect(result).toMatchObject({ timedOut: true, publishes: 1 });
+                            expect(result).not.toHaveProperty('shortened');
+                        }
+                        const start = Date.now();
+                        const result = await rejectedThenResolved(verbose, 5000);
+                        expect(result).toMatchObject({ timedOut: true, publishes: 1, shortened: true });
+                        expect(Date.now() - start).toBeLessThan(1000);
+                        expect(silence.untilRejected()).toEqual({
+                            'diagnostics/open': { waits: SILENT_WAIT_STREAK + 1, shortened: 1 },
+                        });
+                        expect(verbose.collectTimings().filter((t) => t.shortened)).toHaveLength(1);
+                    });
+
+                    it('restarts the deadline on each rejected publish', async () => {
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            silence.recordUntilRejected('diagnostics/edit');
+                        }
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [], 1);
+                        await verbose.edit('sample.ts', op(0, 0, 0, 0, 'x'));
+                        const start = Date.now();
+                        for (const at of [10, 25, 40]) {
+                            setTimeout(() => harness.setDiagnostics(uri, [diag('one')], 2), at);
+                        }
+                        const result = await verbose.waitForDiagnostics('sample.ts', { timeout: 5000, ...rejecting });
+                        expect(result).toMatchObject({ timedOut: true, publishes: 3, shortened: true });
+                        expect(Date.now() - start).toBeGreaterThanOrEqual(40 + shortMs - 5);
+                    });
+
+                    it('resolves on a passing publish within the shortened timeout and restores the full timeout', async () => {
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            silence.recordUntilRejected('diagnostics/open');
+                        }
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('one')]);
+                        setTimeout(() => harness.setDiagnostics(uri, [diag('one'), diag('two')]), shortMs / 4);
+                        const resolved = await verbose.waitForDiagnostics('sample.ts', { timeout: 5000, ...rejecting });
+                        expect(resolved).toMatchObject({ timedOut: false, publishes: 2 });
+                        await verbose.closeDocument('sample.ts');
+                        const result = await rejectedThenResolved(verbose, 80);
+                        expect(result.timedOut).toBe(true);
+                        expect(result).not.toHaveProperty('shortened');
+                        expect(result.ms).toBeGreaterThanOrEqual(75);
+                    });
                 });
             });
 

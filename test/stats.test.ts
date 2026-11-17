@@ -461,6 +461,45 @@ describe('printSummary', () => {
         expect(lines.some((line) => line.includes("mode: 'pull'"))).toBe(false);
     });
 
+    it('counts and notes shortened waits, and their share of the known timeout kinds', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const timeout = { duration_ms: 500, success: false, result: 'timeout' as const };
+        const requests = [
+            timing({ method: 'diagnostics/open', ...timeout, shortened: true }),
+            timing({ method: 'diagnostics/open', ...timeout, shortened: true }),
+            timing({ method: 'diagnostics/open', duration_ms: 3000, success: false, result: 'timeout' }),
+            timing({ method: 'diagnostics/open', duration_ms: 40 }),
+            timing({ method: 'diagnostics/edit', duration_ms: 4 }),
+        ];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 4044 }], 4044);
+        expect(report.summary['diagnostics/open']).toMatchObject({ shortened: 2, timeout_rate: 0.75, median_ms: 40 });
+        expect(report.summary['diagnostics/edit']).not.toHaveProperty('shortened');
+        report.silent_waits = { 'diagnostics/open': { waits: 5, longest_streak: 5, shortened: 2 } };
+        report.until_rejected = { 'diagnostics/edit': { waits: 4, shortened: 1 } };
+        report.reopen_waits = { 'diagnostics/open': { waits: 6, longest_streak: 6, shortened: 3 } };
+        printSummary(report);
+        expect(lines).toContain(
+            '  diagnostics/open: 2 waits of a kind known to time out shortened by --shorten-silent-waits ' +
+                '(counted as timeouts above)',
+        );
+        expect(lines.some((line) => line.includes('diagnostics/edit: 1 wait'))).toBe(false);
+        expect(lines).toContain(
+            '  diagnostics/open: the server did not publish in 5 waits (5 in a row, warmups included, 2 shortened), ' +
+                'it may never publish for a clean document',
+        );
+        expect(lines).toContain(
+            '  diagnostics/edit: 4 waits timed out after publishes that all failed until (warmups included, 1 shortened), ' +
+                'the server may never report what until expects',
+        );
+        expect(lines).toContain(
+            '  diagnostics/open: 6 reopen waits saw only the publishes clearing the close ' +
+                '(6 in a row, warmups included, 3 shortened), the server may not republish a clean file on reopen',
+        );
+    });
+
     it('notes silent waits only when the report has them', () => {
         const lines: string[] = [];
         vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
