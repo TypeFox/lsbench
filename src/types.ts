@@ -16,7 +16,8 @@ export interface ServerConfig {
     /**
      * Client settings keyed by section, answering workspace/configuration and sent once via
      * workspace/didChangeConfiguration after initialized. Dotted keys ("html.format") are expanded
-     * into nested objects first, as VS Code does
+     * into nested objects first, as VS Code does. Only the given keys are sent, unlike VS Code,
+     * which sends every setting with its default, so a server may read a missing key as false
      */
     settings?: Record<string, unknown>;
     /**

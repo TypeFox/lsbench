@@ -359,7 +359,8 @@ Options:
   --init-options-file <path>  JSON file with LSP initializationOptions
   --client-capabilities-file <path>
                               JSON file deep merged over the default client capabilities
-  --settings-file <path>      JSON file with client settings keyed by section
+  --settings-file <path>      JSON file with client settings keyed by section. Only the listed keys are sent,
+                              and servers may read a missing key as false (e.g. json.validate.enable)
   --restart                   Restart the server between iterations
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
   --allow-exit-code <n>       Tolerate exit code n after a replied shutdown (repeatable)
@@ -396,6 +397,8 @@ Server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` are fo
 ```text
 ===== 2026-11-11T10:15:02.123Z server start: yaml-language-server --stdio
 ```
+
+With `--settings-file`, the expanded settings are logged as `Sending workspace/didChangeConfiguration: {...}` each time they are sent.
 
 When a server crashes, the tail of its stderr is still included in the error message either way.
 
@@ -447,6 +450,8 @@ lsbench "vscode-html-language-server --stdio" -w ./project -s ./actions.ts \
 ```
 
 Like VS Code, lsbench first expands dotted keys into nested objects, at every level, so the example above becomes `{ "js/ts": { ... }, "html": { "format": { "enable": true } } }`. Keys that meet at the same path deep merge, and on a conflict a key without dots wins over a dotted one. Each `workspace/configuration` item's `section` is then resolved as a dotted path into the expanded settings: `html` gets `{ "format": { "enable": true } }` and `html.format.enable` gets `true`. An unknown section gets `null`, and an item without a section gets the whole settings object. After `initialized`, the expanded settings are also sent once with `workspace/didChangeConfiguration` as `{ settings }`, and again after each restart. Without a settings file, every item gets `{}` and no `didChangeConfiguration` is sent.
+
+Only the keys in the file are sent. VS Code sends every setting with its default, so a server written against VS Code may read a missing key as `false`. For example, vscode-json-language-server turns schema validation off unless `json.validate.enable` is `true`, so a settings file with only `"json.format.enable": true` disables validation and diagnostics waits time out. List every setting the server needs. Verbose mode logs the settings sent with `didChangeConfiguration`, so a missing key is easy to spot.
 
 For full control over `command`, `args`, `env`, `initializationOptions`, `clientCapabilities`, `settings` and `allowExitCodes`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults, and `expandSettings()` shows how settings are expanded.
 

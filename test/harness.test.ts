@@ -791,7 +791,7 @@ describe('LspHarness settings', () => {
         didChangeConfiguration: unknown[];
     }
 
-    async function dumpWith(settings?: Record<string, unknown>): Promise<SettingsDump> {
+    async function dumpWith(settings?: Record<string, unknown>, verbose = false): Promise<SettingsDump> {
         const harness = new LspHarness(
             {
                 command: process.execPath,
@@ -799,6 +799,7 @@ describe('LspHarness settings', () => {
                 settings,
             },
             process.cwd(),
+            verbose,
         );
         try {
             await harness.start();
@@ -833,6 +834,23 @@ describe('LspHarness settings', () => {
         });
         expect(dump.configuration).toEqual([{ enable: true }, expanded.html, expanded['js/ts'], null, expanded]);
         expect(dump.didChangeConfiguration).toEqual([{ settings: expanded }]);
+    });
+
+    it('logs the expanded settings sent with didChangeConfiguration in verbose mode', async () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+            lines.push(String(msg));
+        });
+        try {
+            await dumpWith({ 'json.format.enable': true }, true);
+            await dumpWith(undefined, true);
+        } finally {
+            vi.restoreAllMocks();
+        }
+        const sent = lines.filter((line) => line.startsWith('[lsbench] Sending workspace/'));
+        expect(sent).toEqual([
+            '[lsbench] Sending workspace/didChangeConfiguration: {"json":{"format":{"enable":true}}}',
+        ]);
     });
 });
 

@@ -11,6 +11,10 @@ Langium open waits no longer time out after a reopen because lsbench mistook its
 - A push wait that held an empty publish after a reopen until the close window ended records the hold, from the publish's receipt (or the call of the wait, when later) to the end of the window, as the new timing field `close_window_ms` (`closeWindowMs` in the `waitForDiagnostics` result). It is not included in `duration_ms`, which still runs to the publish's receipt. In next.5 the hold showed only in the iteration total: zls `open-diagnostics` iterations took about 1000 ms while their three `diagnostics/open` timings added up to about 230 ms. `MethodStats` adds `close_windowed` and `close_window_median_ms` when any timing has it, the printed summary notes such methods below the table, and verbose mode adds the hold to the `diagnostics/...` line. All new fields are optional, so the report change is additive. `DiagnosticsPublish` adds `acceptedAt`.
 - The reopen timeout hint no longer claims the server did not republish when every publish it saw arrived after the reopen and was credited to the close by the learned rule. `DocumentSyncState` adds `closePublishesAfterReopen`.
 
+### Settings
+
+- The README, `--help` and the primer note that `--settings-file` sends only the listed keys, unlike VS Code, which sends every setting with its default, so a server may read a missing key as `false`. With only `"json.format.enable": true`, vscode-json-language-server turned schema validation off and every `edit-diagnostics` wait timed out. Verbose mode logs the expanded settings sent with `workspace/didChangeConfiguration`.
+
 ## v0.3.0-next.5 (preview)
 
 `lsbench check` no longer fails on the median of a single sample, such as the lifecycle methods of a run without `--restart`.

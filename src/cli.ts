@@ -48,7 +48,10 @@ program
     .option('-o, --output <path>', 'Output file for JSON report', '')
     .option('--init-options-file <path>', 'Path to a JSON file with LSP initializationOptions')
     .option('--client-capabilities-file <path>', 'Path to a JSON file deep merged over the default client capabilities')
-    .option('--settings-file <path>', 'Path to a JSON file with client settings keyed by section')
+    .option(
+        '--settings-file <path>',
+        'Path to a JSON file with client settings keyed by section. Only the listed keys are sent, and servers may read a missing key as false (e.g. json.validate.enable)',
+    )
     .option('--restart', 'Restart the server between each iteration (measures cold start)', false)
     .option('--shutdown-timeout <ms>', 'Milliseconds to wait for a shutdown reply before killing the server', '5000')
     .option(
@@ -669,7 +672,10 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    JSON file deep merged over the client capabilities
           --settings-file <p>      JSON file with client settings keyed by section,
                                    dotted keys expanded, for workspace/configuration and
-                                   sent once via workspace/didChangeConfiguration
+                                   sent once via workspace/didChangeConfiguration.
+                                   Only the listed keys are sent, unlike VS Code,
+                                   and servers may read a missing key as false
+                                   (e.g. json.validate.enable for the JSON server)
           --restart                Restart the server each iteration (cold start)   (default: false)
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
           --allow-exit-code <n>    Tolerate exit code n after a replied shutdown,

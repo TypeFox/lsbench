@@ -1290,6 +1290,7 @@ export class LspHarness {
 
         // push the settings once, for servers that read them from didChangeConfiguration
         if (this.settings) {
+            this.log(`Sending workspace/didChangeConfiguration: ${JSON.stringify(this.settings)}`);
             this.connection.sendNotification('workspace/didChangeConfiguration', { settings: this.settings });
         }
     }
