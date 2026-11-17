@@ -43,6 +43,7 @@ export type {
     SaveSyncOptions,
     ServerExit,
     ServerStatusParams,
+    WireDirection,
 } from './harness.js';
 export {
     CLOSE_PUBLISH_WINDOW_MS,
@@ -60,6 +61,7 @@ export {
     resolveConfigurationSection,
     ServerOutput,
     uriToPath,
+    WireTrace,
 } from './harness.js';
 export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
 export { buildReport, computeMethodStats, printSummary } from './stats.js';

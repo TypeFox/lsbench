@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { PublishStatus } from 'lsbench';
-import { DiagnosticsTracker, formatPublishLine, LspHarness, ServerOutput } from 'lsbench';
+import { DiagnosticsTracker, formatPublishLine, LspHarness, ServerOutput, WireTrace } from 'lsbench';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('formatPublishLine', () => {
@@ -227,6 +227,64 @@ describe('LspHarness verbose output', () => {
         expect(log).toMatch(/^===== .* server start: /);
         for (const line of ['stderr hello', 'log hello', 'showMessage: show hello', 'trace: trace hello']) {
             expect(log).toContain(`${line}\n`);
+        }
+    });
+});
+
+describe('WireTrace', () => {
+    function readLines(file: string): Array<Record<string, unknown>> {
+        return fs
+            .readFileSync(file, 'utf-8')
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+    }
+
+    it('writes messages, spawns and iterations as JSON lines and drops lines after close', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-wire-trace-'));
+        try {
+            const file = path.join(dir, 'trace.jsonl');
+            const trace = new WireTrace(file, process.hrtime.bigint());
+            trace.spawn('server', ['--stdio']);
+            trace.iteration(2, false);
+            trace.message('out', { jsonrpc: '2.0', id: 1, method: 'textDocument/hover', params: {} } as never);
+            trace.message('in', { jsonrpc: '2.0', id: 1, result: null } as never);
+            await trace.close();
+            trace.message('in', { jsonrpc: '2.0', method: 'late' } as never);
+            await trace.close();
+
+            const lines = readLines(file);
+            expect(lines).toEqual([
+                { t: expect.any(Number), spawn: true, iso: expect.any(String), command: 'server', args: ['--stdio'] },
+                { t: expect.any(Number), iteration: 2, warmup: false },
+                {
+                    t: expect.any(Number),
+                    dir: 'out',
+                    msg: { jsonrpc: '2.0', id: 1, method: 'textDocument/hover', params: {} },
+                },
+                { t: expect.any(Number), dir: 'in', msg: { jsonrpc: '2.0', id: 1, result: null } },
+            ]);
+            for (let i = 1; i < lines.length; i++) {
+                expect(lines[i].t as number).toBeGreaterThanOrEqual(lines[i - 1].t as number);
+            }
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('measures t from the origin in milliseconds', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-wire-trace-'));
+        try {
+            const file = path.join(dir, 'trace.jsonl');
+            // an origin 5 seconds ago
+            const trace = new WireTrace(file, process.hrtime.bigint() - 5_000_000_000n);
+            trace.iteration(1, true);
+            await trace.close();
+            const [line] = readLines(file);
+            expect(line.t as number).toBeGreaterThanOrEqual(5000);
+            expect(line.t as number).toBeLessThan(6000);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
         }
     });
 });

@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-// runs the built CLI end to end with --server-log and -v, against a fake server that
+// runs the built CLI end to end with --server-log, --trace and -v, against a fake server that
 // writes to stderr, logs a message and publishes diagnostics for an opened document
 
 const chattyServer = `
@@ -105,5 +105,43 @@ describe('lsbench CLI with --server-log', () => {
         const result = runCli('--server-log', path.join(tmpDir, 'missing', 'server.log'));
         expect(result.status).toBe(1);
         expect(result.stderr).toMatch(/Error: Cannot write server log/);
+    });
+
+    it('traces the messages of the run with --trace', () => {
+        const trace = path.join(tmpDir, 'trace.jsonl');
+        const result = runCli('--trace', trace);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain(`Trace:      ${trace}`);
+        const lines = fs
+            .readFileSync(trace, 'utf-8')
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+        const methods: string[] = [];
+        for (const line of lines) {
+            if (line.msg?.method) {
+                methods.push(`${line.dir} ${line.msg.method}`);
+            }
+        }
+        const open = methods.indexOf('out textDocument/didOpen');
+        expect(open).toBeGreaterThan(0);
+        expect(methods.indexOf('in textDocument/publishDiagnostics')).toBeGreaterThan(open);
+        expect(methods).toContain('in window/logMessage');
+        expect(lines.filter((line) => 'iteration' in line)).toEqual([
+            { t: expect.any(Number), iteration: 1, warmup: false },
+        ]);
+    });
+
+    it('rejects a trace that cannot be written', () => {
+        const result = runCli('--trace', path.join(tmpDir, 'missing', 'trace.jsonl'));
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/Error: Cannot write trace/);
+    });
+
+    it('documents --trace in the help and the primer', () => {
+        const help = spawnSync(process.execPath, [path.resolve('dist/cli.js'), 'run', '--help'], { encoding: 'utf-8' });
+        expect(help.stdout).toContain('--trace <file>');
+        const primer = spawnSync(process.execPath, [path.resolve('dist/cli.js'), 'prime'], { encoding: 'utf-8' });
+        expect(primer.stdout).toContain('--trace <file>');
     });
 });

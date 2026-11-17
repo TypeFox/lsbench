@@ -976,6 +976,8 @@ export interface ServerExit {
 export interface LspHarnessOptions {
     /** append server stderr and log messages to this file instead of the console */
     serverLog?: string;
+    /** record every message exchanged with the server to this trace, shared across restarts */
+    trace?: WireTrace;
 }
 
 /**
@@ -1009,6 +1011,8 @@ export class LspHarness {
     private settings: Record<string, unknown> | undefined;
     /** routes server stderr and log messages to the server log file or the console */
     private output: ServerOutput;
+    /** records the messages exchanged with the server, when tracing */
+    private trace: WireTrace | undefined;
     /** called on each workspace/diagnostic/refresh from the server */
     private refreshListeners = new Set<() => void>();
 
@@ -1021,6 +1025,7 @@ export class LspHarness {
         this.verbose = verbose;
         this.settings = config.settings ? expandSettings(config.settings) : undefined;
         this.output = new ServerOutput(options.serverLog, verbose);
+        this.trace = options.trace;
         this.diagnostics = new DiagnosticsTracker(
             (msg) => this.log(msg),
             CLOSE_PUBLISH_WINDOW_MS,
@@ -1086,6 +1091,7 @@ export class LspHarness {
 
         this.log(`Spawning: ${command} ${args.join(' ')}`);
         this.output.open(command, args);
+        this.trace?.spawn(command, args);
         const spawnStart = process.hrtime.bigint();
 
         // spawn from the current working directory, not the workspace: the server
@@ -1152,9 +1158,11 @@ export class LspHarness {
         // Create JSON-RPC connection over stdio
         const input = this.process.stdout!;
         const output = this.process.stdin!;
+        // only wrap the reader and writer when tracing, so an untraced run pays nothing
+        const trace = this.trace;
         this.connection = rpc.createMessageConnection(
-            new rpc.StreamMessageReader(input),
-            new rpc.StreamMessageWriter(output),
+            trace ? trace.reader(input) : new rpc.StreamMessageReader(input),
+            trace ? trace.writer(output) : new rpc.StreamMessageWriter(output),
         );
 
         this.connection.listen();
@@ -2015,6 +2023,91 @@ export class ServerOutput {
             }
             this.toConsole(out);
         }
+    }
+}
+
+/** Direction of a traced message: `out` from lsbench to the server, `in` from the server */
+export type WireDirection = 'out' | 'in';
+
+/**
+ * Records every JSON-RPC message exchanged with the server as JSON lines in a file, one trace
+ * per run spanning server restarts. Each line carries `t`, the milliseconds since `origin` on
+ * the `process.hrtime` clock the timings use, and one of: a message with its direction
+ * (`{"t","dir","msg"}`), a server start (`{"t","spawn":true,"iso","command","args"}`) or an
+ * iteration start (`{"t","iteration","warmup"}`). The file is truncated when opened, and lines
+ * written after close or a write error are dropped
+ */
+export class WireTrace {
+    private stream: fs.WriteStream | null;
+
+    constructor(
+        private file: string,
+        private origin: bigint = process.hrtime.bigint(),
+    ) {
+        const stream = fs.createWriteStream(file, { flags: 'w' });
+        stream.on('error', (err) => {
+            console.error(`[lsbench] Cannot write trace ${this.file}: ${err.message}`);
+            this.stream = null;
+        });
+        this.stream = stream;
+    }
+
+    /** A message sent to or received from the server */
+    message(dir: WireDirection, msg: rpc.Message): void {
+        this.write({ t: this.now(), dir, msg });
+    }
+
+    /** A server process about to be spawned */
+    spawn(command: string, args: string[]): void {
+        this.write({ t: this.now(), spawn: true, iso: new Date().toISOString(), command, args });
+    }
+
+    /** The start of an iteration, numbered from 1 among the warmups or the timed iterations */
+    iteration(iteration: number, warmup: boolean): void {
+        this.write({ t: this.now(), iteration, warmup });
+    }
+
+    /** Wrap a reader so each message it delivers is traced as `in` first */
+    reader(input: NodeJS.ReadableStream): rpc.MessageReader {
+        const traceIn = (msg: rpc.Message) => this.message('in', msg);
+        return new (class extends rpc.StreamMessageReader {
+            override listen(callback: rpc.DataCallback): rpc.Disposable {
+                return super.listen((msg) => {
+                    traceIn(msg);
+                    callback(msg);
+                });
+            }
+        })(input);
+    }
+
+    /** Wrap a writer so each message is traced as `out` before it is written */
+    writer(output: NodeJS.WritableStream): rpc.MessageWriter {
+        const traceOut = (msg: rpc.Message) => this.message('out', msg);
+        return new (class extends rpc.StreamMessageWriter {
+            override write(msg: rpc.Message): Promise<void> {
+                traceOut(msg);
+                return super.write(msg);
+            }
+        })(output);
+    }
+
+    /** End the file stream, resolving once it is written */
+    close(): Promise<void> {
+        const stream = this.stream;
+        this.stream = null;
+        if (!stream) {
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => stream.end(() => resolve()));
+    }
+
+    /** Milliseconds since the origin, rounded to microseconds like the report */
+    private now(): number {
+        return Math.round(Number(process.hrtime.bigint() - this.origin) / 1000) / 1000;
+    }
+
+    private write(line: object): void {
+        this.stream?.write(`${JSON.stringify(line)}\n`);
     }
 }
 

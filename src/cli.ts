@@ -72,6 +72,10 @@ program
         `Wait up to ms (default ${DEFAULT_WAIT_IDLE_MS}) for the server to finish background work after initialized`,
     )
     .option('--server-log <file>', 'Append server stderr and log messages to this file instead of the console')
+    .option(
+        '--trace <file>',
+        'Write every LSP message in both directions to this file as JSON lines, with timestamps and iteration markers (adds overhead to timings)',
+    )
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
         // Extra arguments after `--` are passed through to the language server command
@@ -94,6 +98,7 @@ program
             restart: rawOpts.restart as boolean,
             verbose: rawOpts.verbose as boolean,
             serverLog: rawOpts.serverLog as string | undefined,
+            trace: rawOpts.trace as string | undefined,
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
             skipUnsupported: rawOpts.skipUnsupported as boolean,
@@ -157,6 +162,17 @@ program
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.error(`Error: Cannot write server log ${opts.serverLog}: ${msg}`);
+                process.exit(1);
+            }
+        }
+
+        // fail early on a trace file that cannot be written, the run truncates it anyway
+        if (opts.trace) {
+            try {
+                fs.writeFileSync(opts.trace, '');
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`Error: Cannot write trace ${opts.trace}: ${msg}`);
                 process.exit(1);
             }
         }
@@ -698,6 +714,10 @@ experimental/serverStatus (verbose mode logs progress titles).
           --server-log <file>      Append server stderr, window/logMessage, showMessage
                                    and $/logTrace to file, a header line per server
                                    start, instead of the console (even without -v)
+          --trace <file>           Write every LSP message both ways to file as JSON
+                                   lines {"t","dir":"out"|"in","msg"}, with server
+                                   starts and iteration markers. t is ms since the
+                                   run start. Off by default, adds overhead to timings
       -v, --verbose                Verbose logging: requests, publishes, progress   (default: false)
       -V, --version                Print version
       -h, --help                   Print help
@@ -825,6 +845,10 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
       [lsbench] Publish src/a.ts v=3 n=2 current: <first message, max 100 chars>
     with status current, stale, closed, close candidate or unopened. Server
     stderr and log messages are prefixed [server]; --server-log <file> moves
-    them to a file (appended, a header per server start) instead.
+    them to a file (appended, a header per server start) instead. --trace <file>
+    records the raw LSP messages both ways as JSON lines, one per message:
+      {"t":1014.5,"dir":"out","msg":{"jsonrpc":"2.0","method":"textDocument/didChange",...}}
+    plus {"t","spawn":true,...} per server start and {"t","iteration":3,"warmup":false}
+    per iteration. t is ms since the run start; tracing slows the timings down.
 `;
 }

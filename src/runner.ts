@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
 import { BenchContextImpl, SilenceTracker } from './context.js';
-import { type DiagnosticsDelivery, LspHarness } from './harness.js';
+import { type DiagnosticsDelivery, LspHarness, WireTrace } from './harness.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
     AbnormalExit,
@@ -116,223 +116,234 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (opts.serverLog) {
         console.log(`  Server log: ${path.resolve(opts.serverLog)}`);
     }
+    if (opts.trace) {
+        console.log(`  Trace:      ${path.resolve(opts.trace)}`);
+    }
     console.log();
 
     const benchStart = process.hrtime.bigint();
-
-    // tear down a harness, recording an abnormal exit or failed teardown instead of throwing
-    const abnormalExits: AbnormalExit[] = [];
-    const recordAbnormal = (exit: AbnormalExit) => {
-        abnormalExits.push(exit);
-        console.error(`  Warning: server ${exit.reason} during ${exit.during}`);
-    };
-    // exits with an allowed code after a replied shutdown, kept apart so they do not fail the run
-    const toleratedExits: AbnormalExit[] = [];
-    const teardown = async (h: LspHarness, during: string) => {
-        try {
-            const exit = await h.stop(opts.shutdownTimeout);
-            if (exit?.tolerated) {
-                toleratedExits.push({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
-            }
-            if (exit?.abnormal) {
-                recordAbnormal({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
-            }
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            recordAbnormal({ during, code: null, signal: null, reason: `teardown failed: ${msg}` });
-        }
-    };
-
-    // with restart, an exit seen while stopping an iteration's server happened at shutdown,
-    // after the iteration's work, while one seen before stopping happened during the iteration
-    const restartTeardownLabel = (h: LspHarness, during: string) => (h.exit ? during : `teardown of ${during}`);
-
-    let harness: LspHarness | null = null;
-    let ctx: BenchContextImpl | null = null;
-    // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
-    const harnessOptions = { serverLog: opts.serverLog };
-    // one silence tracker for the run, so silent waits add up across warmups and restarts
-    const silence = new SilenceTracker();
-    const ctxOptions = {
-        contentModifiedRetries: opts.contentModifiedRetries,
-        skipUnsupported: opts.skipUnsupported,
-        silence,
-    };
-    let lifecycle: RequestTiming[] | undefined;
-    // with restart, the diagnostics delivery the previous iteration's server was learned to
-    // use, seeded into the next harness so warmups teach it and timed iterations skip the
-    // push grace of auto waits. A carried tentative pull still flips on the first push
-    let carriedDelivery: { delivery: DiagnosticsDelivery; tentative: boolean } | undefined;
-    // in verbose mode, summarize capabilities once, after the first server is up
-    let capabilitiesLogged = !opts.verbose;
-    const logCapabilities = (h: LspHarness) => {
-        if (capabilitiesLogged) {
-            return;
-        }
-        capabilitiesLogged = true;
-        printCapabilitySummary(h, opts.skipUnsupported ?? true);
-    };
-
-    // Start server if we're keeping it alive across iterations
-    if (!opts.restart) {
-        harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
-        await harness.start();
-        await waitIdleAfterStart(harness, opts.waitIdle);
-        lifecycle = harness.takeLifecycleTimings();
-        logCapabilities(harness);
-        ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
-    }
-
-    for (let i = 0; i < totalIterations; i++) {
-        const isWarmup = i < opts.warmup;
-        const iterNum = isWarmup ? `warmup ${i + 1}/${opts.warmup}` : `${i - opts.warmup + 1}/${opts.iterations}`;
-        const during = isWarmup ? `warmup ${i + 1}` : `iteration ${i - opts.warmup + 1}`;
-
-        // verbose ctx and server lines follow, so end the progress line there and print the
-        // time on its own line below them, otherwise append the time to the progress line
-        process.stdout.write(`  Running iteration ${iterNum}...${opts.verbose ? '\n' : ''}`);
-
-        const iterStart = process.hrtime.bigint();
-        // with restart, this iteration's spawn and initialize timings
-        let startTimings: RequestTiming[] = [];
-
-        // If restarting, create fresh harness each time (inside timed section
-        // so cold-start benchmarks capture server spawn + initialize time)
-        if (opts.restart) {
-            harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
-            if (carriedDelivery) {
-                harness.seedDiagnosticsDelivery(carriedDelivery.delivery, carriedDelivery.tentative);
-            }
-            ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
+    // the trace shares the run's clock, its t is milliseconds since benchStart
+    const trace = opts.trace ? new WireTrace(opts.trace, benchStart) : undefined;
+    try {
+        // tear down a harness, recording an abnormal exit or failed teardown instead of throwing
+        const abnormalExits: AbnormalExit[] = [];
+        const recordAbnormal = (exit: AbnormalExit) => {
+            abnormalExits.push(exit);
+            console.error(`  Warning: server ${exit.reason} during ${exit.during}`);
+        };
+        // exits with an allowed code after a replied shutdown, kept apart so they do not fail the run
+        const toleratedExits: AbnormalExit[] = [];
+        const teardown = async (h: LspHarness, during: string) => {
             try {
-                await harness.start();
-                await waitIdleAfterStart(harness, opts.waitIdle);
-                startTimings = harness.takeLifecycleTimings();
-                logCapabilities(harness);
-            } catch (err: unknown) {
-                // without collected runs there is nothing to keep, so fail as before
-                if (runs.length === 0) {
-                    throw err;
+                const exit = await h.stop(opts.shutdownTimeout);
+                if (exit?.tolerated) {
+                    toleratedExits.push({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
                 }
+                if (exit?.abnormal) {
+                    recordAbnormal({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
+                }
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                recordAbnormal({ during, code: null, signal: null, reason: `teardown failed: ${msg}` });
+            }
+        };
+
+        // with restart, an exit seen while stopping an iteration's server happened at shutdown,
+        // after the iteration's work, while one seen before stopping happened during the iteration
+        const restartTeardownLabel = (h: LspHarness, during: string) => (h.exit ? during : `teardown of ${during}`);
+
+        let harness: LspHarness | null = null;
+        let ctx: BenchContextImpl | null = null;
+        // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
+        const harnessOptions = { serverLog: opts.serverLog, trace };
+        // one silence tracker for the run, so silent waits add up across warmups and restarts
+        const silence = new SilenceTracker();
+        const ctxOptions = {
+            contentModifiedRetries: opts.contentModifiedRetries,
+            skipUnsupported: opts.skipUnsupported,
+            silence,
+        };
+        let lifecycle: RequestTiming[] | undefined;
+        // with restart, the diagnostics delivery the previous iteration's server was learned to
+        // use, seeded into the next harness so warmups teach it and timed iterations skip the
+        // push grace of auto waits. A carried tentative pull still flips on the first push
+        let carriedDelivery: { delivery: DiagnosticsDelivery; tentative: boolean } | undefined;
+        // in verbose mode, summarize capabilities once, after the first server is up
+        let capabilitiesLogged = !opts.verbose;
+        const logCapabilities = (h: LspHarness) => {
+            if (capabilitiesLogged) {
+                return;
+            }
+            capabilitiesLogged = true;
+            printCapabilitySummary(h, opts.skipUnsupported ?? true);
+        };
+
+        // Start server if we're keeping it alive across iterations
+        if (!opts.restart) {
+            harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
+            await harness.start();
+            await waitIdleAfterStart(harness, opts.waitIdle);
+            lifecycle = harness.takeLifecycleTimings();
+            logCapabilities(harness);
+            ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
+        }
+
+        for (let i = 0; i < totalIterations; i++) {
+            const isWarmup = i < opts.warmup;
+            const iterNum = isWarmup ? `warmup ${i + 1}/${opts.warmup}` : `${i - opts.warmup + 1}/${opts.iterations}`;
+            const during = isWarmup ? `warmup ${i + 1}` : `iteration ${i - opts.warmup + 1}`;
+
+            // verbose ctx and server lines follow, so end the progress line there and print the
+            // time on its own line below them, otherwise append the time to the progress line
+            process.stdout.write(`  Running iteration ${iterNum}...${opts.verbose ? '\n' : ''}`);
+            // mark the iteration before a restart spawns its server, so cold starts fall inside it
+            trace?.iteration(isWarmup ? i + 1 : i - opts.warmup + 1, isWarmup);
+
+            const iterStart = process.hrtime.bigint();
+            // with restart, this iteration's spawn and initialize timings
+            let startTimings: RequestTiming[] = [];
+
+            // If restarting, create fresh harness each time (inside timed section
+            // so cold-start benchmarks capture server spawn + initialize time)
+            if (opts.restart) {
+                harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
+                if (carriedDelivery) {
+                    harness.seedDiagnosticsDelivery(carriedDelivery.delivery, carriedDelivery.tentative);
+                }
+                ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
+                try {
+                    await harness.start();
+                    await waitIdleAfterStart(harness, opts.waitIdle);
+                    startTimings = harness.takeLifecycleTimings();
+                    logCapabilities(harness);
+                } catch (err: unknown) {
+                    // without collected runs there is nothing to keep, so fail as before
+                    if (runs.length === 0) {
+                        throw err;
+                    }
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
+                    const exit = harness.exit;
+                    recordAbnormal({
+                        during,
+                        code: exit?.code ?? null,
+                        signal: exit?.signal ?? null,
+                        reason: `failed to start: ${msg.split('\n')[0]}`,
+                    });
+                    await teardown(harness, restartTeardownLabel(harness, during));
+                    harness = null;
+                    break;
+                }
+            }
+
+            try {
+                await actionFn(ctx!);
+            } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
-                const exit = harness.exit;
-                recordAbnormal({
-                    during,
-                    code: exit?.code ?? null,
-                    signal: exit?.signal ?? null,
-                    reason: `failed to start: ${msg.split('\n')[0]}`,
-                });
-                await teardown(harness, restartTeardownLabel(harness, during));
+                if (opts.verbose && err instanceof Error) {
+                    console.error(err.stack);
+                }
+            }
+
+            const iterEnd = process.hrtime.bigint();
+            const iterMs = Number(iterEnd - iterStart) / 1_000_000;
+
+            // Collect timings
+            // biome-ignore lint/style/noNonNullAssertion: ctx is always set at this point
+            const timings = ctx!.collectTimings();
+
+            let run: IterationResult | null = null;
+            if (!isWarmup) {
+                run = {
+                    iteration: i - opts.warmup + 1,
+                    requests: [...startTimings, ...timings],
+                    total_ms: Math.round(iterMs * 1000) / 1000,
+                };
+                runs.push(run);
+            }
+
+            const iterTime = `${iterMs.toFixed(0)}ms${isWarmup ? ' (warmup)' : ''}`;
+            console.log(opts.verbose ? `  Iteration ${iterNum}: ${iterTime}` : ` ${iterTime}`);
+
+            // Reset document state between iterations (if not restarting)
+            if (!opts.restart) {
+                await ctx?.resetDocuments();
+            }
+
+            // without restart, a server that exited during this iteration (or the reset after it)
+            // ends the run: label the exit with the iteration, keep the runs collected so far and
+            // skip iterations that would only fail against the dead server
+            if (!opts.restart && harness?.exit) {
+                console.error(`  Server exited during ${during}, stopping the run`);
+                await teardown(harness, during);
+                lifecycle?.push(...harness.takeLifecycleTimings());
                 harness = null;
+                ctx = null;
                 break;
             }
-        }
 
-        try {
-            await actionFn(ctx!);
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
-            if (opts.verbose && err instanceof Error) {
-                console.error(err.stack);
+            // If restarting, stop the server, keeping collected runs if teardown fails.
+            // shutdown falls outside total_ms but is still attributed to this run
+            if (opts.restart && harness) {
+                // read before stopping, which makes the harness forget what it learned
+                carriedDelivery = {
+                    delivery: harness.diagnosticsDelivery(),
+                    tentative: harness.diagnosticsDeliveryTentative(),
+                };
+                await teardown(harness, restartTeardownLabel(harness, during));
+                run?.requests.push(...harness.takeLifecycleTimings());
+                harness = null;
+                ctx = null;
             }
         }
 
-        const iterEnd = process.hrtime.bigint();
-        const iterMs = Number(iterEnd - iterStart) / 1_000_000;
+        const benchEnd = process.hrtime.bigint();
+        const totalMs = Number(benchEnd - benchStart) / 1_000_000;
 
-        // Collect timings
-        // biome-ignore lint/style/noNonNullAssertion: ctx is always set at this point
-        const timings = ctx!.collectTimings();
-
-        let run: IterationResult | null = null;
-        if (!isWarmup) {
-            run = {
-                iteration: i - opts.warmup + 1,
-                requests: [...startTimings, ...timings],
-                total_ms: Math.round(iterMs * 1000) / 1000,
-            };
-            runs.push(run);
-        }
-
-        const iterTime = `${iterMs.toFixed(0)}ms${isWarmup ? ' (warmup)' : ''}`;
-        console.log(opts.verbose ? `  Iteration ${iterNum}: ${iterTime}` : ` ${iterTime}`);
-
-        // Reset document state between iterations (if not restarting)
-        if (!opts.restart) {
-            await ctx?.resetDocuments();
-        }
-
-        // without restart, a server that exited during this iteration (or the reset after it)
-        // ends the run: label the exit with the iteration, keep the runs collected so far and
-        // skip iterations that would only fail against the dead server
-        if (!opts.restart && harness?.exit) {
-            console.error(`  Server exited during ${during}, stopping the run`);
-            await teardown(harness, during);
-            lifecycle?.push(...harness.takeLifecycleTimings());
-            harness = null;
-            ctx = null;
-            break;
-        }
-
-        // If restarting, stop the server, keeping collected runs if teardown fails.
-        // shutdown falls outside total_ms but is still attributed to this run
-        if (opts.restart && harness) {
-            // read before stopping, which makes the harness forget what it learned
-            carriedDelivery = {
-                delivery: harness.diagnosticsDelivery(),
-                tentative: harness.diagnosticsDeliveryTentative(),
-            };
-            await teardown(harness, restartTeardownLabel(harness, during));
-            run?.requests.push(...harness.takeLifecycleTimings());
-            harness = null;
-            ctx = null;
-        }
-    }
-
-    const benchEnd = process.hrtime.bigint();
-    const totalMs = Number(benchEnd - benchStart) / 1_000_000;
-
-    // build and write the report before the final teardown, so a server
-    // crashing at shutdown cannot lose the collected runs
-    const report = buildReport(opts, runs, totalMs, lifecycle);
-    const addExits = () => {
-        if (abnormalExits.length > 0) {
-            report.abnormal_exits = abnormalExits;
-        }
-        if (toleratedExits.length > 0) {
-            report.tolerated_exits = toleratedExits;
-        }
-    };
-    addExits();
-    const silentWaits = silence.silentWaits();
-    if (silentWaits) {
-        report.silent_waits = silentWaits;
-    }
-    if (opts.output) {
-        writeReport(report, opts.output);
-    }
-
-    // stop the persistent server, then rewrite the report with the shutdown
-    // timing and any abnormal or tolerated exit
-    if (!opts.restart && harness && lifecycle) {
-        await teardown(harness, 'final teardown');
-        lifecycle.push(...harness.takeLifecycleTimings());
-        report.summary = summarizeMethods(runs, lifecycle);
+        // build and write the report before the final teardown, so a server
+        // crashing at shutdown cannot lose the collected runs
+        const report = buildReport(opts, runs, totalMs, lifecycle);
+        const addExits = () => {
+            if (abnormalExits.length > 0) {
+                report.abnormal_exits = abnormalExits;
+            }
+            if (toleratedExits.length > 0) {
+                report.tolerated_exits = toleratedExits;
+            }
+        };
         addExits();
+        const silentWaits = silence.silentWaits();
+        if (silentWaits) {
+            report.silent_waits = silentWaits;
+        }
         if (opts.output) {
             writeReport(report, opts.output);
         }
+
+        // stop the persistent server, then rewrite the report with the shutdown
+        // timing and any abnormal or tolerated exit
+        if (!opts.restart && harness && lifecycle) {
+            await teardown(harness, 'final teardown');
+            lifecycle.push(...harness.takeLifecycleTimings());
+            report.summary = summarizeMethods(runs, lifecycle);
+            addExits();
+            if (opts.output) {
+                writeReport(report, opts.output);
+            }
+        }
+
+        printSummary(report);
+
+        if (opts.output) {
+            console.log(`  Report written to: ${path.resolve(opts.output)}\n`);
+        }
+
+        return report;
+    } finally {
+        // also on errors, which is when a trace helps most
+        await trace?.close();
     }
-
-    printSummary(report);
-
-    if (opts.output) {
-        console.log(`  Report written to: ${path.resolve(opts.output)}\n`);
-    }
-
-    return report;
 }
 
 /** With --wait-idle, wait for a freshly started server to become idle, recorded as lifecycle/idle */

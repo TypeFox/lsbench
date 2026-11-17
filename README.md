@@ -372,6 +372,8 @@ Options:
                               and after each restart (default: 30000)
   --server-log <file>         Append server stderr, window/logMessage, window/showMessage and
                               $/logTrace to file instead of the console, even without -v
+  --trace <file>              Write every LSP message in both directions to file as JSON lines,
+                              with server starts and iteration markers (off by default)
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -402,6 +404,19 @@ Server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` are fo
 With `--settings-file`, the expanded settings are logged as `Sending workspace/didChangeConfiguration: {...}` each time they are sent.
 
 When a server crashes, the tail of its stderr is still included in the error message either way.
+
+### Wire trace
+
+`--trace <file>` records every JSON-RPC message lsbench exchanges with the server, as one JSON line per message. `dir` is `out` for messages lsbench sends and `in` for messages it receives, and `t` is the milliseconds since the run started, on the same `process.hrtime` clock as the report timings:
+
+```text
+{"t":1014.5,"dir":"out","msg":{"jsonrpc":"2.0","method":"textDocument/didChange","params":{...}}}
+{"t":1440.1,"dir":"in","msg":{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{...}}}
+```
+
+Each server start adds `{"t":...,"spawn":true,"iso":"2026-11-17T10:15:02.123Z","command":"...","args":[...]}`, and each iteration starts with `{"t":...,"iteration":3,"warmup":false}`, numbered like the progress lines (warmups count from 1 with `"warmup":true`). The marker comes before a `--restart` server is spawned, so its spawn and initialize belong to the iteration. Without `--restart` the server starts before the first marker, and documents are reset at the end of each iteration. Report timings are durations, so line a trace up with them through the iteration markers.
+
+The file is overwritten on each run. Outgoing messages are logged as lsbench writes them, incoming ones as they are read, before lsbench handles them. Tracing serializes every message, which adds overhead to the timings, so it is off by default and the connection is not wrapped at all without it.
 
 ### Prime
 

@@ -24,6 +24,10 @@ Langium open waits no longer time out after a reopen because lsbench mistook its
 
 - lsbench notices servers that never publish for a clean document. After 3 push waits of one kind (`diagnostics/open`, `diagnostics/edit` or `diagnostics/wait`) in a row time out without any publish, counted across warmups and restarts, verbose mode logs that the server may never publish for a clean document, so those timeouts mean no diagnostics, not slow ones. The report records such methods in the new optional field `silent_waits` (`waits` and `longest_streak` per method), and the printed summary notes them below the table. A wait that resolves, or times out after publishes failing `until`, ends the streak, and a reopen wait that saw only close publishes keeps its own hint and does not count. In next.5 lua-language-server `open-diagnostics` ran every wait into its timeout with nothing but `timeout_rate` 1 to show for it. `SilenceTracker`, `SILENT_WAIT_STREAK` and the `silence` option of `BenchContextOptions` are exported. Waits are not shortened.
 
+### Wire trace
+
+- `--trace <file>` (`trace` on `BenchOptions`) writes every LSP message lsbench sends (`"dir":"out"`) and receives (`"dir":"in"`) to a file as JSON lines `{"t","dir","msg"}`, with a `{"t","spawn":true,...}` line per server start and a `{"t","iteration","warmup"}` marker per iteration. `t` is milliseconds since the run start on the clock of the report timings. The file is overwritten per run, and the run header prints `Trace:`. It is off by default, and without it the connection is unchanged. In next.5 tracing took a proxy spawned in place of the server. `WireTrace` and `WireDirection` are exported.
+
 ### Settings
 
 - The README, `--help` and the primer note that `--settings-file` sends only the listed keys, unlike VS Code, which sends every setting with its default, so a server may read a missing key as `false`. With only `"json.format.enable": true`, vscode-json-language-server turned schema validation off and every `edit-diagnostics` wait timed out. Verbose mode logs the expanded settings sent with `workspace/didChangeConfiguration`.

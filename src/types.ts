@@ -69,6 +69,11 @@ export interface BenchOptions {
      * with a header line per server start, instead of forwarding them in verbose mode
      */
     serverLog?: string;
+    /**
+     * Write every message exchanged with the server to this file as JSON lines, with server
+     * starts and iteration markers. Off by default, since tracing adds overhead to the timings
+     */
+    trace?: string;
     /** Milliseconds to wait for a shutdown reply before killing the server (default 5000) */
     shutdownTimeout?: number;
     /** How often a request rejected with ContentModified (-32801) is retried (default 3) */

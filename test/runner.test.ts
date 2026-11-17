@@ -843,3 +843,140 @@ describe('runBenchmark with restart carries the learned diagnostics delivery', (
         expect(report.runs[1].requests.some((t) => t.method === 'diagnostics/pull/open')).toBe(false);
     });
 });
+
+const hoverServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
+conn.onRequest('textDocument/hover', () => null);
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('runBenchmark with --trace', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-trace-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function readTrace(file: string): Array<Record<string, unknown>> {
+        const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean);
+        return lines.map((line) => JSON.parse(line));
+    }
+
+    for (const restart of [false, true]) {
+        it(`traces messages, spawns and iterations (${restart ? 'restart' : 'keep alive'})`, async () => {
+            const trace = path.join(tmpDir, `trace-${restart}.jsonl`);
+            fs.writeFileSync(trace, 'left over from an earlier run\n');
+            await runBenchmark({
+                server: process.execPath,
+                serverArgs: ['--input-type=module', '-e', hoverServer],
+                workspace: tmpDir,
+                script,
+                iterations: 2,
+                warmup: 1,
+                output: '',
+                restart,
+                verbose: false,
+                trace,
+            });
+
+            // the file is overwritten, every line parses and t never goes back
+            const lines = readTrace(trace);
+            let last = 0;
+            for (const line of lines) {
+                expect(typeof line.t).toBe('number');
+                expect(line.t as number).toBeGreaterThanOrEqual(last);
+                last = line.t as number;
+            }
+
+            const markers: unknown[] = [];
+            for (const line of lines) {
+                if ('iteration' in line) {
+                    markers.push([line.iteration, line.warmup]);
+                }
+            }
+            expect(markers).toEqual([
+                [1, true],
+                [1, false],
+                [2, false],
+            ]);
+
+            let spawns = 0;
+            for (const line of lines) {
+                if (line.spawn) {
+                    spawns++;
+                    expect(line.command).toBe(process.execPath);
+                }
+            }
+            expect(spawns).toBe(restart ? 3 : 1);
+
+            // a restarted server spawns after its iteration's marker
+            if (restart) {
+                expect(lines[0]).toMatchObject({ iteration: 1, warmup: true });
+                expect(lines[1]).toMatchObject({ spawn: true });
+            }
+
+            // both directions, a request and its response sharing an id
+            const methods: string[] = [];
+            for (const line of lines) {
+                if (line.dir) {
+                    const msg = line.msg as { method?: string; id?: number; result?: unknown };
+                    methods.push(`${line.dir} ${msg.method ?? `response ${msg.id}`}`);
+                }
+            }
+            expect(methods.slice(0, 3)).toEqual(['out initialize', 'in response 0', 'out initialized']);
+            expect(methods.filter((m) => m === 'out textDocument/hover')).toHaveLength(3);
+            expect(methods).toContain('out shutdown');
+            expect(methods[methods.length - 1]).toBe('out exit');
+        });
+    }
+
+    it('writes the trace when the server fails to start', async () => {
+        const trace = path.join(tmpDir, 'trace-failed.jsonl');
+        const failing = hoverServer.replace(
+            "conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));",
+            "conn.onRequest('initialize', () => { throw new Error('no thanks'); });",
+        );
+        await expect(
+            runBenchmark({
+                server: process.execPath,
+                serverArgs: ['--input-type=module', '-e', failing],
+                workspace: tmpDir,
+                script,
+                iterations: 1,
+                warmup: 0,
+                output: '',
+                restart: false,
+                verbose: false,
+                shutdownTimeout: 500,
+                trace,
+            }),
+        ).rejects.toThrow();
+        const lines = readTrace(trace);
+        expect(lines[0]).toMatchObject({ spawn: true });
+        expect(lines[1]).toMatchObject({ dir: 'out', msg: { method: 'initialize' } });
+        expect(lines[2]).toMatchObject({
+            dir: 'in',
+            msg: { error: { message: expect.stringContaining('no thanks') } },
+        });
+    });
+});
