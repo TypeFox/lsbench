@@ -100,7 +100,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 | --- | --- |
 | `openDocument(path, options?)` | Send `textDocument/didOpen`. `options.languageId` overrides the languageId detected from the extension, for this document only |
 | `closeDocument(path)` | Send `textDocument/didClose` |
-| `edit(path, edits)` | Send `textDocument/didChange` and apply the edits to the tracked text, in order |
+| `edit(path, edits)` | Send `textDocument/didChange` and apply the edits to the tracked text, in order. The change is incremental, full text, or skipped, following the server's [change sync kind](#change-sync) |
 | `saveDocument(path)` | Send `textDocument/didSave` only if the server asks for it, with the tracked text when it wants `includeText` |
 | `willSave(path, reason?)` | Send `textDocument/willSave` only if the server asks for it. `reason` defaults to 1 (Manual) |
 | `willSaveWaitUntil(path, reason?)` | `textDocument/willSaveWaitUntil` (timed, skipped unless the server asks for it). `reason` defaults to 1 (Manual) |
@@ -302,6 +302,16 @@ A timed request whose provider the server advertises neither statically nor thro
 ### Save sync
 
 `saveDocument` and `willSave` follow the server's save options, read from the static `textDocumentSync` capability and from dynamic registrations of `textDocument/didSave`, `textDocument/willSave`, and `textDocument/willSaveWaitUntil`. A bare `TextDocumentSyncKind` number implies `didSave` without text, matching `vscode-languageclient`. When the server does not ask for a notification it is skipped and logged in verbose mode. `willSaveWaitUntil` is a request, so it follows the [unsupported requests](#unsupported-requests) rule and is recorded as skipped.
+
+### Change sync
+
+`edit` follows the server's change sync kind, read from the static `textDocumentSync` capability (a bare `TextDocumentSyncKind` number or its `change` field) and from dynamic `textDocument/didChange` registrations (`syncKind`). A dynamic registration overrides the static value, and with several registrations the most demanding kind wins (Full over Incremental over None).
+
+- Incremental (2): one ranged change per edit.
+- Full (1): one change holding the whole tracked text after the edits, without a `range`.
+- None (0): no `didChange` is sent, which is logged in verbose mode. The tracked text and version are still updated, so later saves and edits stay consistent, but diagnostics waits stay keyed to the didOpen.
+
+A server that does not state a change kind gets incremental changes. The LSP default is None, but every server measured so far that omits it accepts incremental changes, so only an explicit `0` disables `didChange`.
 
 ### Server to client requests
 

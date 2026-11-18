@@ -13,6 +13,7 @@ import type {
     PublishWaitOptions,
     PublishWaitResult,
     Registration,
+    ChangeSyncKind,
     SaveSyncOptions,
     ServerCapabilities,
     WaitForDiagnosticsResult,
@@ -142,6 +143,12 @@ class FakeHarness {
 
     saveSyncOptions(): SaveSyncOptions {
         return { ...this.saveOptions };
+    }
+
+    changeKind: ChangeSyncKind = 2;
+
+    changeSyncKind(): ChangeSyncKind {
+        return this.changeKind;
     }
 
     waitForIdle(options: IdleWaitOptions): Promise<IdleWaitResult> {
@@ -1044,6 +1051,62 @@ describe('BenchContextImpl', () => {
             const params = change?.params as { textDocument: { version: number }; contentChanges: unknown[] };
             expect(params.textDocument.version).toBe(2);
             expect(params.contentChanges).toHaveLength(1);
+        });
+
+        it('sends one ranged change per edit for incremental sync', async () => {
+            fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abc', 'utf-8');
+            await ctx.openDocument('edit.txt');
+            await ctx.edit('edit.txt', [op(0, 3, 0, 3, 'd'), op(0, 0, 0, 1, '')]);
+            const change = harness.notifications[harness.notifications.length - 1];
+            expect(change.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 2 },
+                contentChanges: [
+                    { range: { start: { line: 0, character: 3 }, end: { line: 0, character: 3 } }, text: 'd' },
+                    { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, text: '' },
+                ],
+            });
+        });
+
+        it('sends the whole text without a range for full sync', async () => {
+            harness.changeKind = 1;
+            fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abc\n', 'utf-8');
+            await ctx.openDocument('edit.txt');
+            await ctx.edit('edit.txt', [op(0, 3, 0, 3, 'd'), op(0, 0, 0, 1, '')]);
+            await ctx.edit('edit.txt', op(1, 0, 1, 0, 'x = 1\n'));
+            const changes = harness.notifications.filter((n) => n.method === 'textDocument/didChange');
+            expect(changes.map((n) => n.params)).toEqual([
+                {
+                    textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 2 },
+                    contentChanges: [{ text: 'bcd\n' }],
+                },
+                {
+                    textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 3 },
+                    contentChanges: [{ text: 'bcd\nx = 1\n' }],
+                },
+            ]);
+        });
+
+        it('skips didChange for sync kind none but still tracks the text', async () => {
+            harness.changeKind = 0;
+            harness.saveOptions.includeText = true;
+            fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abc', 'utf-8');
+            const verbose = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true);
+            const logs = vi.spyOn(console, 'error').mockImplementation(() => {});
+            try {
+                await verbose.openDocument('edit.txt');
+                await verbose.edit('edit.txt', op(0, 3, 0, 3, 'd'));
+                await verbose.saveDocument('edit.txt');
+                expect(harness.notifications.map((n) => n.method)).toEqual([
+                    'textDocument/didOpen',
+                    'textDocument/didSave',
+                ]);
+                expect(harness.notifications[1].params).toMatchObject({ text: 'abcd' });
+                expect(logs.mock.calls.map((c) => c.join(' ')).join('\n')).toMatch(
+                    /Skipped didChange for edit\.txt: server asked for no document sync/,
+                );
+            } finally {
+                logs.mockRestore();
+            }
         });
 
         describe('tracked text', () => {

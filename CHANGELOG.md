@@ -5,6 +5,7 @@
 ### Fixes
 
 - `--shorten-silent-waits` keeps the reopen streak per document instead of per method, so a document whose reopen resolves no longer resets the streak of other documents. rust-analyzer `navigation` and `workspace` reopen waits are now shortened. `reopen_waits` keeps its shape: `waits` and `shortened` are summed over documents, `longest_streak` is the longest of any document.
+- `edit` follows the server's change sync kind, read from `textDocumentSync` (a bare number or `change`) and from dynamic `textDocument/didChange` registrations (`syncKind`). Full sync servers such as taplo now get the whole tracked text without a `range` instead of ranged changes they took as the entire document, and None (0) skips `didChange`. Servers stating no kind still get incremental changes. `LspHarness.changeSyncKind()` exposes the resolved kind.
 - `SilenceTracker.recordReopen` takes the document uri (`recordReopen(method, uri, reopenOnly)`), and `shortens` and `recordShortened` take it for the `reopen` kind.
 
 ## v0.3.0

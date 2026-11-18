@@ -640,15 +640,19 @@ export class BenchContextImpl implements BenchContext {
         const editArray = Array.isArray(edits) ? edits : [edits];
         doc.version++;
 
-        const contentChanges: { range: unknown; text: string }[] = editArray.map((e) => ({
-            range: toLspRange(e.range),
-            text: e.text,
-        }));
+        const ranged = editArray.map((e) => ({ range: toLspRange(e.range), text: e.text }));
 
         // mirror the change locally, each edit applies to the result of the previous one
         for (const e of editArray) {
             doc.text = applyEdit(doc.text, e);
         }
+
+        const syncKind = this.harness.changeSyncKind();
+        if (syncKind === 0) {
+            this.log(`Skipped didChange for ${relativePath}: server asked for no document sync`);
+            return;
+        }
+        const contentChanges = syncKind === 1 ? [{ text: doc.text }] : ranged;
 
         this.harness.sendNotification('textDocument/didChange', {
             textDocument: { uri: doc.uri, version: doc.version },

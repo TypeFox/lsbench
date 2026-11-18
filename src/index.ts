@@ -41,6 +41,7 @@ export type {
     PublishStatus,
     PublishWaitOptions,
     PublishWaitResult,
+    ChangeSyncKind,
     SaveSyncOptions,
     ServerExit,
     ServerStatusParams,

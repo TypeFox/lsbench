@@ -509,6 +509,8 @@ Document lifecycle  (all but openDocument/closeDocument throw if the document is
                                           each { range: { start: {line,character}, end: {line,character} }, text }.
                                           Array edits apply in order, each range refers to the text after
                                           the previous edits. The tracked document text is updated to match.
+                                          Sent incrementally, as full text, or skipped, following the
+                                          server's change sync kind
   saveDocument(path)                      textDocument/didSave, only if the server asks for it, with the
                                           tracked text when it wants includeText
   willSave(path, reason?)                 textDocument/willSave, only if the server asks for it (reason default 1, Manual)
@@ -517,7 +519,9 @@ Document lifecycle  (all but openDocument/closeDocument throw if the document is
 
   Save options come from the static textDocumentSync capability and from dynamic
   didSave/willSave/willSaveWaitUntil registrations. A bare TextDocumentSyncKind
-  number implies didSave without text.
+  number implies didSave without text. The change sync kind comes from the
+  textDocumentSync number or its change field, overridden by dynamic didChange
+  registrations (syncKind). Incremental is assumed when the server states none.
 
 Navigation and editing  (timed)
   hover(path, line, char)                 textDocument/hover

@@ -443,23 +443,23 @@ describe('LspHarness with a server exiting while a request is pending', () => {
     });
 });
 
-describe('LspHarness.saveSyncOptions', () => {
-    async function withSyncServer(sync: unknown, body: (harness: LspHarness) => Promise<void>): Promise<void> {
-        const harness = new LspHarness(
-            {
-                command: process.execPath,
-                args: ['--input-type=module', '-e', syncServer, JSON.stringify(sync)],
-            },
-            process.cwd(),
-        );
-        try {
-            await harness.start();
-            await body(harness);
-        } finally {
-            await harness.stop();
-        }
+async function withSyncServer(sync: unknown, body: (harness: LspHarness) => Promise<void>): Promise<void> {
+    const harness = new LspHarness(
+        {
+            command: process.execPath,
+            args: ['--input-type=module', '-e', syncServer, JSON.stringify(sync)],
+        },
+        process.cwd(),
+    );
+    try {
+        await harness.start();
+        await body(harness);
+    } finally {
+        await harness.stop();
     }
+}
 
+describe('LspHarness.saveSyncOptions', () => {
     const none = { didSave: false, includeText: false, willSave: false, willSaveWaitUntil: false };
 
     const staticCases: Array<[string, unknown, typeof none]> = [
@@ -533,6 +533,74 @@ describe('LspHarness.saveSyncOptions', () => {
                 { unregisterations: [{ id: 'hover', method: 'textDocument/hover' }] },
             ]);
             expect(harness.registrations.map((r) => r.id)).toEqual(['save']);
+        });
+    });
+});
+
+describe('LspHarness.changeSyncKind', () => {
+    it('assumes incremental sync before initialize', () => {
+        expect(new LspHarness({ command: process.execPath }, process.cwd()).changeSyncKind()).toBe(2);
+    });
+
+    const staticCases: Array<[string, unknown, number]> = [
+        ['no textDocumentSync', null, 2],
+        ['a bare None', 0, 0],
+        ['a bare Full', 1, 1],
+        ['a bare Incremental', 2, 2],
+        ['change: 1', { change: 1, save: true }, 1],
+        ['change: 0', { change: 0 }, 0],
+        ['an object without change', { openClose: true }, 2],
+        ['an unknown kind', 7, 2],
+    ];
+
+    for (const [name, sync, expected] of staticCases) {
+        it(`reads the static capability: ${name}`, async () => {
+            await withSyncServer(sync, async (harness) => {
+                expect(harness.changeSyncKind()).toBe(expected);
+            });
+        });
+    }
+
+    it('lets dynamic didChange registrations override the static kind, the most demanding first', async () => {
+        await withSyncServer(2, async (harness) => {
+            await harness.sendRequest('test/forward', [
+                'client/registerCapability',
+                {
+                    registrations: [
+                        { id: 'none', method: 'textDocument/didChange', registerOptions: { syncKind: 0 } },
+                        { id: 'hover', method: 'textDocument/hover' },
+                    ],
+                },
+            ]);
+            expect(harness.changeSyncKind()).toBe(0);
+
+            await harness.sendRequest('test/forward', [
+                'client/registerCapability',
+                {
+                    registrations: [
+                        { id: 'full', method: 'textDocument/didChange', registerOptions: { syncKind: 1 } },
+                        { id: 'incr', method: 'textDocument/didChange', registerOptions: { syncKind: 2 } },
+                    ],
+                },
+            ]);
+            expect(harness.changeSyncKind()).toBe(1);
+
+            await harness.sendRequest('test/forward', [
+                'client/unregisterCapability',
+                {
+                    unregisterations: [
+                        { id: 'full', method: 'textDocument/didChange' },
+                        { id: 'none', method: 'textDocument/didChange' },
+                    ],
+                },
+            ]);
+            expect(harness.changeSyncKind()).toBe(2);
+
+            await harness.sendRequest('test/forward', [
+                'client/unregisterCapability',
+                { unregisterations: [{ id: 'incr', method: 'textDocument/didChange' }] },
+            ]);
+            expect(harness.changeSyncKind()).toBe(2);
         });
     });
 });

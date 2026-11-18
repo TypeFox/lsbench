@@ -1159,6 +1159,21 @@ export class LspHarness {
         return options;
     }
 
+    changeSyncKind(): ChangeSyncKind {
+        let dynamic: ChangeSyncKind | null = null;
+        for (const reg of this._registrations.values()) {
+            if (reg.method === 'textDocument/didChange') {
+                const syncKind = toChangeSyncKind(
+                    (reg.registerOptions as { syncKind?: unknown } | undefined)?.syncKind,
+                );
+                if (syncKind !== null && (dynamic === null || CHANGE_SYNC_RANK[syncKind] > CHANGE_SYNC_RANK[dynamic])) {
+                    dynamic = syncKind;
+                }
+            }
+        }
+        return dynamic ?? staticChangeSyncKind(this._capabilities?.textDocumentSync);
+    }
+
     /** Drain and return the recorded lifecycle/spawn, lifecycle/initialize and lifecycle/shutdown timings */
     takeLifecycleTimings(): RequestTiming[] {
         const result = this.lifecycleTimings;
@@ -1984,6 +1999,24 @@ function staticSaveSyncOptions(sync: unknown): SaveSyncOptions {
         options.willSaveWaitUntil = willSaveWaitUntil === true;
     }
     return options;
+}
+
+export type ChangeSyncKind = 0 | 1 | 2;
+
+const CHANGE_SYNC_RANK: Record<ChangeSyncKind, number> = { 0: 0, 2: 1, 1: 2 };
+
+function toChangeSyncKind(value: unknown): ChangeSyncKind | null {
+    return value === 0 || value === 1 || value === 2 ? value : null;
+}
+
+function staticChangeSyncKind(sync: unknown): ChangeSyncKind {
+    if (typeof sync === 'number') {
+        return toChangeSyncKind(sync) ?? 2;
+    }
+    if (typeof sync === 'object' && sync !== null) {
+        return toChangeSyncKind((sync as { change?: unknown }).change) ?? 2;
+    }
+    return 2;
 }
 
 function hasIncludeText(options: unknown): boolean {
