@@ -536,6 +536,36 @@ describe('printSummary', () => {
         );
     });
 
+    it('notes plaintext fallbacks, and adds them to the silent and until notes, only when the report has them', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const note = '  Some documents were opened as plaintext, and the server may not serve that language id';
+        const requests = [timing({ method: 'diagnostics/open', duration_ms: 3000, success: false, result: 'timeout' })];
+        const report = buildReport(opts, [{ iteration: 1, requests, total_ms: 3000 }], 3000);
+        report.silent_waits = { 'diagnostics/open': { waits: 4, longest_streak: 4 } };
+        report.until_rejected = { 'diagnostics/edit': { waits: 5 } };
+        printSummary(report);
+        expect(lines.some((line) => line.includes('plaintext'))).toBe(false);
+
+        lines.length = 0;
+        report.plaintext_fallbacks = ['', '.tf'];
+        printSummary(report);
+        expect(lines.filter((line) => line === note)).toHaveLength(2);
+        expect(lines).toContain(
+            '  Opened as plaintext: (no extension), .tf have no registered language id, ' +
+                'register them with addRegisteredLanguage() or pass options.languageId to openDocument()',
+        );
+
+        lines.length = 0;
+        report.silent_waits = undefined;
+        report.until_rejected = undefined;
+        printSummary(report);
+        expect(lines.some((line) => line === note)).toBe(false);
+        expect(lines.some((line) => line.startsWith('  Opened as plaintext: (no extension), .tf'))).toBe(true);
+    });
+
     it('leaves out the null and empty columns when every result is ok', () => {
         expect(header([timing()])).not.toMatch(/Null%|Empty%/);
     });

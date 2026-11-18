@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { supportsMethod } from './capabilities.js';
+import { PLAINTEXT_FALLBACK_NOTE } from './stats.js';
 import {
     type Diagnostic,
     type DiagnosticsPublish,
@@ -102,6 +103,19 @@ export class SilenceTracker {
         string,
         Map<string, { waits: number; streak: number; longest: number; shortened: number }>
     >();
+    private fallbacks = new Set<string>();
+
+    recordPlaintextFallback(extension: string): boolean {
+        if (this.fallbacks.has(extension)) {
+            return false;
+        }
+        this.fallbacks.add(extension);
+        return true;
+    }
+
+    plaintextFallbacks(): string[] | undefined {
+        return this.fallbacks.size > 0 ? [...this.fallbacks].sort() : undefined;
+    }
 
     /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
     record(method: string, uri: string, silent: boolean): boolean {
@@ -334,7 +348,17 @@ export class BenchContextImpl implements BenchContext {
         }
 
         const text = fs.readFileSync(absPath, 'utf-8');
-        const languageId = options?.languageId ?? detectLanguageId(absPath);
+        const resolved = options?.languageId === undefined ? resolveLanguageId(absPath) : undefined;
+        const languageId = options?.languageId ?? resolved?.languageId ?? 'plaintext';
+        const fallback = resolved?.fallback === true;
+        if (fallback && resolved && this.silence.recordPlaintextFallback(resolved.extension)) {
+            const ext = resolved.extension === '' ? 'a file without an extension' : `\`${resolved.extension}\``;
+            console.error(
+                `[lsbench:ctx] Warning: ${ext} has no registered language id, so ${relativePath} opened as plaintext ` +
+                    'and the server may not serve it. Register it with `addRegisteredLanguage()` or pass ' +
+                    '`options.languageId` to `openDocument()`',
+            );
+        }
 
         const doc = { uri, version: 1, text };
         this.openDocuments.set(relativePath, doc);
@@ -348,7 +372,7 @@ export class BenchContextImpl implements BenchContext {
             },
         });
 
-        this.log(`Opened ${relativePath} (${languageId})`);
+        this.log(`Opened ${relativePath} (${languageId}${fallback ? ', fallback' : ''})`);
     }
 
     async closeDocument(relativePath: string): Promise<void> {
@@ -1010,7 +1034,7 @@ export class BenchContextImpl implements BenchContext {
             this.log(
                 `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row: it may never ` +
                     'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
-                    'Use `until` or a short timeout for this wait',
+                    `Use \`until\` or a short timeout for this wait${this.plaintextNote()}`,
             );
         }
         if (method === 'diagnostics/open' && doc && doc.generation > 1) {
@@ -1022,7 +1046,8 @@ export class BenchContextImpl implements BenchContext {
         if (untilRejected && this.silence.recordUntilRejected(method)) {
             this.log(
                 `${SILENT_WAIT_STREAK} ${method} waits timed out after publishes that all failed \`until\`: ` +
-                    'the server may never report what `until` expects, so these timeouts do not mean a slow server',
+                    'the server may never report what `until` expects, so these timeouts do not mean a slow server' +
+                    this.plaintextNote(),
             );
         }
         if (reopenOnly && doc) {
@@ -1524,6 +1549,10 @@ export class BenchContextImpl implements BenchContext {
         }
     }
 
+    private plaintextNote(): string {
+        return this.silence.plaintextFallbacks() ? `. ${PLAINTEXT_FALLBACK_NOTE}` : '';
+    }
+
     private log(msg: string): void {
         if (this.verbose) {
             console.error(`[lsbench:ctx] ${msg}`);
@@ -1753,6 +1782,10 @@ const RegisteredLanguages: Record<string, string> = {
     '.ipl': 'ipl',
     '.ipld': 'ipl',
     '.langium': 'langium',
+    '.tf': 'terraform',
+    '.tfvars': 'terraform-vars',
+    '.hcl': 'hcl',
+    '.txt': 'plaintext',
 };
 
 /**
@@ -1779,6 +1812,13 @@ export function addRegisteredLanguage(languageId: string, extension: string) {
  * @returns The associated language id, or `'plaintext'`
  */
 export function detectLanguageId(filePath: string): string {
-    const ext = path.extname(filePath).toLowerCase();
-    return RegisteredLanguages[ext] ?? 'plaintext';
+    return resolveLanguageId(filePath).languageId;
+}
+
+function resolveLanguageId(filePath: string): { languageId: string; extension: string; fallback: boolean } {
+    const extension = path.extname(filePath).toLowerCase();
+    const languageId = RegisteredLanguages[extension];
+    return languageId === undefined
+        ? { languageId: 'plaintext', extension, fallback: true }
+        : { languageId, extension, fallback: false };
 }

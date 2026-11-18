@@ -329,6 +329,10 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         if (reopenWaits) {
             report.reopen_waits = reopenWaits;
         }
+        const plaintextFallbacks = silence.plaintextFallbacks();
+        if (plaintextFallbacks) {
+            report.plaintext_fallbacks = plaintextFallbacks;
+        }
         if (opts.output) {
             writeReport(report, opts.output);
         }

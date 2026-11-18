@@ -254,6 +254,7 @@ export interface BenchReport {
     silent_waits?: Record<string, SilentWaits>;
     until_rejected?: Record<string, UntilRejectedWaits>;
     reopen_waits?: Record<string, ReopenWaits>;
+    plaintext_fallbacks?: string[];
 }
 
 /** Push waits of one timing method that timed out without any current publish, see BenchReport.silent_waits */

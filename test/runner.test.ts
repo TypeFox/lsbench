@@ -335,9 +335,21 @@ describe('runBenchmark with a server silent on clean files', () => {
     let tmpDir: string;
     let script: string;
     let untilScript: string;
+    let plaintextScript: string;
 
     beforeAll(() => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-silent-'));
+        fs.writeFileSync(path.join(tmpDir, 'clean.runnerfallback'), 'x\n', 'utf-8');
+        plaintextScript = path.join(tmpDir, 'plaintext.ts');
+        fs.writeFileSync(
+            plaintextScript,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.openDocument('clean.runnerfallback');
+                await ctx.waitForDiagnostics('clean.runnerfallback', 100);
+                await ctx.closeDocument('clean.runnerfallback');
+            }`,
+            'utf-8',
+        );
         fs.writeFileSync(path.join(tmpDir, 'clean.ts'), 'export const x = 1;\n', 'utf-8');
         script = path.join(tmpDir, 'actions.ts');
         fs.writeFileSync(
@@ -403,11 +415,31 @@ describe('runBenchmark with a server silent on clean files', () => {
         expect(lines.some((l) => l.includes('diagnostics/open: the server did not publish in 3 waits'))).toBe(true);
     });
 
+    it('records plaintext fallbacks once and notes them with the silent waits in the summary', async () => {
+        const errors: string[] = [];
+        const error = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+            errors.push(String(line));
+        });
+        try {
+            const { report, lines } = await run(false, true, plaintextScript);
+            expect(report.plaintext_fallbacks).toEqual(['.runnerfallback']);
+            expect(report.silent_waits).toEqual({ 'diagnostics/open': { waits: 3, longest_streak: 3 } });
+            expect(lines.some((l) => l.startsWith('  Opened as plaintext: .runnerfallback'))).toBe(true);
+            expect(lines).toContain(
+                '  Some documents were opened as plaintext, and the server may not serve that language id',
+            );
+        } finally {
+            error.mockRestore();
+        }
+        expect(errors.filter((l) => l.includes('`.runnerfallback` has no registered language id'))).toHaveLength(1);
+    });
+
     it('records no silent waits for a server that publishes', async () => {
         const { report, lines } = await run(true, false);
         expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 0 });
         expect(report.silent_waits).toBeUndefined();
         expect(report.until_rejected).toBeUndefined();
+        expect(report.plaintext_fallbacks).toBeUndefined();
         expect(lines.some((l) => l.includes('did not publish'))).toBe(false);
         expect(lines.some((l) => l.includes('failed until'))).toBe(false);
     });

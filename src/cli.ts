@@ -790,6 +790,9 @@ The JSON report (and the printed summary) contains:
   - reopen_waits       --shorten-silent-waits only: reopen waits per method that timed
                        out having seen only the publishes clearing the close (only for
                        methods with a shortened wait)
+  - plaintext_fallbacks  extensions opened as plaintext because no language id is
+                       registered for them (only when any were, register them with
+                       addRegisteredLanguage() or pass options.languageId)
 
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started

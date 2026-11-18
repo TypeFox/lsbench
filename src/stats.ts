@@ -1,5 +1,8 @@
 import type { AbnormalExit, BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
 
+export const PLAINTEXT_FALLBACK_NOTE =
+    'Some documents were opened as plaintext, and the server may not serve that language id';
+
 /** Sort numbers ascending (in-place) and return the array */
 function sorted(arr: number[]): number[] {
     return arr.sort((a, b) => a - b);
@@ -379,6 +382,7 @@ export function printSummary(report: BenchReport): void {
         console.log(
             '  Their timeouts mean no diagnostics, not slow ones: use `until` or a short timeout for such waits',
         );
+        printPlaintextNote(report);
     }
 
     if (report.until_rejected) {
@@ -390,6 +394,7 @@ export function printSummary(report: BenchReport): void {
             );
         }
         console.log('  Their timeouts do not mean a slow server: check what the server reports for such waits');
+        printPlaintextNote(report);
     }
 
     if (report.reopen_waits) {
@@ -403,7 +408,22 @@ export function printSummary(report: BenchReport): void {
         }
     }
 
+    if (report.plaintext_fallbacks) {
+        console.log();
+        const extensions = report.plaintext_fallbacks.map((ext) => (ext === '' ? '(no extension)' : ext)).join(', ');
+        console.log(
+            `  Opened as plaintext: ${extensions} have no registered language id, ` +
+                'register them with addRegisteredLanguage() or pass options.languageId to openDocument()',
+        );
+    }
+
     console.log();
+}
+
+function printPlaintextNote(report: BenchReport): void {
+    if (report.plaintext_fallbacks) {
+        console.log(`  ${PLAINTEXT_FALLBACK_NOTE}`);
+    }
 }
 
 function shortenedNote(shortened: number | undefined): string {

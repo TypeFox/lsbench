@@ -198,6 +198,10 @@ describe('detectLanguageId', () => {
         ['lib/x.mjs', 'javascript'],
         ['config.jsonc', 'jsonc'],
         ['grammar.langium', 'langium'],
+        ['main.tf', 'terraform'],
+        ['prod.TFVARS', 'terraform-vars'],
+        ['config.hcl', 'hcl'],
+        ['notes.txt', 'plaintext'],
     ])('maps %s to %s', (file, languageId) => {
         expect(detectLanguageId(file)).toBe(languageId);
     });
@@ -282,6 +286,89 @@ describe('BenchContextImpl', () => {
                 (n) => (n.params as { textDocument: { languageId: string } }).textDocument.languageId,
             );
             expect(ids).toEqual(['typescript-next', 'typescript']);
+        });
+
+        describe('plaintext fallback', () => {
+            function warnings(lines: string[]): string[] {
+                return lines.filter((l) => l.includes('has no registered language id'));
+            }
+
+            async function errorLines(body: () => Promise<void>): Promise<string[]> {
+                const lines: string[] = [];
+                const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                    lines.push(String(line));
+                });
+                try {
+                    await body();
+                } finally {
+                    spy.mockRestore();
+                }
+                return lines;
+            }
+
+            it('warns once per unknown extension without verbose, across contexts sharing a tracker', async () => {
+                fs.writeFileSync(path.join(tmpDir, 'a.fallbackx'), '\n', 'utf-8');
+                fs.writeFileSync(path.join(tmpDir, 'b.FallbackX'), '\n', 'utf-8');
+                fs.writeFileSync(path.join(tmpDir, 'c.fallbacky'), '\n', 'utf-8');
+                const silence = new SilenceTracker();
+                const lines = await errorLines(async () => {
+                    const first = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    await first.openDocument('a.fallbackx');
+                    await first.openDocument('b.FallbackX');
+                    const second = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    await second.openDocument('a.fallbackx');
+                    await second.openDocument('c.fallbacky');
+                });
+                expect(warnings(lines)).toEqual([
+                    '[lsbench:ctx] Warning: `.fallbackx` has no registered language id, so a.fallbackx opened as ' +
+                        'plaintext and the server may not serve it. Register it with `addRegisteredLanguage()` or ' +
+                        'pass `options.languageId` to `openDocument()`',
+                    expect.stringContaining('`.fallbacky` has no registered language id, so c.fallbacky'),
+                ]);
+                expect(silence.plaintextFallbacks()).toEqual(['.fallbackx', '.fallbacky']);
+            });
+
+            it('names files without an extension', async () => {
+                fs.writeFileSync(path.join(tmpDir, 'Fallbackfile'), '\n', 'utf-8');
+                const silence = new SilenceTracker();
+                const lines = await errorLines(async () => {
+                    const plain = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    await plain.openDocument('Fallbackfile');
+                });
+                expect(warnings(lines)).toEqual([
+                    expect.stringContaining('Warning: a file without an extension has no registered language id'),
+                ]);
+                expect(silence.plaintextFallbacks()).toEqual(['']);
+            });
+
+            it('marks the fallback on the verbose open line', async () => {
+                fs.writeFileSync(path.join(tmpDir, 'v.fallbackz'), '\n', 'utf-8');
+                const lines = await errorLines(async () => {
+                    const verbose = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true);
+                    await verbose.openDocument('v.fallbackz');
+                    await verbose.openDocument('sample.ts');
+                });
+                expect(lines).toContain('[lsbench:ctx] Opened v.fallbackz (plaintext, fallback)');
+                expect(lines).toContain('[lsbench:ctx] Opened sample.ts (typescript)');
+            });
+
+            it('does not warn for registered extensions or options.languageId', async () => {
+                fs.writeFileSync(path.join(tmpDir, 'o.fallbackw'), '\n', 'utf-8');
+                fs.writeFileSync(path.join(tmpDir, 'notes.txt'), '\n', 'utf-8');
+                const silence = new SilenceTracker();
+                const lines = await errorLines(async () => {
+                    const plain = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, { silence });
+                    await plain.openDocument('sample.ts');
+                    await plain.openDocument('notes.txt');
+                    await plain.openDocument('o.fallbackw', { languageId: 'custom' });
+                });
+                expect(warnings(lines)).toEqual([]);
+                expect(silence.plaintextFallbacks()).toBeUndefined();
+                const ids = harness.notifications.map(
+                    (n) => (n.params as { textDocument: { languageId: string } }).textDocument.languageId,
+                );
+                expect(ids).toEqual(['typescript', 'plaintext', 'custom']);
+            });
         });
 
         it('is idempotent — opening the same document twice sends one didOpen', async () => {
@@ -1379,6 +1466,29 @@ describe('BenchContextImpl', () => {
                     expect(lines.filter((l) => l.includes(hint))).toHaveLength(1);
                 });
 
+                it('adds the plaintext note to the hint only after a fallback', async () => {
+                    const note = 'Some documents were opened as plaintext';
+                    const plain = await ctxLogs((verbose) => silentOpens(verbose, SILENT_WAIT_STREAK));
+                    expect(plain.filter((l) => l.includes(hint))).toHaveLength(1);
+                    expect(plain.some((l) => l.includes(note))).toBe(false);
+
+                    const silence = new SilenceTracker();
+                    silence.recordPlaintextFallback('.fallbackhint');
+                    const lines: string[] = [];
+                    const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                        lines.push(String(line));
+                    });
+                    try {
+                        await silentOpens(
+                            new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true, { silence }),
+                            SILENT_WAIT_STREAK,
+                        );
+                    } finally {
+                        spy.mockRestore();
+                    }
+                    expect(lines.filter((l) => l.includes(hint) && l.includes(note))).toHaveLength(1);
+                });
+
                 it('does not hint below the streak', async () => {
                     const lines = await ctxLogs((verbose) => silentOpens(verbose, SILENT_WAIT_STREAK - 1));
                     expect(lines.some((l) => l.includes('has not published'))).toBe(false);
@@ -1497,6 +1607,20 @@ describe('BenchContextImpl', () => {
                     expect(
                         lines.filter((l) => l.includes(`${SILENT_WAIT_STREAK} diagnostics/open ${hint}`)),
                     ).toHaveLength(1);
+                });
+
+                it('adds the plaintext note to the hint only after a fallback', async () => {
+                    const note = 'Some documents were opened as plaintext';
+                    const plain = await trackedLogs(new SilenceTracker(), (verbose) =>
+                        alternate(verbose, SILENT_WAIT_STREAK),
+                    );
+                    expect(plain.filter((l) => l.includes(hint))).toHaveLength(1);
+                    expect(plain.some((l) => l.includes(note))).toBe(false);
+
+                    const silence = new SilenceTracker();
+                    silence.recordPlaintextFallback('.fallbackuntil');
+                    const lines = await trackedLogs(silence, (verbose) => alternate(verbose, SILENT_WAIT_STREAK));
+                    expect(lines.filter((l) => l.includes(hint) && l.includes(note))).toHaveLength(1);
                 });
 
                 it('does not note them below the threshold', async () => {
