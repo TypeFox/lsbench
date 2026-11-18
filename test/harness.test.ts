@@ -1460,7 +1460,7 @@ describe('DiagnosticsTracker', () => {
                 const reopen = tracker.receive({ uri, diagnostics: [] });
                 expect(statuses.at(-1)).toBe('current');
                 expect(reopen.placeholder).toBe(true);
-                expect(tracker.delivery).toBe('push');
+                expect(tracker.delivery).toBe('unknown');
                 tracker.clear();
             });
 
@@ -1725,10 +1725,98 @@ describe('DiagnosticsTracker', () => {
         tracker.clear();
     });
 
-    it('learns push from a publish for a closed document', () => {
-        const tracker = new DiagnosticsTracker();
+    it('does not learn push from an empty publish clearing a closed document after a tentative pull', () => {
+        const logs: string[] = [];
+        const statuses: PublishStatus[] = [];
+        const tracker = new DiagnosticsTracker(
+            (msg) => logs.push(msg),
+            undefined,
+            (_publish, status) => statuses.push(status),
+        );
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.receive({ uri, diagnostics: [] });
+        expect(statuses).toEqual(['closed']);
+        expect(tracker.delivery).toBe('pull');
+        expect(tracker.deliveryTentative).toBe(true);
+        expect(tracker.closeBehavior).toBe('publishes');
         tracker.noteNotification('textDocument/didOpen', open());
         tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.receive({ uri, diagnostics: [] });
+        expect(tracker.delivery).toBe('pull');
+        expect(logs.filter((l) => l.includes('does not show the server pushes'))).toEqual([
+            `Empty publish clearing closed ${uri} does not show the server pushes`,
+        ]);
+        expect(logs.some((l) => l.includes('Server pushes diagnostics'))).toBe(false);
+        tracker.clear();
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.receive({ uri, diagnostics: [] });
+        expect(logs.filter((l) => l.includes('does not show the server pushes'))).toHaveLength(2);
+        tracker.clear();
+    });
+
+    it('learns push from a non empty publish for a closed document', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.receive({ uri, diagnostics: [{ range: {}, message: 'a' }] });
+        expect(tracker.delivery).toBe('push');
+        tracker.clear();
+    });
+
+    it('does not learn push from an empty publish credited to the previous close after a reopen', () => {
+        const statuses: PublishStatus[] = [];
+        const tracker = new DiagnosticsTracker(undefined, 1000, (_publish, status) => statuses.push(status));
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.receive({ uri, diagnostics: [] });
+        expect(tracker.closeBehavior).toBe('publishes');
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.receive({ uri, diagnostics: [] });
+        expect(statuses).toEqual(['closed', 'stale']);
+        expect(tracker.delivery).toBe('pull');
+        tracker.clear();
+    });
+
+    it('does not learn push from an empty unversioned publish after a reopen of a server learned silent', async () => {
+        const statuses: PublishStatus[] = [];
+        const tracker = new DiagnosticsTracker(undefined, 20, (_publish, status) => statuses.push(status));
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        await new Promise((r) => setTimeout(r, 40));
+        expect(tracker.closeBehavior).toBe('silent');
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.receive({ uri, diagnostics: [] });
+        expect(statuses).toEqual(['current']);
+        expect(tracker.delivery).toBe('pull');
+        tracker.clear();
+    });
+
+    it('learns push from a versioned empty publish after a reopen', () => {
+        const tracker = new DiagnosticsTracker(undefined, 1000);
+        tracker.markPullOnly('empty pull', true);
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.noteNotification('textDocument/didClose', { textDocument: { uri } });
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.receive({ uri, version: 1, diagnostics: [] });
+        expect(tracker.delivery).toBe('push');
+        tracker.clear();
+    });
+
+    it('learns push from an empty publish for an opened document after a tentative pull', () => {
+        const tracker = new DiagnosticsTracker();
+        tracker.noteNotification('textDocument/didOpen', open());
+        tracker.markPullOnly('empty pull', true);
         tracker.receive({ uri, diagnostics: [] });
         expect(tracker.delivery).toBe('push');
         tracker.clear();

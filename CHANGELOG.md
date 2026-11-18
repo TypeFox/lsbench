@@ -4,6 +4,7 @@
 
 ### Fixes
 
+- An empty publish clearing a closed document no longer teaches that the server pushes diagnostics, whether it arrives while the document is closed or unversioned within the close window after a reopen. ruby-lsp, which only answers pulls but clears documents on `didClose`, used to flip to push after the first close, so every later auto wait timed out waiting for pushes. Verbose mode logs `Empty publish clearing closed ... does not show the server pushes` once. A non empty or versioned publish, or one for an opened document outside a close window, still teaches push.
 - `openDocument` warns once per extension, also without `--verbose`, when it opens a document as `plaintext` for lack of a registered language id, naming the extension and pointing at `addRegisteredLanguage()` and `options.languageId`. The report lists such extensions in `plaintext_fallbacks`, the printed summary notes them, and the silent wait and `until` hints add that the documents were opened as plaintext. The verbose open line reads `Opened main.tf (plaintext, fallback)`.
 - `.tf` opens as `terraform`, `.tfvars` as `terraform-vars` and `.hcl` as `hcl`, where they used to fall back to `plaintext`. `.txt` maps to `plaintext` and does not warn.
 - `SilenceTracker` adds `recordPlaintextFallback(extension)` and `plaintextFallbacks()`.

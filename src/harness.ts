@@ -205,6 +205,7 @@ export class DiagnosticsTracker {
     private readonly caseInsensitive: boolean;
     /** URI keys already hinted at as matching an open document apart from case */
     private caseHinted = new Set<string>();
+    private closeClearHinted = false;
     /** whether the server currently reports it is loading, an empty publish then is a placeholder */
     private loading: () => boolean = () => false;
 
@@ -292,12 +293,14 @@ export class DiagnosticsTracker {
         const doc = this.documents.get(key);
         let generation = doc?.generation ?? 0;
         let tentative = false;
+        let clearsClose = false;
         let status: PublishStatus = !doc || doc.generation === 0 ? 'unopened' : 'current';
         if (status === 'unopened') {
             this.hintCaseMismatch(key, params.uri);
         }
         if (doc && doc.generation > 0 && !doc.open) {
             status = 'closed';
+            clearsClose = params.diagnostics.length === 0;
             doc.closePublishes++;
             const clearing = this.isClearingPublish(params, doc);
             this.learnFromClosedPublish(params, doc);
@@ -311,6 +314,7 @@ export class DiagnosticsTracker {
             this.learn('publishes', `a publish superseded the empty one after closing ${params.uri}`);
             this.countClear(params.uri, doc);
         } else if (doc?.closedAt !== undefined && params.diagnostics.length === 0 && params.version === undefined) {
+            clearsClose = true;
             const sinceCloseMs = (Number(receivedAt - doc.closedAt) / 1_000_000).toFixed(1);
             if (!doc.publishedSinceClose) {
                 // the first publish after the reopen may be the server clearing the closed document
@@ -408,8 +412,15 @@ export class DiagnosticsTracker {
             !publish.placeholder &&
             (status === 'current' || status === 'closed' || status === 'stale')
         ) {
-            this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
-            this.setDelivery('push', false);
+            if (clearsClose) {
+                if (!this.closeClearHinted) {
+                    this.closeClearHinted = true;
+                    this.log(`Empty publish clearing closed ${params.uri} does not show the server pushes`);
+                }
+            } else {
+                this.log(`Server pushes diagnostics (publish for ${params.uri}), auto waits wait for pushes`);
+                this.setDelivery('push', false);
+            }
         }
         this.onPublish(publish, status);
         if (tentative && doc) {
@@ -672,6 +683,7 @@ export class DiagnosticsTracker {
         this.latest.clear();
         this.listeners.clear();
         this.caseHinted.clear();
+        this.closeClearHinted = false;
     }
 
     private setDelivery(delivery: DiagnosticsDelivery, tentative: boolean): void {

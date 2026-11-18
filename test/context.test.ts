@@ -2713,6 +2713,38 @@ describe('BenchContextImpl', () => {
                 ]);
             });
 
+            it('auto: a pull only server clearing a closed document keeps pulling (ruby-lsp)', async () => {
+                const other = `file://${path.resolve(tmpDir, 'other.ts')}`;
+                fs.writeFileSync(path.join(tmpDir, 'other.ts'), '\n', 'utf-8');
+                let cleared = false;
+                servePulls(() => {
+                    if (pulls().length === 2 && !cleared) {
+                        cleared = true;
+                        harness.setDiagnostics(uri, []);
+                    }
+                    return full('1');
+                });
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                await ctx.closeDocument('sample.ts');
+                await ctx.openDocument('other.ts');
+                const result = await ctx.waitForDiagnostics('other.ts', { timeout: 5000, pullAfterMs: 1000 });
+                expect(cleared).toBe(true);
+                expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 1 });
+                expect(harness.diagnosticsDelivery()).toBe('pull');
+                expect(harness.logs.some((l) => l.includes('Server pushes diagnostics'))).toBe(false);
+                expect(harness.logs.some((l) => l.includes(`Empty publish clearing closed ${uri}`))).toBe(true);
+                expect(pulls().map((r) => (r.params as { textDocument: { uri: string } }).textDocument.uri)).toEqual([
+                    uri,
+                    other,
+                ]);
+                expect(ctx.collectTimings()).toMatchObject([
+                    { method: 'diagnostics/pull/open', result: 'empty' },
+                    { method: 'diagnostics/pull/open', result: 'empty' },
+                ]);
+            });
+
             it('auto: a publish flips a pull only server back to push', async () => {
                 servePulls(full('1'));
                 await ctx.openDocument('sample.ts');
