@@ -95,7 +95,10 @@ export type ShortenedKind = 'silent' | 'reopen' | 'until rejected';
 export class SilenceTracker {
     private stats = new Map<string, { waits: number; streak: number; longest: number; shortened: number }>();
     private rejected = new Map<string, { waits: number; streak: number; shortened: number }>();
-    private reopens = new Map<string, { waits: number; streak: number; longest: number; shortened: number }>();
+    private reopens = new Map<
+        string,
+        Map<string, { waits: number; streak: number; longest: number; shortened: number }>
+    >();
 
     /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
     record(method: string, silent: boolean): boolean {
@@ -160,11 +163,16 @@ export class SilenceTracker {
         return result;
     }
 
-    recordReopen(method: string, reopenOnly: boolean): void {
-        let entry = this.reopens.get(method);
+    recordReopen(method: string, uri: string, reopenOnly: boolean): void {
+        let documents = this.reopens.get(method);
+        if (!documents) {
+            documents = new Map();
+            this.reopens.set(method, documents);
+        }
+        let entry = documents.get(uri);
         if (!entry) {
             entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
-            this.reopens.set(method, entry);
+            documents.set(uri, entry);
         }
         if (!reopenOnly) {
             entry.streak = 0;
@@ -177,25 +185,41 @@ export class SilenceTracker {
 
     reopenWaits(): Record<string, ReopenWaits> | undefined {
         let result: Record<string, ReopenWaits> | undefined;
-        for (const [method, entry] of this.reopens) {
-            if (entry.shortened > 0) {
+        for (const [method, documents] of this.reopens) {
+            const total = { waits: 0, longest_streak: 0, shortened: 0 };
+            for (const entry of documents.values()) {
+                total.waits += entry.waits;
+                total.longest_streak = Math.max(total.longest_streak, entry.longest);
+                total.shortened += entry.shortened;
+            }
+            if (total.shortened > 0) {
                 result ??= {};
-                result[method] = { waits: entry.waits, longest_streak: entry.longest, shortened: entry.shortened };
+                result[method] = total;
             }
         }
         return result;
     }
 
-    shortens(kind: ShortenedKind, method: string): boolean {
-        const entry = (kind === 'silent' ? this.stats : kind === 'reopen' ? this.reopens : this.rejected).get(method);
-        return (entry?.streak ?? 0) >= SILENT_WAIT_STREAK;
+    shortens(kind: ShortenedKind, method: string, uri?: string): boolean {
+        return (this.entry(kind, method, uri)?.streak ?? 0) >= SILENT_WAIT_STREAK;
     }
 
-    recordShortened(kind: ShortenedKind, method: string): void {
-        const entry = (kind === 'silent' ? this.stats : kind === 'reopen' ? this.reopens : this.rejected).get(method);
+    recordShortened(kind: ShortenedKind, method: string, uri?: string): void {
+        const entry = this.entry(kind, method, uri);
         if (entry) {
             entry.shortened++;
         }
+    }
+
+    private entry(
+        kind: ShortenedKind,
+        method: string,
+        uri?: string,
+    ): { streak: number; shortened: number } | undefined {
+        if (kind === 'reopen') {
+            return uri === undefined ? undefined : this.reopens.get(method)?.get(uri);
+        }
+        return (kind === 'silent' ? this.stats : this.rejected).get(method);
     }
 }
 
@@ -705,7 +729,7 @@ export class BenchContextImpl implements BenchContext {
         let lastRejected: DiagnosticsPublish | undefined;
         // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
         let refresh = false;
-        let shortened: { kind: ShortenedKind; method: string } | undefined;
+        let shortened: { kind: ShortenedKind; method: string; uri: string } | undefined;
         let wait: PublishWaitResult;
         for (;;) {
             const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
@@ -795,7 +819,7 @@ export class BenchContextImpl implements BenchContext {
                         shortenAt(slot, kind, (windowEndsAt > now ? windowEndsAt : now) + 1_000_000n);
                         return;
                     }
-                    shortened = { kind, method: expected.method };
+                    shortened = { kind, method: expected.method, uri };
                     abort.abort();
                 }, delayMs);
                 shortenTimers.set(slot, timer);
@@ -807,7 +831,7 @@ export class BenchContextImpl implements BenchContext {
             let shortenRejected = false;
             if (shortMs !== undefined && delivery !== 'unknown') {
                 const capKind: ShortenedKind | undefined =
-                    expected.reopen && this.silence.shortens('reopen', expected.method)
+                    expected.reopen && this.silence.shortens('reopen', expected.method, uri)
                         ? 'reopen'
                         : this.silence.shortens('silent', expected.method)
                           ? 'silent'
@@ -944,7 +968,7 @@ export class BenchContextImpl implements BenchContext {
         }
         if (shortened) {
             timing.shortened = true;
-            this.silence.recordShortened(shortened.kind, shortened.method);
+            this.silence.recordShortened(shortened.kind, shortened.method, shortened.uri);
         }
         this.timings.push(timing);
         const untilRejected = timedOut && publishes > 0 && lastRejected !== undefined && heldPublishes.size === 0;
@@ -967,7 +991,7 @@ export class BenchContextImpl implements BenchContext {
             );
         }
         if (method === 'diagnostics/open' && doc && doc.generation > 1) {
-            this.silence.recordReopen(method, reopenOnly);
+            this.silence.recordReopen(method, uri, reopenOnly);
         }
         if (!timedOut && lastRejected !== undefined) {
             this.silence.recordUntilResolved(method);

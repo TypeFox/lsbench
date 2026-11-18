@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## Unreleased
+
+### Fixes
+
+- `--shorten-silent-waits` keeps the reopen streak per document instead of per method, so a document whose reopen resolves no longer resets the streak of other documents. rust-analyzer `navigation` and `workspace` reopen waits are now shortened. `reopen_waits` keeps its shape: `waits` and `shortened` are summed over documents, `longest_streak` is the longest of any document.
+- `SilenceTracker.recordReopen` takes the document uri (`recordReopen(method, uri, reopenOnly)`), and `shortens` and `recordShortened` take it for the `reopen` kind.
+
 ## v0.3.0
 
 Changes since 0.2.0. Diagnostics timings are now trustworthy: waits are version aware, timed, delivered by push or pull, ignore placeholders of servers still loading, and report timeouts explicitly. lsbench also adds a readiness signal, classifies every result, skips unsupported requests, keeps the report when a server crashes, and can check a report against a baseline. The details since next.6 close this section, and the preview sections below have the rest.

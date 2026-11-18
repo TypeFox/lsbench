@@ -1686,12 +1686,25 @@ describe('BenchContextImpl', () => {
                     async function reopenOnly(
                         verbose: BenchContextImpl,
                         timeout: number,
+                        file = 'sample.ts',
                     ): Promise<WaitForDiagnosticsResult> {
-                        await verbose.closeDocument('sample.ts');
-                        harness.setDiagnostics(uri, []);
-                        await verbose.openDocument('sample.ts');
-                        harness.setDiagnostics(uri, []);
-                        return verbose.waitForDiagnostics('sample.ts', timeout);
+                        const fileUri = `file://${path.resolve(tmpDir, file)}`;
+                        await verbose.closeDocument(file);
+                        harness.setDiagnostics(fileUri, []);
+                        await verbose.openDocument(file);
+                        harness.setDiagnostics(fileUri, []);
+                        return verbose.waitForDiagnostics(file, timeout);
+                    }
+
+                    async function reopenResolving(
+                        verbose: BenchContextImpl,
+                        file: string,
+                    ): Promise<WaitForDiagnosticsResult> {
+                        const fileUri = `file://${path.resolve(tmpDir, file)}`;
+                        await verbose.closeDocument(file);
+                        await verbose.openDocument(file);
+                        harness.setDiagnostics(fileUri, [diag('found')]);
+                        return verbose.waitForDiagnostics(file, 5000);
                     }
 
                     it('shortens reopen waits that saw only close publishes, no earlier than the close window ends', async () => {
@@ -1728,7 +1741,7 @@ describe('BenchContextImpl', () => {
                         await verbose.openDocument('sample.ts');
                         harness.setDiagnostics(uri, [], 1);
                         for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                            silence.recordReopen('diagnostics/open', true);
+                            silence.recordReopen('diagnostics/open', uri, true);
                         }
                         await verbose.closeDocument('sample.ts');
                         await verbose.openDocument('sample.ts');
@@ -1741,12 +1754,86 @@ describe('BenchContextImpl', () => {
                         expect(silence.reopenWaits()).toBeUndefined();
                     });
 
+                    it('shortens a timing out document between reopens of a resolving one', async () => {
+                        fs.writeFileSync(path.join(tmpDir, 'other.ts'), '\n', 'utf-8');
+                        const otherUri = `file://${path.resolve(tmpDir, 'other.ts')}`;
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        await verbose.openDocument('other.ts');
+                        harness.setDiagnostics(otherUri, [diag('found')], 1);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [], 1);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            const resolved = await reopenResolving(verbose, 'other.ts');
+                            expect(resolved.timedOut).toBe(false);
+                            const result = await reopenOnly(verbose, 60);
+                            expect(result).toMatchObject({ timedOut: true, publishes: 0 });
+                            expect(result).not.toHaveProperty('shortened');
+                        }
+                        const resolved = await reopenResolving(verbose, 'other.ts');
+                        expect(resolved.timedOut).toBe(false);
+                        expect(resolved).not.toHaveProperty('shortened');
+                        const result = await reopenOnly(verbose, 5000);
+                        expect(result).toMatchObject({ timedOut: true, publishes: 0, shortened: true });
+                        expect(result.ms).toBeLessThan(1000);
+                        expect(silence.reopenWaits()).toEqual({
+                            'diagnostics/open': {
+                                waits: SILENT_WAIT_STREAK + 1,
+                                longest_streak: SILENT_WAIT_STREAK + 1,
+                                shortened: 1,
+                            },
+                        });
+                    });
+
+                    it('restores the full timeout only for the document whose reopen resolved', async () => {
+                        fs.writeFileSync(path.join(tmpDir, 'other.ts'), '\n', 'utf-8');
+                        const otherUri = `file://${path.resolve(tmpDir, 'other.ts')}`;
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        await verbose.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [], 1);
+                        await verbose.openDocument('other.ts');
+                        harness.setDiagnostics(otherUri, [], 1);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            silence.recordReopen('diagnostics/open', uri, true);
+                            silence.recordReopen('diagnostics/open', otherUri, true);
+                        }
+                        expect((await reopenResolving(verbose, 'other.ts')).timedOut).toBe(false);
+                        const other = await reopenOnly(verbose, 80, 'other.ts');
+                        expect(other.timedOut).toBe(true);
+                        expect(other).not.toHaveProperty('shortened');
+                        expect(other.ms).toBeGreaterThanOrEqual(75);
+                        const sample = await reopenOnly(verbose, 5000);
+                        expect(sample).toMatchObject({ timedOut: true, shortened: true });
+                        expect(sample.ms).toBeLessThan(1000);
+                    });
+
+                    it('sums reopen waits over documents and keeps the longest streak of any', () => {
+                        const silence = new SilenceTracker();
+                        for (let i = 0; i < 4; i++) {
+                            silence.recordReopen('diagnostics/open', 'file:///a.ts', true);
+                        }
+                        silence.recordShortened('reopen', 'diagnostics/open', 'file:///a.ts');
+                        for (let i = 0; i < 3; i++) {
+                            silence.recordReopen('diagnostics/open', 'file:///b.ts', true);
+                        }
+                        silence.recordShortened('reopen', 'diagnostics/open', 'file:///b.ts');
+                        silence.recordReopen('diagnostics/open', 'file:///b.ts', false);
+                        silence.recordReopen('diagnostics/edit', 'file:///a.ts', true);
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///a.ts')).toBe(true);
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///b.ts')).toBe(false);
+                        expect(silence.shortens('reopen', 'diagnostics/open')).toBe(false);
+                        expect(silence.reopenWaits()).toEqual({
+                            'diagnostics/open': { waits: 7, longest_streak: 4, shortened: 2 },
+                        });
+                    });
+
                     it('still resolves with a close candidate accepted when the close window ends', async () => {
                         useCloseWindow(60);
                         const silence = new SilenceTracker();
                         const verbose = shortening(silence);
                         for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                            silence.recordReopen('diagnostics/open', true);
+                            silence.recordReopen('diagnostics/open', uri, true);
                         }
                         await verbose.openDocument('sample.ts');
                         await verbose.closeDocument('sample.ts');
