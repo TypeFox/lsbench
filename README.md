@@ -347,7 +347,7 @@ detectLanguageId('src/index.TS'); // 'typescript'
 detectLanguageId('model.dsl'); // 'mylanguage' after the call above, 'plaintext' otherwise
 ```
 
-Built in mappings include `.tf` (`terraform`), `.tfvars` (`terraform-vars`) and `.hcl` (`hcl`), and `.txt` maps to `plaintext` on purpose. When `openDocument` falls back to `plaintext` for an unmapped extension, it logs a warning once per extension, also without `--verbose`, and the report lists the extensions in `plaintext_fallbacks`. The printed summary then notes them, and the silent wait and `until` notes add that the server may not serve that language id, since many servers (terraform-ls among them) reject or ignore documents of a language they do not know.
+Built in mappings include `.tf` (`terraform`), `.tfvars` (`terraform-vars`), `.hcl` (`hcl`), `.ml` (`ocaml`), `.mli` (`ocaml.interface`), `.mll` (`ocaml.ocamllex`), `.mly` (`ocaml.menhir`), `.hs` (`haskell`) and `.lhs` (`literate haskell`), and `.txt` maps to `plaintext` on purpose. When `openDocument` falls back to `plaintext` for an unmapped extension, it logs a warning once per extension, also without `--verbose`, and the report lists the extensions in `plaintext_fallbacks`. The printed summary then notes them, and the silent wait and `until` notes add that the server may not serve that language id, since many servers (terraform-ls among them) reject or ignore documents of a language they do not know.
 
 To override the language ID of a single document instead, pass it when opening:
 

@@ -201,6 +201,12 @@ describe('detectLanguageId', () => {
         ['main.tf', 'terraform'],
         ['prod.TFVARS', 'terraform-vars'],
         ['config.hcl', 'hcl'],
+        ['src/main.ml', 'ocaml'],
+        ['src/shape.MLI', 'ocaml.interface'],
+        ['lexer.mll', 'ocaml.ocamllex'],
+        ['parser.mly', 'ocaml.menhir'],
+        ['app/Main.hs', 'haskell'],
+        ['Notes.LHS', 'literate haskell'],
         ['notes.txt', 'plaintext'],
     ])('maps %s to %s', (file, languageId) => {
         expect(detectLanguageId(file)).toBe(languageId);

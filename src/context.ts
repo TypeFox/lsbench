@@ -1799,6 +1799,12 @@ const RegisteredLanguages: Record<string, string> = {
     '.tf': 'terraform',
     '.tfvars': 'terraform-vars',
     '.hcl': 'hcl',
+    '.ml': 'ocaml',
+    '.mli': 'ocaml.interface',
+    '.mll': 'ocaml.ocamllex',
+    '.mly': 'ocaml.menhir',
+    '.hs': 'haskell',
+    '.lhs': 'literate haskell',
     '.txt': 'plaintext',
 };
 
