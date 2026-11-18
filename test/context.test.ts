@@ -1650,7 +1650,7 @@ describe('BenchContextImpl', () => {
                     const silence = new SilenceTracker();
                     const verbose = shortening(silence);
                     for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                        silence.record('diagnostics/open', true);
+                        silence.record('diagnostics/open', uri, true);
                     }
                     await verbose.openDocument('sample.ts');
                     harness.setDiagnostics(uri, [diag('found')]);
@@ -1682,7 +1682,7 @@ describe('BenchContextImpl', () => {
                     const silence = new SilenceTracker();
                     const verbose = shortening(silence);
                     for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                        silence.record('diagnostics/open', true);
+                        silence.record('diagnostics/open', uri, true);
                     }
                     await verbose.openDocument('sample.ts');
                     await verbose.closeDocument('sample.ts');
@@ -1698,7 +1698,7 @@ describe('BenchContextImpl', () => {
                     const silence = new SilenceTracker();
                     const verbose = shortening(silence);
                     for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                        silence.record('diagnostics/open', true);
+                        silence.record('diagnostics/open', uri, true);
                     }
                     harness.capabilities = { textDocumentSync: 2 };
                     harness.progress.serverStatusChanged({ health: 'ok', quiescent: false });
@@ -1715,7 +1715,7 @@ describe('BenchContextImpl', () => {
                     const silence = new SilenceTracker();
                     const verbose = shortening(silence);
                     for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                        silence.record('diagnostics/open', true);
+                        silence.record('diagnostics/open', uri, true);
                     }
                     harness.capabilities = { diagnosticProvider: { interFileDependencies: false } };
                     harness.response = { kind: 'full', items: [] };
@@ -1732,7 +1732,7 @@ describe('BenchContextImpl', () => {
                     const silence = new SilenceTracker();
                     const verbose = shortening(silence);
                     for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
-                        silence.record('diagnostics/open', true);
+                        silence.record('diagnostics/open', uri, true);
                     }
                     harness.capabilities = { diagnosticProvider: { interFileDependencies: false } };
                     harness.response = { kind: 'full', items: [diag('pulled')] };
@@ -1743,6 +1743,113 @@ describe('BenchContextImpl', () => {
                     });
                     expect(result).toMatchObject({ timedOut: false, source: 'pull' });
                     expect(result).not.toHaveProperty('shortened');
+                });
+
+                describe('silent waits of several documents', () => {
+                    function writeDocuments(): Record<string, string> {
+                        const uris: Record<string, string> = {};
+                        for (const file of ['a.ts', 'b.ts', 'c.ts']) {
+                            fs.writeFileSync(path.join(tmpDir, file), '\n', 'utf-8');
+                            uris[file] = `file://${path.resolve(tmpDir, file)}`;
+                        }
+                        return uris;
+                    }
+
+                    async function openWait(
+                        verbose: BenchContextImpl,
+                        file: string,
+                        timeout: number,
+                        fileUri?: string,
+                    ): Promise<WaitForDiagnosticsResult> {
+                        await verbose.openDocument(file);
+                        if (fileUri) {
+                            harness.setDiagnostics(fileUri, [diag('found')]);
+                        }
+                        const result = await verbose.waitForDiagnostics(file, timeout);
+                        await verbose.closeDocument(file);
+                        return result;
+                    }
+
+                    it('shortens silent documents interleaved with a resolving one', async () => {
+                        const uris = writeDocuments();
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (let i = 0; i < SILENT_WAIT_STREAK + 2; i++) {
+                            for (const file of ['a.ts', 'b.ts']) {
+                                const result = await openWait(verbose, file, i < SILENT_WAIT_STREAK ? 40 : 5000);
+                                expect(result.timedOut).toBe(true);
+                                if (i < SILENT_WAIT_STREAK) {
+                                    expect(result).not.toHaveProperty('shortened');
+                                } else {
+                                    expect(result).toMatchObject({ shortened: true });
+                                    expect(result.ms).toBeLessThan(1000);
+                                }
+                            }
+                            const resolved = await openWait(verbose, 'c.ts', 5000, uris['c.ts']);
+                            expect(resolved.timedOut).toBe(false);
+                            expect(resolved).not.toHaveProperty('shortened');
+                        }
+                        expect(silence.silentWaits()).toEqual({
+                            'diagnostics/open': {
+                                waits: 2 * (SILENT_WAIT_STREAK + 2),
+                                longest_streak: SILENT_WAIT_STREAK + 2,
+                                shortened: 4,
+                            },
+                        });
+                    });
+
+                    it('restores the full timeout only for the document whose wait resolved', async () => {
+                        const uris = writeDocuments();
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            silence.record('diagnostics/open', uris['a.ts'], true);
+                            silence.record('diagnostics/open', uris['b.ts'], true);
+                        }
+                        expect((await openWait(verbose, 'a.ts', 5000, uris['a.ts'])).timedOut).toBe(false);
+                        const a = await openWait(verbose, 'a.ts', 80);
+                        expect(a.timedOut).toBe(true);
+                        expect(a).not.toHaveProperty('shortened');
+                        expect(a.ms).toBeGreaterThanOrEqual(75);
+                        const b = await openWait(verbose, 'b.ts', 5000);
+                        expect(b).toMatchObject({ timedOut: true, shortened: true });
+                        expect(b.ms).toBeLessThan(1000);
+                    });
+
+                    it('sums silent waits over documents and keeps the longest streak of any', () => {
+                        const silence = new SilenceTracker();
+                        for (let i = 0; i < 4; i++) {
+                            silence.record('diagnostics/open', 'file:///a.ts', true);
+                        }
+                        silence.recordShortened('silent', 'diagnostics/open', 'file:///a.ts');
+                        for (let i = 0; i < 3; i++) {
+                            silence.record('diagnostics/open', 'file:///b.ts', true);
+                        }
+                        silence.recordShortened('silent', 'diagnostics/open', 'file:///b.ts');
+                        silence.record('diagnostics/open', 'file:///b.ts', false);
+                        silence.record('diagnostics/edit', 'file:///a.ts', true);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///a.ts')).toBe(true);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///b.ts')).toBe(false);
+                        expect(silence.shortens('silent', 'diagnostics/open')).toBe(false);
+                        expect(silence.silentWaits()).toEqual({
+                            'diagnostics/open': { waits: 7, longest_streak: 4, shortened: 2 },
+                        });
+                    });
+
+                    it('signals the hint once per method when several documents reach the streak', () => {
+                        const silence = new SilenceTracker();
+                        const hints: boolean[] = [];
+                        for (let i = 0; i < SILENT_WAIT_STREAK + 1; i++) {
+                            hints.push(silence.record('diagnostics/open', 'file:///a.ts', true));
+                            hints.push(silence.record('diagnostics/open', 'file:///b.ts', true));
+                        }
+                        expect(hints.filter((h) => h)).toHaveLength(1);
+                        expect(hints[2 * (SILENT_WAIT_STREAK - 1)]).toBe(true);
+                        for (let i = 0; i < SILENT_WAIT_STREAK - 1; i++) {
+                            silence.record('diagnostics/edit', 'file:///a.ts', true);
+                        }
+                        expect(silence.record('diagnostics/edit', 'file:///a.ts', true)).toBe(true);
+                    });
                 });
 
                 describe('reopen waits', () => {

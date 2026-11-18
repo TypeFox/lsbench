@@ -93,7 +93,10 @@ export type ShortenedKind = 'silent' | 'reopen' | 'until rejected';
  * publishes failing `until`, ends the streak of its method
  */
 export class SilenceTracker {
-    private stats = new Map<string, { waits: number; streak: number; longest: number; shortened: number }>();
+    private stats = new Map<
+        string,
+        Map<string, { waits: number; streak: number; longest: number; shortened: number }>
+    >();
     private rejected = new Map<string, { waits: number; streak: number; shortened: number }>();
     private reopens = new Map<
         string,
@@ -101,11 +104,16 @@ export class SilenceTracker {
     >();
 
     /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
-    record(method: string, silent: boolean): boolean {
-        let entry = this.stats.get(method);
+    record(method: string, uri: string, silent: boolean): boolean {
+        let documents = this.stats.get(method);
+        if (!documents) {
+            documents = new Map();
+            this.stats.set(method, documents);
+        }
+        let entry = documents.get(uri);
         if (!entry) {
             entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
-            this.stats.set(method, entry);
+            documents.set(uri, entry);
         }
         if (!silent) {
             entry.streak = 0;
@@ -113,7 +121,12 @@ export class SilenceTracker {
         }
         entry.waits++;
         entry.streak++;
-        const reached = entry.streak === SILENT_WAIT_STREAK && entry.longest < SILENT_WAIT_STREAK;
+        let reached = entry.streak === SILENT_WAIT_STREAK;
+        for (const other of documents.values()) {
+            if (other.longest >= SILENT_WAIT_STREAK) {
+                reached = false;
+            }
+        }
         entry.longest = Math.max(entry.longest, entry.streak);
         return reached;
     }
@@ -121,13 +134,19 @@ export class SilenceTracker {
     /** The methods whose silent waits reached SILENT_WAIT_STREAK in a row, undefined when none did */
     silentWaits(): Record<string, SilentWaits> | undefined {
         let result: Record<string, SilentWaits> | undefined;
-        for (const [method, entry] of this.stats) {
-            if (entry.longest >= SILENT_WAIT_STREAK) {
+        for (const [method, documents] of this.stats) {
+            const total = { waits: 0, longest_streak: 0, shortened: 0 };
+            for (const entry of documents.values()) {
+                total.waits += entry.waits;
+                total.longest_streak = Math.max(total.longest_streak, entry.longest);
+                total.shortened += entry.shortened;
+            }
+            if (total.longest_streak >= SILENT_WAIT_STREAK) {
                 result ??= {};
                 result[method] = {
-                    waits: entry.waits,
-                    longest_streak: entry.longest,
-                    ...(entry.shortened > 0 ? { shortened: entry.shortened } : {}),
+                    waits: total.waits,
+                    longest_streak: total.longest_streak,
+                    ...(total.shortened > 0 ? { shortened: total.shortened } : {}),
                 };
             }
         }
@@ -216,10 +235,10 @@ export class SilenceTracker {
         method: string,
         uri?: string,
     ): { streak: number; shortened: number } | undefined {
-        if (kind === 'reopen') {
-            return uri === undefined ? undefined : this.reopens.get(method)?.get(uri);
+        if (kind === 'until rejected') {
+            return this.rejected.get(method);
         }
-        return (kind === 'silent' ? this.stats : this.rejected).get(method);
+        return uri === undefined ? undefined : (kind === 'silent' ? this.stats : this.reopens).get(method)?.get(uri);
     }
 }
 
@@ -837,7 +856,7 @@ export class BenchContextImpl implements BenchContext {
                 const capKind: ShortenedKind | undefined =
                     expected.reopen && this.silence.shortens('reopen', expected.method, uri)
                         ? 'reopen'
-                        : this.silence.shortens('silent', expected.method)
+                        : this.silence.shortens('silent', expected.method, uri)
                           ? 'silent'
                           : undefined;
                 if (capKind) {
@@ -987,7 +1006,7 @@ export class BenchContextImpl implements BenchContext {
         // a reopen that saw only close publishes is hinted below and neither silent nor resolved
         const reopenOnly =
             timedOut && publishes === 0 && method === 'diagnostics/open' && !!doc && doc.closePublishes > 0;
-        if (!reopenOnly && this.silence.record(method, timedOut && publishes === 0)) {
+        if (!reopenOnly && this.silence.record(method, uri, timedOut && publishes === 0)) {
             this.log(
                 `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row: it may never ` +
                     'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
