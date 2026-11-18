@@ -738,8 +738,11 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    time out did so in a row (no publish, only close
                                    publishes after a reopen, publishes all failing
                                    until), end later ones of that kind after ms,
-                                   recorded as shortened timeouts. A wait of the
-                                   kind that resolves restores the full timeout     (default: 500)
+                                   recorded as shortened timeouts. Silent and
+                                   reopen waits count over documents, and a
+                                   document is shortened after one such timeout of
+                                   its own. A wait of the kind that resolves
+                                   restores the full timeout for its document       (default: 500)
           --server-log <file>      Append server stderr, window/logMessage, showMessage
                                    and $/logTrace to file, a header line per server
                                    start, instead of the console (even without -v)
@@ -781,8 +784,8 @@ The JSON report (and the printed summary) contains:
                        --allow-exit-code (only when any did, these do not fail the run)
   - silent_waits       diagnostics push waits per method that timed out without any
                        publish, warmups included (only for methods with 3 such waits in
-                       a row: the server may never publish for a clean document, so the
-                       timeouts mean no diagnostics, not slow ones)
+                       a row over documents: the server may never publish for a clean
+                       document, so the timeouts mean no diagnostics, not slow ones)
   - until_rejected     diagnostics push waits per method that timed out after publishes
                        that all failed the wait's until, warmups included (only for
                        methods with 3 such waits: the server may never report what until

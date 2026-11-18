@@ -86,6 +86,14 @@ export const SILENT_WAIT_STREAK = 3;
 
 export type ShortenedKind = 'silent' | 'reopen' | 'until rejected';
 
+function pooled(documents: Map<string, { streak: number }>): number {
+    let sum = 0;
+    for (const entry of documents.values()) {
+        sum += entry.streak;
+    }
+    return sum;
+}
+
 /**
  * Counts push waits that timed out without any current publish, per timing method
  * (`diagnostics/open`, `diagnostics/edit`, `diagnostics/wait`). One tracker spans a whole
@@ -103,6 +111,7 @@ export class SilenceTracker {
         string,
         Map<string, { waits: number; streak: number; longest: number; shortened: number }>
     >();
+    private qualified = new Set<string>();
     private fallbacks = new Set<string>();
 
     recordPlaintextFallback(extension: string): boolean {
@@ -135,14 +144,12 @@ export class SilenceTracker {
         }
         entry.waits++;
         entry.streak++;
-        let reached = entry.streak === SILENT_WAIT_STREAK;
-        for (const other of documents.values()) {
-            if (other.longest >= SILENT_WAIT_STREAK) {
-                reached = false;
-            }
-        }
         entry.longest = Math.max(entry.longest, entry.streak);
-        return reached;
+        if (this.qualified.has(method) || pooled(documents) < SILENT_WAIT_STREAK) {
+            return false;
+        }
+        this.qualified.add(method);
+        return true;
     }
 
     /** The methods whose silent waits reached SILENT_WAIT_STREAK in a row, undefined when none did */
@@ -155,7 +162,7 @@ export class SilenceTracker {
                 total.longest_streak = Math.max(total.longest_streak, entry.longest);
                 total.shortened += entry.shortened;
             }
-            if (total.longest_streak >= SILENT_WAIT_STREAK) {
+            if (this.qualified.has(method)) {
                 result ??= {};
                 result[method] = {
                     waits: total.waits,
@@ -234,7 +241,14 @@ export class SilenceTracker {
     }
 
     shortens(kind: ShortenedKind, method: string, uri?: string): boolean {
-        return (this.entry(kind, method, uri)?.streak ?? 0) >= SILENT_WAIT_STREAK;
+        if (kind === 'until rejected') {
+            return (this.rejected.get(method)?.streak ?? 0) >= SILENT_WAIT_STREAK;
+        }
+        const documents = (kind === 'silent' ? this.stats : this.reopens).get(method);
+        if (uri === undefined || !documents || (documents.get(uri)?.streak ?? 0) < 1) {
+            return false;
+        }
+        return pooled(documents) >= SILENT_WAIT_STREAK;
     }
 
     recordShortened(kind: ShortenedKind, method: string, uri?: string): void {
@@ -1032,7 +1046,7 @@ export class BenchContextImpl implements BenchContext {
             timedOut && publishes === 0 && method === 'diagnostics/open' && !!doc && doc.closePublishes > 0;
         if (!reopenOnly && this.silence.record(method, uri, timedOut && publishes === 0)) {
             this.log(
-                `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row: it may never ` +
+                `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row across its documents: it may never ` +
                     'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
                     `Use \`until\` or a short timeout for this wait${this.plaintextNote()}`,
             );

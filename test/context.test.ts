@@ -1898,11 +1898,14 @@ describe('BenchContextImpl', () => {
                         const uris = writeDocuments();
                         const silence = new SilenceTracker();
                         const verbose = shortening(silence);
+                        let waits = 0;
                         for (let i = 0; i < SILENT_WAIT_STREAK + 2; i++) {
                             for (const file of ['a.ts', 'b.ts']) {
-                                const result = await openWait(verbose, file, i < SILENT_WAIT_STREAK ? 40 : 5000);
+                                const full = waits < SILENT_WAIT_STREAK;
+                                waits++;
+                                const result = await openWait(verbose, file, full ? 40 : 5000);
                                 expect(result.timedOut).toBe(true);
-                                if (i < SILENT_WAIT_STREAK) {
+                                if (full) {
                                     expect(result).not.toHaveProperty('shortened');
                                 } else {
                                     expect(result).toMatchObject({ shortened: true });
@@ -1917,7 +1920,7 @@ describe('BenchContextImpl', () => {
                             'diagnostics/open': {
                                 waits: 2 * (SILENT_WAIT_STREAK + 2),
                                 longest_streak: SILENT_WAIT_STREAK + 2,
-                                shortened: 4,
+                                shortened: 2 * (SILENT_WAIT_STREAK + 2) - SILENT_WAIT_STREAK,
                             },
                         });
                     });
@@ -1968,11 +1971,95 @@ describe('BenchContextImpl', () => {
                             hints.push(silence.record('diagnostics/open', 'file:///b.ts', true));
                         }
                         expect(hints.filter((h) => h)).toHaveLength(1);
-                        expect(hints[2 * (SILENT_WAIT_STREAK - 1)]).toBe(true);
+                        expect(hints[SILENT_WAIT_STREAK - 1]).toBe(true);
                         for (let i = 0; i < SILENT_WAIT_STREAK - 1; i++) {
                             silence.record('diagnostics/edit', 'file:///a.ts', true);
                         }
                         expect(silence.record('diagnostics/edit', 'file:///a.ts', true)).toBe(true);
+                    });
+
+                    it('does not signal the hint again after the pooled streak drops and rises', () => {
+                        const silence = new SilenceTracker();
+                        const hints: boolean[] = [];
+                        for (const file of ['a', 'b', 'c']) {
+                            hints.push(silence.record('diagnostics/open', `file:///${file}.ts`, true));
+                        }
+                        silence.record('diagnostics/open', 'file:///a.ts', false);
+                        silence.record('diagnostics/open', 'file:///b.ts', false);
+                        for (const file of ['a', 'b', 'd']) {
+                            hints.push(silence.record('diagnostics/open', `file:///${file}.ts`, true));
+                        }
+                        expect(hints).toEqual([false, false, true, false, false, false]);
+                    });
+
+                    it('qualifies a method on silent waits pooled over documents', () => {
+                        const silence = new SilenceTracker();
+                        const hints: boolean[] = [];
+                        for (const file of ['a', 'b', 'c']) {
+                            hints.push(silence.record('diagnostics/open', `file:///${file}.ts`, true));
+                        }
+                        expect(hints).toEqual([false, false, true]);
+                        for (const file of ['a', 'b', 'c']) {
+                            expect(silence.shortens('silent', 'diagnostics/open', `file:///${file}.ts`)).toBe(true);
+                        }
+                        expect(silence.shortens('silent', 'diagnostics/edit', 'file:///a.ts')).toBe(false);
+                        silence.recordShortened('silent', 'diagnostics/open', 'file:///b.ts');
+                        expect(silence.silentWaits()).toEqual({
+                            'diagnostics/open': { waits: 3, longest_streak: 1, shortened: 1 },
+                        });
+                    });
+
+                    it('shortens a new document of a qualified method only from its second silent wait', () => {
+                        const silence = new SilenceTracker();
+                        for (const file of ['a', 'b', 'c']) {
+                            silence.record('diagnostics/open', `file:///${file}.ts`, true);
+                        }
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///d.ts')).toBe(false);
+                        silence.record('diagnostics/open', 'file:///d.ts', true);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///d.ts')).toBe(true);
+                    });
+
+                    it('lowers the pooled streak by the resolving document only', () => {
+                        const silence = new SilenceTracker();
+                        silence.record('diagnostics/open', 'file:///a.ts', true);
+                        silence.record('diagnostics/open', 'file:///a.ts', true);
+                        silence.record('diagnostics/open', 'file:///b.ts', true);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///a.ts')).toBe(true);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///b.ts')).toBe(true);
+                        expect(silence.record('diagnostics/open', 'file:///a.ts', false)).toBe(false);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///a.ts')).toBe(false);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///b.ts')).toBe(false);
+                        expect(silence.record('diagnostics/open', 'file:///c.ts', true)).toBe(false);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///b.ts')).toBe(false);
+                        expect(silence.record('diagnostics/open', 'file:///d.ts', true)).toBe(false);
+                        for (const file of ['b', 'c', 'd']) {
+                            expect(silence.shortens('silent', 'diagnostics/open', `file:///${file}.ts`)).toBe(true);
+                        }
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///a.ts')).toBe(false);
+                        silence.record('diagnostics/open', 'file:///a.ts', true);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///a.ts')).toBe(true);
+                    });
+
+                    it('shortens each silent document after one timeout of its own once the method qualified', async () => {
+                        writeDocuments();
+                        fs.writeFileSync(path.join(tmpDir, 'd.ts'), '\n', 'utf-8');
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (const file of ['a.ts', 'b.ts', 'c.ts']) {
+                            const result = await openWait(verbose, file, 40);
+                            expect(result.timedOut).toBe(true);
+                            expect(result).not.toHaveProperty('shortened');
+                        }
+                        for (const file of ['a.ts', 'b.ts', 'c.ts']) {
+                            const result = await openWait(verbose, file, 5000);
+                            expect(result).toMatchObject({ timedOut: true, shortened: true });
+                            expect(result.ms).toBeLessThan(1000);
+                        }
+                        const first = await openWait(verbose, 'd.ts', 80);
+                        expect(first).not.toHaveProperty('shortened');
+                        expect(first.ms).toBeGreaterThanOrEqual(75);
+                        const second = await openWait(verbose, 'd.ts', 5000);
+                        expect(second).toMatchObject({ timedOut: true, shortened: true });
                     });
                 });
 
@@ -2119,6 +2206,53 @@ describe('BenchContextImpl', () => {
                         expect(silence.shortens('reopen', 'diagnostics/open')).toBe(false);
                         expect(silence.reopenWaits()).toEqual({
                             'diagnostics/open': { waits: 7, longest_streak: 4, shortened: 2 },
+                        });
+                    });
+
+                    it('qualifies a method on reopen waits pooled over documents', () => {
+                        const silence = new SilenceTracker();
+                        for (const file of ['a', 'b', 'c']) {
+                            expect(silence.shortens('reopen', 'diagnostics/open', `file:///${file}.ts`)).toBe(false);
+                            silence.recordReopen('diagnostics/open', `file:///${file}.ts`, true);
+                        }
+                        for (const file of ['a', 'b', 'c']) {
+                            expect(silence.shortens('reopen', 'diagnostics/open', `file:///${file}.ts`)).toBe(true);
+                        }
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///d.ts')).toBe(false);
+                        silence.recordReopen('diagnostics/open', 'file:///d.ts', true);
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///d.ts')).toBe(true);
+                        silence.recordReopen('diagnostics/open', 'file:///d.ts', false);
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///d.ts')).toBe(false);
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///a.ts')).toBe(true);
+                        silence.recordReopen('diagnostics/open', 'file:///a.ts', false);
+                        expect(silence.shortens('reopen', 'diagnostics/open', 'file:///b.ts')).toBe(false);
+                        expect(silence.shortens('silent', 'diagnostics/open', 'file:///b.ts')).toBe(false);
+                        expect(silence.silentWaits()).toBeUndefined();
+                    });
+
+                    it('shortens each reopening document after one timeout of its own once the method qualified', async () => {
+                        const files = ['a.ts', 'b.ts', 'c.ts'];
+                        for (const file of files) {
+                            fs.writeFileSync(path.join(tmpDir, file), '\n', 'utf-8');
+                        }
+                        const silence = new SilenceTracker();
+                        const verbose = shortening(silence);
+                        for (const file of files) {
+                            await verbose.openDocument(file);
+                            harness.setDiagnostics(`file://${path.resolve(tmpDir, file)}`, [], 1);
+                        }
+                        for (const file of files) {
+                            const result = await reopenOnly(verbose, 40, file);
+                            expect(result).toMatchObject({ timedOut: true, publishes: 0 });
+                            expect(result).not.toHaveProperty('shortened');
+                        }
+                        for (const file of files) {
+                            const result = await reopenOnly(verbose, 5000, file);
+                            expect(result).toMatchObject({ timedOut: true, publishes: 0, shortened: true });
+                            expect(result.ms).toBeLessThan(1000);
+                        }
+                        expect(silence.reopenWaits()).toEqual({
+                            'diagnostics/open': { waits: 6, longest_streak: 2, shortened: 3 },
                         });
                     });
 
