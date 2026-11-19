@@ -1853,6 +1853,7 @@ const RegisteredLanguages: Record<string, string> = {
     '.mly': 'ocaml.menhir',
     '.hs': 'haskell',
     '.lhs': 'literate haskell',
+    '.nix': 'nix',
     '.txt': 'plaintext',
 };
 

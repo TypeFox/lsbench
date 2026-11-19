@@ -207,6 +207,8 @@ describe('detectLanguageId', () => {
         ['parser.mly', 'ocaml.menhir'],
         ['app/Main.hs', 'haskell'],
         ['Notes.LHS', 'literate haskell'],
+        ['lib.nix', 'nix'],
+        ['flake.NIX', 'nix'],
         ['notes.txt', 'plaintext'],
     ])('maps %s to %s', (file, languageId) => {
         expect(detectLanguageId(file)).toBe(languageId);
