@@ -1929,6 +1929,9 @@ export function mergeCapabilities(
     return result;
 }
 
+const LANGUAGE_OVERRIDE_KEY = /^(?:\[[^\]]+\])+$/;
+const DOTTED_LANGUAGE_OVERRIDE_KEY = /^((?:\[[^\]]+\])+)\.(.+)$/;
+
 /**
  * Expands dotted keys into nested objects at every level, as VS Code does for
  * settings.json: { "html.format": { "enable": true } } becomes { html: { format: { enable: true } } }.
@@ -1936,14 +1939,24 @@ export function mergeCapabilities(
  * over a dotted one. The input is not mutated.
  */
 export function expandSettings(settings: Record<string, unknown>): Record<string, unknown> {
+    return expandSettingsLevel(settings, true);
+}
+
+function expandSettingsLevel(settings: Record<string, unknown>, topLevel: boolean): Record<string, unknown> {
     const dotted: Array<[string, unknown]> = [];
     const plain: Array<[string, unknown]> = [];
     for (const entry of Object.entries(settings)) {
-        (entry[0].includes('.') ? dotted : plain).push(entry);
+        const isOverride = topLevel && LANGUAGE_OVERRIDE_KEY.test(entry[0]);
+        (entry[0].includes('.') && !isOverride ? dotted : plain).push(entry);
     }
     // dotted keys go in first so plain keys merge over them
     const result: Record<string, unknown> = {};
     for (const [key, value] of [...dotted, ...plain]) {
+        const override = topLevel ? languageOverrideEntry(key, value) : undefined;
+        if (override) {
+            mergeLanguageOverride(result, override[0], override[1]);
+            continue;
+        }
         const segments = key.split('.');
         const last = segments.pop() as string;
         let target = result;
@@ -1953,7 +1966,7 @@ export function expandSettings(settings: Record<string, unknown>): Record<string
             }
             target = target[segment] as Record<string, unknown>;
         }
-        const expanded = isPlainObject(value) ? expandSettings(value) : value;
+        const expanded = isPlainObject(value) ? expandSettingsLevel(value, false) : value;
         const current = target[last];
         if (isPlainObject(current) && isPlainObject(expanded)) {
             target[last] = mergeCapabilities(current, expanded);
@@ -1962,6 +1975,26 @@ export function expandSettings(settings: Record<string, unknown>): Record<string
         }
     }
     return result;
+}
+
+function languageOverrideEntry(key: string, value: unknown): [string, unknown] | undefined {
+    if (LANGUAGE_OVERRIDE_KEY.test(key)) {
+        return [key, value];
+    }
+    const match = DOTTED_LANGUAGE_OVERRIDE_KEY.exec(key);
+    if (match) {
+        return [match[1], { [match[2]]: value }];
+    }
+    return undefined;
+}
+
+function mergeLanguageOverride(result: Record<string, unknown>, section: string, value: unknown): void {
+    const current = result[section];
+    if (isPlainObject(current) && isPlainObject(value)) {
+        result[section] = { ...current, ...value };
+    } else {
+        result[section] = isPlainObject(value) ? { ...value } : value;
+    }
 }
 
 /**

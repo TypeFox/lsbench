@@ -821,8 +821,45 @@ describe('expandSettings', () => {
         expect(expandSettings({ 'a.b': 1, a: 2 })).toEqual({ a: 2 });
     });
 
+    it('keeps the keys of language override sections flat', () => {
+        expect(expandSettings({ '[yaml]': { 'editor.tabSize': 2 } })).toEqual({ '[yaml]': { 'editor.tabSize': 2 } });
+        expect(expandSettings({ '[javascript][typescript]': { 'editor.tabSize': 4 } })).toEqual({
+            '[javascript][typescript]': { 'editor.tabSize': 4 },
+        });
+    });
+
+    it('splits a dotted key after a language override section and keeps the rest flat', () => {
+        expect(expandSettings({ '[yaml].editor.tabSize': 2 })).toEqual({ '[yaml]': { 'editor.tabSize': 2 } });
+    });
+
+    it('expands other sections next to a language override section', () => {
+        expect(expandSettings({ '[yaml]': { 'editor.tabSize': 2 }, 'yaml.format.enable': true })).toEqual({
+            '[yaml]': { 'editor.tabSize': 2 },
+            yaml: { format: { enable: true } },
+        });
+    });
+
+    it('merges language override keys flat, letting the plain section win', () => {
+        expect(
+            expandSettings({
+                '[yaml]': { 'editor.tabSize': 2, 'editor.insertSpaces': true },
+                '[yaml].editor.tabSize': 4,
+                '[yaml].editor.wordWrap': 'on',
+            }),
+        ).toEqual({ '[yaml]': { 'editor.tabSize': 2, 'editor.insertSpaces': true, 'editor.wordWrap': 'on' } });
+    });
+
+    it('expands bracketed keys below the top level', () => {
+        expect(expandSettings({ foo: { '[bar]': { 'a.b': 1 } } })).toEqual({ foo: { '[bar]': { a: { b: 1 } } } });
+    });
+
     it('does not mutate the input', () => {
-        const settings = { html: { format: { enable: true } }, 'html.format': { wrapLineLength: 80 } };
+        const settings = {
+            html: { format: { enable: true } },
+            'html.format': { wrapLineLength: 80 },
+            '[yaml]': { 'editor.tabSize': 2 },
+            '[yaml].editor.insertSpaces': true,
+        };
         const copy = structuredClone(settings);
         expandSettings(settings);
         expect(settings).toEqual(copy);
@@ -834,7 +871,14 @@ describe('resolveConfigurationSection', () => {
         html: { format: { enable: true }, suggest: { html5: true } },
         'js/ts': { implicitProjectConfig: { checkJs: true } },
         'css.lint': { emptyRules: 'warning' },
+        '[yaml]': { 'editor.tabSize': 2 },
+        'yaml.format.enable': true,
         off: null,
+    });
+
+    it('resolves a language override section to its flat keys', () => {
+        expect(resolveConfigurationSection(settings, '[yaml]')).toEqual({ 'editor.tabSize': 2 });
+        expect(resolveConfigurationSection(settings, 'yaml')).toEqual({ format: { enable: true } });
     });
 
     it('resolves a dotted path into nested objects', () => {
