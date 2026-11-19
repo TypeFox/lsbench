@@ -215,6 +215,8 @@ describe('detectLanguageId', () => {
         ['thesis.cls', 'latex'],
         ['refs.bib', 'bibtex'],
         ['Refs.BIB', 'bibtex'],
+        ['main.typ', 'typst'],
+        ['chapters/Intro.TYP', 'typst'],
         ['notes.txt', 'plaintext'],
     ])('maps %s to %s', (file, languageId) => {
         expect(detectLanguageId(file)).toBe(languageId);

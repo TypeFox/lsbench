@@ -17,6 +17,7 @@
 - `openDocument` warns once per extension, also without `--verbose`, when it opens a document as `plaintext` for lack of a registered language id, naming the extension and pointing at `addRegisteredLanguage()` and `options.languageId`. The report lists such extensions in `plaintext_fallbacks`, the printed summary notes them, and the silent wait and `until` hints add that the documents were opened as plaintext. The verbose open line reads `Opened main.tf (plaintext, fallback)`.
 - `.nix` opens as `nix`, matching the Nix IDE VS Code extension, where it used to fall back to `plaintext`.
 - `.tex`, `.sty` and `.cls` open as `latex` and `.bib` as `bibtex`, matching LaTeX Workshop, where they used to fall back to `plaintext`. texlab used to read an open `plaintext` `.bib` as LaTeX, so citations into it were undefined and it published on its first open only.
+- `.typ` opens as `typst`, matching the Tinymist VS Code extension, where it used to fall back to `plaintext`.
 - `.ml` opens as `ocaml`, `.mli` as `ocaml.interface`, `.mll` as `ocaml.ocamllex`, `.mly` as `ocaml.menhir`, `.hs` as `haskell` and `.lhs` as `literate haskell`, matching the OCaml Platform and Haskell VS Code extensions, where they used to fall back to `plaintext`.
 - `.tf` opens as `terraform`, `.tfvars` as `terraform-vars` and `.hcl` as `hcl`, where they used to fall back to `plaintext`. `.txt` maps to `plaintext` and does not warn.
 - `SilenceTracker` adds `recordPlaintextFallback(extension)` and `plaintextFallbacks()`.

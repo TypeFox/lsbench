@@ -1858,6 +1858,7 @@ const RegisteredLanguages: Record<string, string> = {
     '.sty': 'latex',
     '.cls': 'latex',
     '.bib': 'bibtex',
+    '.typ': 'typst',
     '.txt': 'plaintext',
 };
 
