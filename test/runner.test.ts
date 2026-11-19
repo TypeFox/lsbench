@@ -1,8 +1,9 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { BenchOptions, BenchReport } from 'lsbench';
-import { loadActionScript, resolveServerConfig, runBenchmark } from 'lsbench';
+import { loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 describe('resolveServerConfig', () => {
@@ -126,6 +127,110 @@ describe('loadActionScript', () => {
         const file = writeScript('not-a-fn.ts', `export default 42;`);
         await expect(loadActionScript(file)).rejects.toThrow(/must have a default-exported function/);
     });
+
+    it('loads the setup export next to the action', async () => {
+        const file = writeScript(
+            'with-setup.mjs',
+            `export function setup(client) {
+                client.notify('custom/ready', null);
+            }
+            export default async function () {}`,
+        );
+
+        const setup = await loadSetupScript(file);
+        const sent: unknown[] = [];
+        await setup?.({
+            onNotification: () => {},
+            onRequest: () => {},
+            notify: (method, params) => sent.push([method, params]),
+        });
+        expect(sent).toEqual([['custom/ready', null]]);
+        expect(typeof (await loadActionScript(file))).toBe('function');
+    });
+
+    it('returns no setup for a script without one', async () => {
+        const file = writeScript('without-setup.mjs', `export default async function () {}`);
+        await expect(loadSetupScript(file)).resolves.toBeUndefined();
+    });
+
+    it('throws when setup is not a function', async () => {
+        const file = writeScript('bad-setup.mjs', `export const setup = 42; export default async function () {}`);
+        await expect(loadSetupScript(file)).rejects.toThrow(/must export setup as a function/);
+    });
+});
+
+const awaitingClientServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const waiting = new Map();
+let next = 0;
+const ask = () => {
+    const id = ++next;
+    const answer = new Promise((resolve) => waiting.set(id, resolve));
+    conn.sendNotification('custom/request', [id, 'projectInfo', {}]);
+    return answer;
+};
+conn.onNotification('custom/response', ([id]) => waiting.get(id)?.());
+conn.onRequest('initialize', async () => {
+    await ask();
+    return { capabilities: { hoverProvider: true } };
+});
+conn.onRequest('textDocument/hover', async () => {
+    await ask();
+    return { contents: 'answered' };
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('runBenchmark with a script setup', () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-setup-'));
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    for (const restart of [false, true]) {
+        it(`answers the server through setup on every spawn (${restart ? 'restart' : 'keep alive'})`, async () => {
+            const script = path.join(tmpDir, `actions-${restart}.mjs`);
+            fs.writeFileSync(
+                script,
+                `export const spawns = [];
+                export function setup(client) {
+                    spawns.push(spawns.length);
+                    client.onNotification('custom/request', ([[id]]) => client.notify('custom/response', [id, null]));
+                }
+                export default async function (ctx) {
+                    await ctx.request('textDocument/hover', {});
+                }`,
+                'utf-8',
+            );
+            const report = await runBenchmark({
+                server: process.execPath,
+                serverArgs: ['--input-type=module', '-e', awaitingClientServer],
+                workspace: tmpDir,
+                script,
+                iterations: 2,
+                warmup: 1,
+                output: path.join(tmpDir, `report-${restart}.json`),
+                restart,
+                verbose: false,
+            });
+
+            const hovers = report.runs.flatMap((run) => run.requests.filter((t) => t.method === 'textDocument/hover'));
+            expect(hovers.map((t) => t.result)).toEqual(['ok', 'ok']);
+            const { spawns } = await import(pathToFileURL(script).href);
+            expect(spawns).toHaveLength(restart ? 3 : 1);
+        });
+    }
 });
 
 /** a fake server that exits on shutdown without replying */

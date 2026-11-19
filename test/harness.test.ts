@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { DiagnosticsPublish, PublishStatus } from 'lsbench';
+import type { DiagnosticsPublish, PublishStatus, SetupScript } from 'lsbench';
 import {
     BenchContextImpl,
     DiagnosticsTracker,
@@ -107,6 +107,180 @@ describe('LspHarness server-to-client requests', () => {
         } finally {
             await harness.stop();
         }
+    });
+});
+
+const clientHookServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const waiting = new Map();
+let next = 0;
+const ask = (name) => {
+    const id = ++next;
+    const answer = new Promise((resolve) => waiting.set(id, resolve));
+    conn.sendNotification('custom/request', [id, name, { file: 'App.vue' }]);
+    return answer;
+};
+conn.onNotification('custom/response', ([id, result]) => waiting.get(id)?.({ id, result }));
+conn.onRequest('initialize', async () => {
+    const replies = {};
+    for (const method of ['custom/ask', 'custom/fail', 'custom/unknown']) {
+        try {
+            replies[method] = { result: await conn.sendRequest(method, { from: 'server' }) };
+        } catch (err) {
+            replies[method] = { error: err.code };
+        }
+    }
+    return { capabilities: { hoverProvider: true, replies, projectInfo: await ask('projectInfo') } };
+});
+conn.onRequest('textDocument/hover', async () => {
+    conn.sendNotification('custom/ignored', [1]);
+    conn.sendNotification('custom/ignored', [2]);
+    return ask('hover');
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('LspHarness setup', () => {
+    const hookServer = { command: process.execPath, args: ['--input-type=module', '-e', clientHookServer] };
+    const answeringSetup: SetupScript = (client) => {
+        client.onNotification('custom/request', (params) => {
+            const [[id]] = params as [[number, string, unknown]];
+            setTimeout(() => client.notify('custom/response', [id, null]), 1);
+        });
+        client.onRequest('custom/ask', (params) => ({ answered: params }));
+        client.onRequest('custom/fail', () => Promise.reject(new Error('nope')));
+    };
+
+    it('registers the handlers before initialize on every start', async () => {
+        for (let spawn = 0; spawn < 2; spawn++) {
+            const harness = new LspHarness(hookServer, process.cwd(), false, { setup: answeringSetup });
+            try {
+                await harness.start();
+                expect(harness.capabilities?.projectInfo).toEqual({ id: 1, result: null });
+                expect(harness.capabilities?.replies).toEqual({
+                    'custom/ask': { result: { answered: { from: 'server' } } },
+                    'custom/fail': { error: -32603 },
+                    'custom/unknown': { error: -32601 },
+                });
+                expect(await harness.sendRequest('textDocument/hover', {})).toEqual({ id: 2, result: null });
+            } finally {
+                await harness.stop();
+            }
+        }
+    });
+
+    it('awaits an async setup before initialize', async () => {
+        const setup: SetupScript = async (client) => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            answeringSetup(client);
+        };
+        const harness = new LspHarness(hookServer, process.cwd(), false, { setup });
+        try {
+            await harness.start();
+            expect(harness.capabilities?.projectInfo).toEqual({ id: 1, result: null });
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('leaves a request awaiting a client notification hanging without a handler', async () => {
+        const setup: SetupScript = (client) => {
+            client.onNotification('custom/request', (params) => {
+                const [[id, name]] = params as [[number, string, unknown]];
+                if (name === 'projectInfo') {
+                    client.notify('custom/response', [id, null]);
+                }
+            });
+        };
+        const harness = new LspHarness(hookServer, process.cwd(), false, { setup });
+        try {
+            await harness.start();
+            const hover = harness.sendRequest('textDocument/hover', {});
+            hover.catch(() => {});
+            const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 300));
+            expect(await Promise.race([hover, timeout])).toBe('timeout');
+        } finally {
+            await harness.stop();
+        }
+    });
+
+    it('rejects handlers for methods lsbench handles itself', async () => {
+        const errors: string[] = [];
+        const setup: SetupScript = (client) => {
+            for (const register of [
+                () => client.onRequest('workspace/configuration', () => []),
+                () => client.onNotification('$/progress', () => {}),
+            ]) {
+                try {
+                    register();
+                } catch (err: unknown) {
+                    errors.push((err as Error).message);
+                }
+            }
+            answeringSetup(client);
+        };
+        const harness = new LspHarness(hookServer, process.cwd(), false, { setup });
+        try {
+            await harness.start();
+        } finally {
+            await harness.stop();
+        }
+        expect(errors).toEqual([
+            'setup cannot handle the request workspace/configuration, lsbench handles it itself',
+            'setup cannot handle the notification $/progress, lsbench handles it itself',
+        ]);
+    });
+
+    it('logs unhandled server messages once per method in verbose mode', async () => {
+        const lines: string[] = [];
+        const spy = vi.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+            lines.push(String(msg));
+        });
+        const harness = new LspHarness(hookServer, process.cwd(), true, { setup: answeringSetup });
+        try {
+            await harness.start();
+            await harness.sendRequest('textDocument/hover', {});
+            await harness.sendRequest('textDocument/hover', {});
+        } finally {
+            await harness.stop();
+            spy.mockRestore();
+        }
+        const unhandled = lines.filter((line) => line.includes('Unhandled'));
+        expect(unhandled).toEqual([
+            "[lsbench] Unhandled request custom/unknown from the server, a script's setup can handle it",
+            "[lsbench] Unhandled notification custom/ignored from the server, a script's setup can handle it",
+        ]);
+    });
+
+    it('logs a failing notification handler without stopping the run', async () => {
+        const lines: string[] = [];
+        const spy = vi.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+            lines.push(String(msg));
+        });
+        const setup: SetupScript = (client) => {
+            answeringSetup(client);
+            client.onNotification('custom/ignored', () => {
+                throw new Error('boom');
+            });
+        };
+        const harness = new LspHarness(hookServer, process.cwd(), true, { setup });
+        try {
+            await harness.start();
+            expect(await harness.sendRequest('textDocument/hover', {})).toEqual({ id: 2, result: null });
+        } finally {
+            await harness.stop();
+            spy.mockRestore();
+        }
+        expect(lines.filter((line) => line.includes('boom'))).toEqual([
+            '[lsbench] setup handler for custom/ignored failed: boom',
+            '[lsbench] setup handler for custom/ignored failed: boom',
+        ]);
     });
 });
 

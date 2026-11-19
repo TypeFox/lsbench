@@ -496,6 +496,19 @@ otherwise, and \`.mjs\` always is.
 All file paths are relative to the workspace root. Positions are zero-based
 (line 0 = first line, character 0 = first column).
 
+A script may also export \`setup(client)\`, called on every server spawn before
+\`initialize\`, to answer custom server messages. \`client.onNotification(method,
+handler)\` and \`client.onRequest(method, handler)\` get params as on the wire,
+\`client.notify(method, params)\` sends one. Methods lsbench answers itself throw.
+For vue-language-server:
+
+    export function setup(client: ClientHooks) {
+      client.onNotification('tsserver/request', (params) => {
+        const [[id]] = params as [[number, string, unknown]];
+        client.notify('tsserver/response', [id, null]);
+      });
+    }
+
 ## The context API (BenchContext)
 
 The object passed to your script. Import its type from 'lsbench'. Methods marked

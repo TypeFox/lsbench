@@ -574,3 +574,11 @@ export interface BenchContext {
 
 /** The shape of a user-authored action script's default export (default-exported function) */
 export type ActionScript = (ctx: BenchContext) => Promise<void>;
+
+export interface ClientHooks {
+    onNotification(method: string, handler: (params: unknown) => void | Promise<void>): void;
+    onRequest(method: string, handler: (params: unknown) => unknown): void;
+    notify(method: string, params: unknown): void;
+}
+
+export type SetupScript = (client: ClientHooks) => void | Promise<void>;

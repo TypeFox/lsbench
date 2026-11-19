@@ -13,6 +13,7 @@ import type {
     IterationResult,
     RequestTiming,
     ServerConfig,
+    SetupScript,
 } from './types.js';
 
 /**
@@ -68,20 +69,34 @@ export function actionScriptExtensionError(scriptPath: string): string {
  * parameter properties.
  */
 export async function loadActionScript(scriptPath: string): Promise<ActionScript> {
-    const absPath = path.resolve(scriptPath);
-
-    if (!isActionScriptPath(absPath)) {
-        throw new Error(actionScriptExtensionError(scriptPath));
-    }
-
-    const mod = await import(pathToFileURL(absPath).href);
-    const fn: ActionScript = mod.default;
+    const mod = await importActionScript(scriptPath);
+    const fn = mod.default as ActionScript;
 
     if (typeof fn !== 'function') {
         throw new Error(`Action script ${scriptPath} must have a default-exported function.`);
     }
 
     return fn;
+}
+
+export async function loadSetupScript(scriptPath: string): Promise<SetupScript | undefined> {
+    const mod = await importActionScript(scriptPath);
+    const setup: unknown = mod.setup;
+    if (setup === undefined) {
+        return undefined;
+    }
+    if (typeof setup !== 'function') {
+        throw new Error(`Action script ${scriptPath} must export setup as a function when it exports one.`);
+    }
+    return setup as SetupScript;
+}
+
+async function importActionScript(scriptPath: string): Promise<Record<string, unknown>> {
+    const absPath = path.resolve(scriptPath);
+    if (!isActionScriptPath(absPath)) {
+        throw new Error(actionScriptExtensionError(scriptPath));
+    }
+    return import(pathToFileURL(absPath).href);
 }
 
 /**
@@ -100,6 +115,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         opts.allowExitSignals,
     );
     const actionFn = await loadActionScript(opts.script);
+    const setup = await loadSetupScript(opts.script);
 
     const totalIterations = opts.warmup + opts.iterations;
     const runs: IterationResult[] = [];
@@ -164,7 +180,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         let harness: LspHarness | null = null;
         let ctx: BenchContextImpl | null = null;
         // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
-        const harnessOptions = { serverLog: opts.serverLog, trace };
+        const harnessOptions = { serverLog: opts.serverLog, trace, setup };
         // one silence tracker for the run, so silent waits add up across warmups and restarts
         const silence = new SilenceTracker();
         const ctxOptions = {

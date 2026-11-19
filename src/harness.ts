@@ -2,7 +2,14 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as rpc from 'vscode-jsonrpc/node';
-import type { Registration, RequestTiming, ServerCapabilities, ServerConfig } from './types.js';
+import type {
+    ClientHooks,
+    Registration,
+    RequestTiming,
+    ServerCapabilities,
+    ServerConfig,
+    SetupScript,
+} from './types.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
 interface InitializeResult {
@@ -1114,6 +1121,7 @@ export interface LspHarnessOptions {
     serverLog?: string;
     /** record every message exchanged with the server to this trace, shared across restarts */
     trace?: WireTrace;
+    setup?: SetupScript;
 }
 
 /**
@@ -1151,6 +1159,7 @@ export class LspHarness {
     private trace: WireTrace | undefined;
     /** called on each workspace/diagnostic/refresh from the server */
     private refreshListeners = new Set<() => void>();
+    private setup: SetupScript | undefined;
 
     constructor(
         private config: ServerConfig,
@@ -1162,6 +1171,7 @@ export class LspHarness {
         this.settings = config.settings ? expandSettings(config.settings) : undefined;
         this.output = new ServerOutput(options.serverLog, verbose);
         this.trace = options.trace;
+        this.setup = options.setup;
         this.diagnostics = new DiagnosticsTracker(
             (msg) => this.log(msg),
             CLOSE_PUBLISH_WINDOW_MS,
@@ -1323,24 +1333,35 @@ export class LspHarness {
 
         this.connection.listen();
 
+        const connection = this.connection;
+        const builtIn = new Set<string>();
+        const onNotification = (method: string, handler: rpc.GenericNotificationHandler) => {
+            builtIn.add(method);
+            connection.onNotification(method, handler);
+        };
+        const onRequest = (method: string, handler: rpc.GenericRequestHandler<unknown, unknown>) => {
+            builtIn.add(method);
+            connection.onRequest(method, handler);
+        };
+
         // Subscribe to diagnostics notifications
-        this.connection.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
+        onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
             this.diagnostics.receive(params);
         });
 
         // route the server's own log output with its stderr
-        this.connection.onNotification('window/logMessage', (params: { type: number; message: string }) => {
+        onNotification('window/logMessage', (params: { type: number; message: string }) => {
             this.output.message(params.message);
         });
-        this.connection.onNotification('window/showMessage', (params: { type: number; message: string }) => {
+        onNotification('window/showMessage', (params: { type: number; message: string }) => {
             this.output.message(`showMessage: ${params.message}`);
         });
-        this.connection.onNotification('$/logTrace', (params: { message: string; verbose?: string }) => {
+        onNotification('$/logTrace', (params: { message: string; verbose?: string }) => {
             this.output.message(`trace: ${params.message}${params.verbose ? `\n${params.verbose}` : ''}`);
         });
 
         // answer workspace/configuration from the settings, or {} per item when none are given
-        this.connection.onRequest('workspace/configuration', (params: { items: Array<{ section?: string }> }) => {
+        onRequest('workspace/configuration', (params: { items: Array<{ section?: string }> }) => {
             const settings = this.settings;
             return params.items.map((item) => {
                 if (!settings) {
@@ -1351,7 +1372,7 @@ export class LspHarness {
         });
 
         // acknowledge pull diagnostic refresh requests, pending auto diagnostics waits pull on them
-        this.connection.onRequest('workspace/diagnostic/refresh', () => {
+        onRequest('workspace/diagnostic/refresh', () => {
             this.log('Server requested workspace/diagnostic/refresh');
             for (const listener of this.refreshListeners) {
                 listener();
@@ -1367,23 +1388,23 @@ export class LspHarness {
             'workspace/inlineValue/refresh',
         ];
         for (const method of noOpRequests) {
-            this.connection.onRequest(method, () => null);
+            onRequest(method, () => null);
         }
 
         // track work done progress and rust-analyzer's server status for idle waits
-        this.connection.onRequest('window/workDoneProgress/create', (params: { token: ProgressToken }) => {
+        onRequest('window/workDoneProgress/create', (params: { token: ProgressToken }) => {
             this.progress.create(params.token);
             return null;
         });
-        this.connection.onNotification('$/progress', (params: ProgressParams) => {
+        onNotification('$/progress', (params: ProgressParams) => {
             this.progress.progress(params);
         });
-        this.connection.onNotification('experimental/serverStatus', (params: ServerStatusParams) => {
+        onNotification('experimental/serverStatus', (params: ServerStatusParams) => {
             this.progress.serverStatusChanged(params);
         });
 
         // accept and remember all dynamic registrations
-        this.connection.onRequest('client/registerCapability', (params: { registrations?: Registration[] }) => {
+        onRequest('client/registerCapability', (params: { registrations?: Registration[] }) => {
             for (const reg of params.registrations ?? []) {
                 this._registrations.set(reg.id, reg);
                 this.log(`Registered ${reg.method}`);
@@ -1391,23 +1412,27 @@ export class LspHarness {
         });
 
         // the LSP spec really does spell this field 'unregisterations'
-        this.connection.onRequest('client/unregisterCapability', (params: { unregisterations?: Registration[] }) => {
+        onRequest('client/unregisterCapability', (params: { unregisterations?: Registration[] }) => {
             for (const reg of params.unregisterations ?? []) {
                 this._registrations.delete(reg.id);
             }
         });
 
         // no user is present to pick an action, so dismiss the prompt
-        this.connection.onRequest('window/showMessageRequest', (params: { type: number; message: string }) => {
+        onRequest('window/showMessageRequest', (params: { type: number; message: string }) => {
             this.log(`Dismissed window/showMessageRequest: ${params.message}`);
             return null;
         });
 
         // lsbench never mutates the workspace on the server's behalf
-        this.connection.onRequest('workspace/applyEdit', (params: { label?: string }) => {
+        onRequest('workspace/applyEdit', (params: { label?: string }) => {
             this.log(`Declined workspace/applyEdit${params.label ? `: ${params.label}` : ''}`);
             return { applied: false, failureReason: 'lsbench does not apply workspace edits' };
         });
+
+        const scriptNotifications = new Map<string, (params: unknown) => void | Promise<void>>();
+        const scriptRequests = new Map<string, (params: unknown) => unknown>();
+        this.routeScriptMessages(connection, scriptNotifications, scriptRequests);
 
         // time spawn up to the OS reporting the process as started
         try {
@@ -1416,6 +1441,26 @@ export class LspHarness {
         } catch (err: unknown) {
             this.recordLifecycle('lifecycle/spawn', spawnStart, err);
             throw err;
+        }
+
+        if (this.setup) {
+            const reserve = (kind: string, method: string) => {
+                if (builtIn.has(method)) {
+                    throw new Error(`setup cannot handle the ${kind} ${method}, lsbench handles it itself`);
+                }
+            };
+            const client: ClientHooks = {
+                onNotification: (method, handler) => {
+                    reserve('notification', method);
+                    scriptNotifications.set(method, handler);
+                },
+                onRequest: (method, handler) => {
+                    reserve('request', method);
+                    scriptRequests.set(method, handler);
+                },
+                notify: (method, params) => this.sendNotification(method, params),
+            };
+            await Promise.race([Promise.resolve(this.setup(client)), earlyExit]);
         }
 
         // Perform LSP initialize
@@ -1756,6 +1801,42 @@ export class LspHarness {
                     resolve(value as R);
                 }
             }, fail);
+        });
+    }
+
+    private routeScriptMessages(
+        connection: rpc.MessageConnection,
+        notifications: Map<string, (params: unknown) => void | Promise<void>>,
+        requests: Map<string, (params: unknown) => unknown>,
+    ): void {
+        const unhandled = new Set<string>();
+        const logUnhandled = (kind: string, method: string) => {
+            if (!unhandled.has(method)) {
+                unhandled.add(method);
+                this.log(`Unhandled ${kind} ${method} from the server, a script's setup can handle it`);
+            }
+        };
+        connection.onNotification((method, params) => {
+            const handler = notifications.get(method);
+            if (!handler) {
+                logUnhandled('notification', method);
+                return;
+            }
+            const failed = (err: unknown) =>
+                this.log(`setup handler for ${method} failed: ${err instanceof Error ? err.message : String(err)}`);
+            try {
+                Promise.resolve(handler(params)).catch(failed);
+            } catch (err: unknown) {
+                failed(err);
+            }
+        });
+        connection.onRequest((method, params) => {
+            const handler = requests.get(method);
+            if (!handler) {
+                logUnhandled('request', method);
+                return new rpc.ResponseError(rpc.ErrorCodes.MethodNotFound, `Unhandled method ${method}`);
+            }
+            return handler(params);
         });
     }
 

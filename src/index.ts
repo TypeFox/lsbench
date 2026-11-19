@@ -65,7 +65,7 @@ export {
     uriToPath,
     WireTrace,
 } from './harness.js';
-export { loadActionScript, resolveServerConfig, runBenchmark } from './runner.js';
+export { loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from './runner.js';
 export { buildReport, computeMethodStats, printSummary } from './stats.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -75,6 +75,7 @@ export type {
     BenchContext,
     BenchOptions,
     BenchReport,
+    ClientHooks,
     CodeActionOptions,
     DiagnosticsMode,
     EditOperation,
@@ -89,6 +90,7 @@ export type {
     RequestTiming,
     ServerCapabilities,
     ServerConfig,
+    SetupScript,
     ReopenWaits,
     SilentWaits,
     UntilRejectedWaits,

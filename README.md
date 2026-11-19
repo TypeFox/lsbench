@@ -324,6 +324,37 @@ lsbench answers requests from the server so it doesn't get stuck waiting on a cl
 - `window/showMessageRequest` is dismissed with `null`
 - `workspace/applyEdit` is declined with `applied: false`, lsbench avoids modifying the workspace using server-initiated requests
 
+### Custom server messages
+
+Some servers send custom notifications or requests and wait for the client to answer them. An action script can export a `setup` function next to its default export to handle them. lsbench calls it on every server spawn, after the process starts and before `initialize`, so its handlers apply from the first message on, including each `--restart` spawn. `setup` may be async, `initialize` waits for it, and its time is not part of `lifecycle/spawn` or `lifecycle/initialize`.
+
+```ts
+import type { BenchContext, ClientHooks } from 'lsbench';
+
+// vue-language-server waits for a tsserver/response to each tsserver/request,
+// answering null makes it fall back to an inferred project
+export function setup(client: ClientHooks) {
+  client.onNotification('tsserver/request', (params) => {
+    const [[id]] = params as [[number, string, unknown]];
+    client.notify('tsserver/response', [id, null]);
+  });
+}
+
+export default async function (ctx: BenchContext) {
+  await ctx.openDocument('src/App.vue');
+  await ctx.documentSymbol('src/App.vue');
+}
+```
+
+- `client.onNotification(method, handler)` handles a server notification. The handler may answer right away or after an async call, for example to a tsserver the script spawns. A handler that throws or rejects is logged in verbose mode and the run goes on.
+- `client.onRequest(method, handler)` answers a server request with the handler's result, or its resolved value. A handler that throws or rejects answers with an error.
+- `client.notify(method, params)` sends a notification to the server, it is not timed.
+- Params reach handlers exactly as they are on the wire. A server sending one array with vscode-jsonrpc, like vue-language-server does, sends it wrapped as `[[id, name, args]]`, and `client.notify(method, [id, null])` sends it the same way.
+- Methods lsbench answers itself (see [server to client requests](#server-to-client-requests), plus `textDocument/publishDiagnostics`, `window/logMessage`, `window/showMessage`, `$/logTrace`, `$/progress` and `experimental/serverStatus`) cannot be taken over, registering one throws.
+- Registering a method again replaces its handler.
+
+Server notifications without a handler are dropped and requests without one are answered with `MethodNotFound`, as before. Verbose mode logs each such method once, e.g. `Unhandled notification tsserver/request from the server, a script's setup can handle it`, so a server hanging on an unanswered message points at its cause. `loadSetupScript(path)` loads a script's `setup`, undefined when it has none, and `LspHarnessOptions.setup` passes it to a harness.
+
 ### Registering languages
 
 In some cases you may also need to register a language ID for a given extension.
