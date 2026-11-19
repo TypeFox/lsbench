@@ -159,6 +159,13 @@ interface TrackedDocument extends DocumentSyncState {
     acceptedAtOnce?: boolean;
 }
 
+interface ReadState {
+    generation: number;
+    open: boolean;
+    closedAt?: bigint;
+    syncs: number;
+}
+
 /**
  * Tracks document sync notifications and diagnostics publishes per URI, so waits can tell
  * a publish for the current document state from a stale one. Publishes received while a
@@ -191,6 +198,7 @@ export class DiagnosticsTracker {
     private latest = new Map<string, DiagnosticsPublish>();
     private listeners = new Map<string, Set<(publish: DiagnosticsPublish) => void>>();
     private seq = 0;
+    private reads = new WeakMap<object, ReadState>();
     /** counts didOpen, didChange and didClose notifications of any document */
     private syncs = 0;
     private _closeBehavior: ClosePublishBehavior = 'unknown';
@@ -286,27 +294,55 @@ export class DiagnosticsTracker {
         this.documents.set(uri, doc);
     }
 
+    noteRead(params: PublishDiagnosticsParams): void {
+        if (typeof params?.uri !== 'string') {
+            return;
+        }
+        const doc = this.documents.get(this.key(params.uri));
+        this.reads.set(params, {
+            generation: doc?.generation ?? 0,
+            open: doc?.open ?? false,
+            closedAt: doc?.closedAt,
+            syncs: this.syncs,
+        });
+    }
+
     /** Record a publish and hand it to the listeners of its URI, unless it is held as a candidate */
     receive(params: PublishDiagnosticsParams): DiagnosticsPublish {
         const receivedAt = process.hrtime.bigint();
         const key = this.key(params.uri);
         const doc = this.documents.get(key);
-        let generation = doc?.generation ?? 0;
+        const read = this.reads.get(params) ?? {
+            generation: doc?.generation ?? 0,
+            open: doc?.open ?? false,
+            closedAt: doc?.closedAt,
+            syncs: this.syncs,
+        };
+        this.reads.delete(params);
+        let generation = read.generation;
         let tentative = false;
         let clearsClose = false;
-        let status: PublishStatus = !doc || doc.generation === 0 ? 'unopened' : 'current';
+        let status: PublishStatus = read.generation === 0 ? 'unopened' : 'current';
         if (status === 'unopened') {
             this.hintCaseMismatch(key, params.uri);
         }
-        if (doc && doc.generation > 0 && !doc.open) {
+        if (doc && read.generation > 0 && !read.open) {
             status = 'closed';
             clearsClose = params.diagnostics.length === 0;
             doc.closePublishes++;
-            const clearing = this.isClearingPublish(params, doc);
-            this.learnFromClosedPublish(params, doc);
+            const clearing = this.isClearingPublish(params, doc, read.syncs);
+            this.learnFromClosedPublish(params, doc, read.syncs);
             if (clearing) {
                 this.countClear(params.uri, doc);
             }
+        } else if (doc && read.generation > 0 && (read.generation < doc.generation || !doc.open)) {
+            if (read.generation < doc.generation) {
+                status = 'stale';
+            }
+            this.log(
+                `Publish for ${params.uri} read for generation ${read.generation} before the document was ` +
+                    `${doc.open ? 'reopened' : 'closed'}, kept with that generation`,
+            );
         } else if (doc?.candidate) {
             // a further publish after the reopen: the candidate was the close publish
             this.log(`Publish for ${params.uri} supersedes the tentative empty publish after didClose`);
@@ -368,15 +404,15 @@ export class DiagnosticsTracker {
                 }
             }
         }
-        if (doc && generation < doc.generation) {
+        if (doc && generation < read.generation) {
             doc.closePublishes++;
             doc.closePublishesAfterReopen++;
             this.countClear(params.uri, doc);
         }
-        if (params.version !== undefined && doc && doc.generation > 0) {
+        if (params.version !== undefined && doc && read.generation > 0) {
             this.versionsPublishes = true;
         }
-        if (doc?.closedAt !== undefined) {
+        if (doc?.closedAt !== undefined && read.closedAt === doc.closedAt) {
             doc.publishedSinceClose = true;
         }
         const publish: DiagnosticsPublish = {
@@ -751,14 +787,14 @@ export class DiagnosticsTracker {
      * without clearing them on close, so a publish following another sync proves nothing.
      * It never overrides a learned `silent`
      */
-    private learnFromClosedPublish(params: PublishDiagnosticsParams, doc: TrackedDocument): void {
+    private learnFromClosedPublish(params: PublishDiagnosticsParams, doc: TrackedDocument, syncs: number): void {
         if (this._closeBehavior !== 'unknown') {
             return;
         }
         if (doc.closedAt === undefined || doc.publishedSinceClose || params.diagnostics.length > 0) {
             return;
         }
-        if (doc.closeSync !== this.syncs) {
+        if (doc.closeSync !== syncs) {
             this.log(
                 `Publish for ${params.uri} while it is closed follows a sync of another document, ` +
                     'it may be revalidation, not learning that the server publishes on close',
@@ -768,8 +804,8 @@ export class DiagnosticsTracker {
         this.learn('publishes', `empty publish for ${params.uri} right after its didClose`);
     }
 
-    private isClearingPublish(params: PublishDiagnosticsParams, doc: TrackedDocument): boolean {
-        if (doc.closedAt === undefined || params.diagnostics.length > 0 || doc.closeSync !== this.syncs) {
+    private isClearingPublish(params: PublishDiagnosticsParams, doc: TrackedDocument, syncs: number): boolean {
+        if (doc.closedAt === undefined || params.diagnostics.length > 0 || doc.closeSync !== syncs) {
             return false;
         }
         return !doc.publishedSinceClose || (doc.clears ?? 0) > 0;
@@ -1273,10 +1309,15 @@ export class LspHarness {
         // Create JSON-RPC connection over stdio
         const input = this.process.stdout!;
         const output = this.process.stdin!;
-        // only wrap the reader and writer when tracing, so an untraced run pays nothing
         const trace = this.trace;
+        const diagnostics = this.diagnostics;
         this.connection = rpc.createMessageConnection(
-            trace ? trace.reader(input) : new rpc.StreamMessageReader(input),
+            new ObservedMessageReader(input, (msg) => {
+                trace?.message('in', msg);
+                if (rpc.Message.isNotification(msg) && msg.method === 'textDocument/publishDiagnostics') {
+                    diagnostics.noteRead(msg.params as PublishDiagnosticsParams);
+                }
+            }),
             trace ? trace.writer(output) : new rpc.StreamMessageWriter(output),
         );
 
@@ -2204,6 +2245,22 @@ export class ServerOutput {
 /** Direction of a traced message: `out` from lsbench to the server, `in` from the server */
 export type WireDirection = 'out' | 'in';
 
+class ObservedMessageReader extends rpc.StreamMessageReader {
+    private readonly onRead: (msg: rpc.Message) => void;
+
+    constructor(input: NodeJS.ReadableStream, onRead: (msg: rpc.Message) => void) {
+        super(input);
+        this.onRead = onRead;
+    }
+
+    override listen(callback: rpc.DataCallback): rpc.Disposable {
+        return super.listen((msg) => {
+            this.onRead(msg);
+            callback(msg);
+        });
+    }
+}
+
 /**
  * Records every JSON-RPC message exchanged with the server as JSON lines in a file, one trace
  * per run spanning server restarts. Each line carries `t`, the milliseconds since `origin` on
@@ -2244,15 +2301,7 @@ export class WireTrace {
 
     /** Wrap a reader so each message it delivers is traced as `in` first */
     reader(input: NodeJS.ReadableStream): rpc.MessageReader {
-        const traceIn = (msg: rpc.Message) => this.message('in', msg);
-        return new (class extends rpc.StreamMessageReader {
-            override listen(callback: rpc.DataCallback): rpc.Disposable {
-                return super.listen((msg) => {
-                    traceIn(msg);
-                    callback(msg);
-                });
-            }
-        })(input);
+        return new ObservedMessageReader(input, (msg) => this.message('in', msg));
     }
 
     /** Wrap a writer so each message is traced as `out` before it is written */

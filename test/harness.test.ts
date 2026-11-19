@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { DiagnosticsPublish, PublishStatus } from 'lsbench';
 import {
@@ -13,6 +15,7 @@ import {
     pullDiagnosticClientCapabilities,
     resolveConfigurationSection,
     uriToPath,
+    WireTrace,
 } from 'lsbench';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -105,6 +108,81 @@ describe('LspHarness server-to-client requests', () => {
             await harness.stop();
         }
     });
+});
+
+const closePublishServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: {} }));
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.onNotification('textDocument/didOpen', ({ textDocument }) => {
+    conn.sendNotification('textDocument/publishDiagnostics', {
+        uri: textDocument.uri,
+        version: textDocument.version,
+        diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'F401' }],
+    });
+});
+conn.onNotification('textDocument/didClose', ({ textDocument }) => {
+    conn.sendNotification('textDocument/publishDiagnostics', { uri: textDocument.uri, version: 1, diagnostics: [] });
+});
+conn.listen();
+`;
+
+describe('LspHarness publishes read before a reopen', () => {
+    for (const traced of [false, true]) {
+        it(`credits a close publish received after the reopen to the close${traced ? ' when tracing' : ''}`, async () => {
+            const lines: string[] = [];
+            vi.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+                lines.push(String(msg));
+            });
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-reopen-'));
+            const trace = traced ? new WireTrace(path.join(dir, 'trace.jsonl')) : undefined;
+            const harness = new LspHarness(
+                { command: process.execPath, args: ['--input-type=module', '-e', closePublishServer] },
+                dir,
+                true,
+                { trace },
+            );
+            const uri = pathToUri(path.join(dir, 'broken.py'));
+            const opened = { textDocument: { uri, languageId: 'python', version: 1, text: 'import os' } };
+            const noteRead = DiagnosticsTracker.prototype.noteRead;
+            let reopened = false;
+            vi.spyOn(DiagnosticsTracker.prototype, 'noteRead').mockImplementation(function (
+                this: DiagnosticsTracker,
+                params,
+            ) {
+                noteRead.call(this, params);
+                if (!reopened && params.diagnostics.length === 0) {
+                    reopened = true;
+                    harness.sendNotification('textDocument/didOpen', opened);
+                }
+            });
+            try {
+                await harness.start();
+                harness.sendNotification('textDocument/didOpen', opened);
+                await vi.waitFor(() => expect(harness.latestPublish(uri)?.generation).toBe(1));
+                harness.sendNotification('textDocument/didClose', { textDocument: { uri } });
+                await vi.waitFor(() => expect(harness.latestPublish(uri)?.generation).toBe(2));
+                expect(reopened).toBe(true);
+                expect(harness.latestPublish(uri)?.diagnostics).toHaveLength(1);
+                const publishes = lines.filter((l) => l.includes('Publish broken.py'));
+                expect(publishes).toEqual([
+                    '[lsbench] Publish broken.py v=1 n=1 current: F401',
+                    '[lsbench] Publish broken.py v=1 n=0 closed',
+                    '[lsbench] Publish broken.py v=1 n=1 current: F401',
+                ]);
+            } finally {
+                await harness.stop();
+                await trace?.close();
+                vi.restoreAllMocks();
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        });
+    }
 });
 
 describe('LspHarness workspace/diagnostic/refresh', () => {
@@ -1317,6 +1395,112 @@ describe('DiagnosticsTracker', () => {
             tracker.receive({ uri, diagnostics: [] });
             tracker.clear();
             expect(tracker.closeBehavior).toBe('unknown');
+        });
+
+        describe('publishes read before a sync and received after it', () => {
+            function tracking() {
+                const statuses: PublishStatus[] = [];
+                const logs: string[] = [];
+                const tracker = new DiagnosticsTracker(
+                    (msg) => logs.push(msg),
+                    1000,
+                    (_p, status) => statuses.push(status),
+                );
+                return { tracker, statuses, logs };
+            }
+
+            function readBeforeReopen(
+                tracker: DiagnosticsTracker,
+                params: { uri: string; version?: number; diagnostics: [] },
+            ) {
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.noteRead(params);
+                tracker.noteNotification('textDocument/didOpen', open());
+                return tracker.receive(params);
+            }
+
+            it('credits a versioned empty close publish read before the reopen to the close', async () => {
+                const { tracker, statuses } = tracking();
+                tracker.noteNotification('textDocument/didOpen', open());
+                const wait = tracker.waitFor(uri, current(tracker), 5000);
+                tracker.noteNotification('textDocument/didClose', close);
+                await Promise.resolve();
+                const params = { uri, version: 1, diagnostics: [] as [] };
+                tracker.noteRead(params);
+                tracker.noteNotification('textDocument/didOpen', open());
+                const late = tracker.receive(params);
+                expect(statuses).toEqual(['closed']);
+                expect(late.generation).toBe(1);
+                expect(tracker.closeBehavior).toBe('publishes');
+                expect(tracker.document(uri)).toMatchObject({ closePublishes: 1, closePublishesAfterReopen: 0 });
+                const reopenWait = tracker.waitFor(uri, current(tracker), 5000);
+                const fresh = tracker.receive({ uri, version: 1, diagnostics: [{ range: {}, message: 'F401' }] });
+                expect(statuses.at(-1)).toBe('current');
+                expect(await reopenWait).toBe(fresh);
+                expect(await wait).toBe(fresh);
+                tracker.clear();
+            });
+
+            it('credits it to the close once the server is known to publish on close', () => {
+                const { tracker, statuses } = tracking();
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.receive({ uri, version: 1, diagnostics: [] });
+                tracker.noteNotification('textDocument/didOpen', open());
+                expect(tracker.closeBehavior).toBe('publishes');
+                const late = readBeforeReopen(tracker, { uri, version: 1, diagnostics: [] });
+                expect(statuses).toEqual(['closed', 'closed']);
+                expect(late.generation).toBe(2);
+                expect(tracker.document(uri)?.generation).toBe(3);
+                tracker.clear();
+            });
+
+            it('does not hold an unversioned empty close publish read before the reopen as a candidate', () => {
+                const { tracker, statuses } = tracking();
+                tracker.noteNotification('textDocument/didOpen', open());
+                const late = readBeforeReopen(tracker, { uri, diagnostics: [] });
+                expect(statuses).toEqual(['closed']);
+                expect(tracker.latestPublish(uri)).toBe(late);
+                expect(tracker.closeBehavior).toBe('publishes');
+                const next = tracker.receive({ uri, diagnostics: [] });
+                expect(statuses.at(-1)).toBe('close candidate');
+                expect(tracker.latestPublish(uri)).not.toBe(next);
+                tracker.clear();
+            });
+
+            it('keeps a publish read before the first didOpen unopened', () => {
+                const { tracker, statuses } = tracking();
+                const params = { uri, version: 1, diagnostics: [] as [] };
+                tracker.noteRead(params);
+                tracker.noteNotification('textDocument/didOpen', open());
+                expect(tracker.receive(params).generation).toBe(0);
+                expect(statuses).toEqual(['unopened']);
+            });
+
+            it('marks a publish read for an earlier open stale', () => {
+                const { tracker, statuses } = tracking();
+                tracker.noteNotification('textDocument/didOpen', open());
+                const params = { uri, version: 1, diagnostics: [{ range: {}, message: 'old' }] };
+                tracker.noteRead(params);
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.noteNotification('textDocument/didOpen', open());
+                const late = tracker.receive(params);
+                expect(statuses).toEqual(['stale']);
+                expect(late.generation).toBe(1);
+                expect(tracker.document(uri)).toMatchObject({ closePublishes: 0, closePublishesAfterReopen: 0 });
+                expect(tracker.closeBehavior).toBe('unknown');
+                tracker.clear();
+            });
+
+            it('classifies by the state at receipt without a noted read', () => {
+                const { tracker, statuses } = tracking();
+                tracker.noteNotification('textDocument/didOpen', open());
+                tracker.noteNotification('textDocument/didClose', close);
+                tracker.noteNotification('textDocument/didOpen', open());
+                expect(tracker.receive({ uri, version: 1, diagnostics: [] }).generation).toBe(2);
+                expect(statuses).toEqual(['current']);
+                tracker.clear();
+            });
         });
 
         describe('servers clearing each close once', () => {
