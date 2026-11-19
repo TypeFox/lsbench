@@ -895,6 +895,61 @@ describe('BenchContextImpl', () => {
             expect(params.context.diagnostics.map((d) => d.code)).toEqual([2322, 'no-unused']);
         });
 
+        describe('codeAction context.only', () => {
+            const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
+
+            function sentContext(): { diagnostics: Diagnostic[]; only?: string[] } {
+                const req = harness.requests.find((r) => r.method === 'textDocument/codeAction');
+                const params = req?.params as { context: { diagnostics: Diagnostic[]; only?: string[] } };
+                return params.context;
+            }
+
+            beforeEach(() => {
+                harness.setDiagnostics(`file://${path.resolve(tmpDir, 'sample.ts')}`, [
+                    { range: {}, message: 'a', code: 2322 },
+                    { range: {}, message: 'b', code: 9999 },
+                ]);
+            });
+
+            it('omits only without options', async () => {
+                await ctx.codeAction('sample.ts', range);
+                const context = sentContext();
+                expect('only' in context).toBe(false);
+                expect(context.diagnostics).toEqual([]);
+            });
+
+            it('omits only with the array form', async () => {
+                await ctx.codeAction('sample.ts', range, [2322]);
+                const context = sentContext();
+                expect('only' in context).toBe(false);
+                expect(context.diagnostics.map((d) => d.code)).toEqual([2322]);
+            });
+
+            it('omits only with an options object without it', async () => {
+                await ctx.codeAction('sample.ts', range, { diagnosticCodes: [9999] });
+                const context = sentContext();
+                expect('only' in context).toBe(false);
+                expect(context.diagnostics.map((d) => d.code)).toEqual([9999]);
+            });
+
+            it('sends only without diagnostics', async () => {
+                await ctx.codeAction('sample.ts', range, { only: ['source.organizeImports'] });
+                expect(sentContext()).toEqual({ diagnostics: [], only: ['source.organizeImports'] });
+            });
+
+            it('sends only with the requested diagnostics', async () => {
+                await ctx.codeAction('sample.ts', range, { diagnosticCodes: [2322], only: ['quickfix'] });
+                const context = sentContext();
+                expect(context.diagnostics.map((d) => d.code)).toEqual([2322]);
+                expect(context.only).toEqual(['quickfix']);
+            });
+
+            it('sends an empty only as is', async () => {
+                await ctx.codeAction('sample.ts', range, { only: [] });
+                expect(sentContext()).toEqual({ diagnostics: [], only: [] });
+            });
+        });
+
         describe('codeAction diagnostic matching', () => {
             const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
 

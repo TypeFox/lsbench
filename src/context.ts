@@ -12,6 +12,7 @@ import {
 } from './harness.js';
 import type {
     BenchContext,
+    CodeActionOptions,
     EditOperation,
     OpenDocumentOptions,
     Position,
@@ -513,15 +514,16 @@ export class BenchContextImpl implements BenchContext {
     async codeAction(
         relativePath: string,
         range: Range,
-        diagnosticCodes?: (string | number)[],
+        options?: (string | number)[] | CodeActionOptions,
     ): Promise<unknown | null> {
+        const { diagnosticCodes, only } = Array.isArray(options) ? { diagnosticCodes: options } : (options ?? {});
         const uri = this.getUri(relativePath);
         const diagnostics = diagnosticCodes ? filterDiagnosticsByCode(this.diagnosticsFor(uri), diagnosticCodes) : [];
 
         return this.timedRequest('textDocument/codeAction', {
             textDocument: { uri },
             range: toLspRange(range),
-            context: { diagnostics },
+            context: only === undefined ? { diagnostics } : { diagnostics, only },
         });
     }
 

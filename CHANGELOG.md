@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New features
+
+- `codeAction` accepts an options object `{ diagnosticCodes?, only? }` as its third argument, besides the array of codes. `only` lists the requested `CodeActionKind`s and is sent as `context.only`, so servers that offer source actions only on request, such as tsgo, can be benchmarked for code actions. `context.only` is left out when `only` is not given, and an empty `only: []` is sent as is. `CodeActionOptions` is exported.
+
 ### Fixes
 
 - `--shorten-silent-waits` pools silent and reopen streaks over the documents of a method. A method qualifies once the streaks of its documents sum to 3, and a document is then shortened after one silent timeout of its own, where each document used to need 3 of its own. A document waited on for the first time, or whose last wait resolved, still gets the full timeout, and a resolving wait still ends the streak of its own document only. terraform-ls `navigation` and `workspace` no longer run full timeouts into measured iterations. The silent wait hint reads `in 3 waits in a row across its documents` and fires once per method when the sum first reaches 3, and `silent_waits` lists a method from then on, also when no single document reached 3 (`longest_streak` stays the longest of any document).

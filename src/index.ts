@@ -75,6 +75,7 @@ export type {
     BenchContext,
     BenchOptions,
     BenchReport,
+    CodeActionOptions,
     DiagnosticsMode,
     EditOperation,
     IterationResult,

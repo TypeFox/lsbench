@@ -120,7 +120,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 | `documentHighlight(path, line, char)` | `textDocument/documentHighlight` |
 | `prepareRename(path, line, char)` | `textDocument/prepareRename` |
 | `rename(path, line, char, newName)` | `textDocument/rename` |
-| `codeAction(path, range, codes?)` | `textDocument/codeAction`. `codes` selects cached diagnostics by `code`, falling back to `data.code` (as used by Langium) |
+| `codeAction(path, range, codes? \| { diagnosticCodes?, only? })` | `textDocument/codeAction`. `codes` (or `diagnosticCodes`) selects cached diagnostics by `code`, falling back to `data.code` (as used by Langium). `only` lists the requested `CodeActionKind`s, sent as `context.only` and left out when not given. Some servers offer source actions only on request, e.g. tsgo needs `only: ['source.organizeImports']` |
 | `formatting(path)` | `textDocument/formatting` |
 | `rangeFormatting(path, range)` | `textDocument/rangeFormatting` |
 | `onTypeFormatting(path, line, char, ch)` | `textDocument/onTypeFormatting` |

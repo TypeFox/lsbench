@@ -436,6 +436,11 @@ export interface WaitForIdleResult {
     ms: number;
 }
 
+export interface CodeActionOptions {
+    diagnosticCodes?: (string | number)[];
+    only?: string[];
+}
+
 /** Options for opening a document */
 export interface OpenDocumentOptions {
     /** overrides the languageId detected from the file extension, for this document only */
@@ -485,7 +490,11 @@ export interface BenchContext {
     rangeFormatting(relativePath: string, range: Range): Promise<unknown | null>;
     onTypeFormatting(relativePath: string, line: number, character: number, ch: string): Promise<unknown | null>;
     rename(relativePath: string, line: number, character: number, newName: string): Promise<unknown | null>;
-    codeAction(relativePath: string, range: Range, diagnosticCodes?: (string | number)[]): Promise<unknown | null>;
+    codeAction(
+        relativePath: string,
+        range: Range,
+        options?: (string | number)[] | CodeActionOptions,
+    ): Promise<unknown | null>;
     signatureHelp(relativePath: string, line: number, character: number): Promise<unknown | null>;
     typeDefinition(relativePath: string, line: number, character: number): Promise<unknown | null>;
     implementation(relativePath: string, line: number, character: number): Promise<unknown | null>;

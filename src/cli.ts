@@ -537,6 +537,10 @@ Navigation and editing  (timed)
   rename(path, line, char, newName)       textDocument/rename
   codeAction(path, range, codes?)         textDocument/codeAction (codes filter cached diagnostics by code,
                                           falling back to data.code as used by Langium)
+  codeAction(path, range, { diagnosticCodes?, only? })
+                                          diagnosticCodes as codes above; only lists the requested
+                                          CodeActionKinds, sent as context.only and left out when not
+                                          given (e.g. only: ['source.organizeImports'] for tsgo)
   formatting(path)                        textDocument/formatting (tabSize 2, spaces)
   rangeFormatting(path, range)            textDocument/rangeFormatting (tabSize 2, spaces)
   onTypeFormatting(path, line, char, ch)  textDocument/onTypeFormatting (ch is the typed trigger character)
