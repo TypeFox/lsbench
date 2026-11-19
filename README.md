@@ -370,7 +370,7 @@ addRegisteredLanguage('mylanguage', '.dsl');
 
 This will ensure that opening a document with the extension `.dsl` will have an associated language ID of `mylanguage`, to invoke the correct language server.
 
-`detectLanguageId(path)` returns the language ID `openDocument` sends for a path, matching the extension case-insensitively and falling back to `plaintext`:
+`detectLanguageId(path)` returns the language ID `openDocument` sends for a path, matching known file names such as `CMakeLists.txt` first and then the extension, both case-insensitively, and falling back to `plaintext`:
 
 ```ts
 import { detectLanguageId } from 'lsbench';
@@ -379,7 +379,7 @@ detectLanguageId('src/index.TS'); // 'typescript'
 detectLanguageId('model.dsl'); // 'mylanguage' after the call above, 'plaintext' otherwise
 ```
 
-Built in mappings include `.tf` (`terraform`), `.tfvars` (`terraform-vars`), `.hcl` (`hcl`), `.ml` (`ocaml`), `.mli` (`ocaml.interface`), `.mll` (`ocaml.ocamllex`), `.mly` (`ocaml.menhir`), `.hs` (`haskell`), `.lhs` (`literate haskell`), `.nix` (`nix`), `.tex`, `.sty` and `.cls` (`latex`), `.bib` (`bibtex`), `.typ` (`typst`) and `.pl`, `.pm` and `.t` (`perl`), and `.txt` maps to `plaintext` on purpose. When `openDocument` falls back to `plaintext` for an unmapped extension, it logs a warning once per extension, also without `--verbose`, and the report lists the extensions in `plaintext_fallbacks`. The printed summary then notes them, and the silent wait and `until` notes add that the server may not serve that language id, since many servers (terraform-ls among them) reject or ignore documents of a language they do not know.
+Built in mappings include `.tf` (`terraform`), `.tfvars` (`terraform-vars`), `.hcl` (`hcl`), `.ml` (`ocaml`), `.mli` (`ocaml.interface`), `.mll` (`ocaml.ocamllex`), `.mly` (`ocaml.menhir`), `.hs` (`haskell`), `.lhs` (`literate haskell`), `.nix` (`nix`), `.tex`, `.sty` and `.cls` (`latex`), `.bib` (`bibtex`), `.typ` (`typst`), `.pl`, `.pm` and `.t` (`perl`) and `.cmake` and files named `CMakeLists.txt` (`cmake`), and other `.txt` files map to `plaintext` on purpose. When `openDocument` falls back to `plaintext` for an unmapped extension, it logs a warning once per extension, also without `--verbose`, and the report lists the extensions in `plaintext_fallbacks`. The printed summary then notes them, and the silent wait and `until` notes add that the server may not serve that language id, since many servers (terraform-ls among them) reject or ignore documents of a language they do not know.
 
 To override the language ID of a single document instead, pass it when opening:
 

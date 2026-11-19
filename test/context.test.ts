@@ -221,6 +221,11 @@ describe('detectLanguageId', () => {
         ['Build.PL', 'perl'],
         ['lib/Inventory/Item.pm', 'perl'],
         ['t/basic.t', 'perl'],
+        ['cmake/GeometryHelpers.cmake', 'cmake'],
+        ['Toolchain.CMAKE', 'cmake'],
+        ['CMakeLists.txt', 'cmake'],
+        ['src/lib/cmakelists.TXT', 'cmake'],
+        ['docs/MyCMakeLists.txt', 'plaintext'],
         ['notes.txt', 'plaintext'],
     ])('maps %s to %s', (file, languageId) => {
         expect(detectLanguageId(file)).toBe(languageId);

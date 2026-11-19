@@ -1862,7 +1862,12 @@ const RegisteredLanguages: Record<string, string> = {
     '.pl': 'perl',
     '.pm': 'perl',
     '.t': 'perl',
+    '.cmake': 'cmake',
     '.txt': 'plaintext',
+};
+
+const RegisteredFileNames: Record<string, string> = {
+    'cmakelists.txt': 'cmake',
 };
 
 /**
@@ -1894,7 +1899,7 @@ export function detectLanguageId(filePath: string): string {
 
 function resolveLanguageId(filePath: string): { languageId: string; extension: string; fallback: boolean } {
     const extension = path.extname(filePath).toLowerCase();
-    const languageId = RegisteredLanguages[extension];
+    const languageId = RegisteredFileNames[path.basename(filePath).toLowerCase()] ?? RegisteredLanguages[extension];
     return languageId === undefined
         ? { languageId: 'plaintext', extension, fallback: true }
         : { languageId, extension, fallback: false };
