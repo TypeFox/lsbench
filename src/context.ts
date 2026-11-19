@@ -1859,6 +1859,9 @@ const RegisteredLanguages: Record<string, string> = {
     '.cls': 'latex',
     '.bib': 'bibtex',
     '.typ': 'typst',
+    '.pl': 'perl',
+    '.pm': 'perl',
+    '.t': 'perl',
     '.txt': 'plaintext',
 };
 
