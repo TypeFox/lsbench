@@ -726,6 +726,7 @@ Property
 ## Server to client requests
 
 lsbench answers these so a server never stalls waiting on a client:
+  workspace/workspaceFolders              the workspace folder sent in initialize
   workspace/configuration                 with --settings-file, each item's section resolved as a dotted
                                           path into the settings, null for unknown sections, the whole
                                           settings without a section. Dotted keys in the file are expanded

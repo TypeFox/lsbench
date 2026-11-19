@@ -108,6 +108,32 @@ describe('LspHarness server-to-client requests', () => {
             await harness.stop();
         }
     });
+
+    it('answers workspace/workspaceFolders with the folder sent in initialize', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-folders-'));
+        const harness = new LspHarness(
+            {
+                command: process.execPath,
+                args: [
+                    '--input-type=module',
+                    '-e',
+                    probeServer,
+                    JSON.stringify([['workspace/workspaceFolders', null]]),
+                ],
+            },
+            root,
+        );
+        try {
+            await harness.start();
+            const replies = harness.capabilities?.replies as Record<string, { result?: unknown; error?: number }>;
+            expect(replies['workspace/workspaceFolders']).toEqual({
+                result: [{ uri: pathToUri(root), name: path.basename(root) }],
+            });
+        } finally {
+            await harness.stop();
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
 });
 
 const clientHookServer = `

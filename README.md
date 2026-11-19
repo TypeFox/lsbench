@@ -317,6 +317,7 @@ A server that does not state a change kind gets incremental changes. The LSP def
 
 lsbench answers requests from the server so it doesn't get stuck waiting on a client:
 
+- `workspace/workspaceFolders` returns the single folder sent in `initialize`, the workspace root named by its basename
 - `workspace/configuration` resolves each item's section against the [settings file](#server-configuration), or returns an empty object per item when no settings are given
 - `client/registerCapability` and `client/unregisterCapability` are accepted, and every registration is tracked (see `ctx.registrations`). lsbench advertises `workspace.didChangeWatchedFiles` with dynamic registration, as VS Code does, so servers leave file watching to the client; their watcher registrations are tracked, but lsbench never sends file events
 - `workspace/*/refresh` (semantic tokens, inlay hints, code lenses, inline values, diagnostics) are acknowledged. A diagnostics refresh also makes pending auto diagnostics waits pull, see [pull diagnostics](#pull-diagnostics)

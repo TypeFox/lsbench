@@ -1360,6 +1360,10 @@ export class LspHarness {
             this.output.message(`trace: ${params.message}${params.verbose ? `\n${params.verbose}` : ''}`);
         });
 
+        const workspaceUri = pathToUri(this.workspaceRoot);
+        const workspaceFolders = [{ uri: workspaceUri, name: path.basename(this.workspaceRoot) }];
+        onRequest('workspace/workspaceFolders', () => workspaceFolders);
+
         // answer workspace/configuration from the settings, or {} per item when none are given
         onRequest('workspace/configuration', (params: { items: Array<{ section?: string }> }) => {
             const settings = this.settings;
@@ -1464,13 +1468,11 @@ export class LspHarness {
         }
 
         // Perform LSP initialize
-        const workspaceUri = pathToUri(this.workspaceRoot);
-
         const initParams = {
             processId: process.pid,
             rootUri: workspaceUri,
             rootPath: this.workspaceRoot,
-            workspaceFolders: [{ uri: workspaceUri, name: path.basename(this.workspaceRoot) }],
+            workspaceFolders,
             // defaults, then the pull capability when opted in, then the configured capabilities, so those win
             capabilities: mergeCapabilities(
                 this.config.advertisePullDiagnostics
