@@ -73,6 +73,11 @@ program
         collectExitSignal,
         [] as string[],
     )
+    .option(
+        '--allow-unreplied-shutdown',
+        'Tolerate a server exiting with code 0, or an allowed code or signal, after shutdown was sent but before it replied, recorded in tolerated_exits',
+        false,
+    )
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
     .option('--no-skip-unsupported', 'Send requests even when the server does not advertise their provider')
     .option(
@@ -130,6 +135,7 @@ program
             allowExitSignals: (rawOpts.allowExitSignal as string[]).length
                 ? (rawOpts.allowExitSignal as NodeJS.Signals[])
                 : undefined,
+            allowUnrepliedShutdown: rawOpts.allowUnrepliedShutdown as boolean,
         };
 
         // Validate inputs
@@ -775,6 +781,10 @@ experimental/serverStatus (verbose mode logs progress titles).
           --allow-exit-signal <name>
                                    Tolerate a signal such as SIGSEGV after a replied
                                    shutdown, recorded in tolerated_exits (repeatable)
+          --allow-unreplied-shutdown
+                                   Tolerate an exit with code 0, or an allowed code or
+                                   signal, after shutdown was sent but before the
+                                   server replied, recorded in tolerated_exits
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
           --no-skip-unsupported    Send requests even when the server does not
@@ -825,11 +835,13 @@ The JSON report (and the printed summary) contains:
                        timings of the single server
   - abnormal_exits     servers that crashed or exited unexpectedly (only when any did,
                        lsbench then exits non zero but still writes the report. An exit
-                       without a shutdown reply is always abnormal, whatever its code.
+                       without a shutdown reply is abnormal, whatever its code, unless
+                       --allow-unreplied-shutdown tolerates it.
                        Without --restart, a crash during an iteration ends the run and
                        is labeled with that iteration)
   - tolerated_exits    servers that exited after a replied shutdown with a code allowed by
-                       --allow-exit-code or a signal allowed by --allow-exit-signal
+                       --allow-exit-code or a signal allowed by --allow-exit-signal,
+                       or after an unreplied shutdown with --allow-unreplied-shutdown
                        (only when any did, these do not fail the run)
   - silent_waits       diagnostics push waits per method that timed out without any
                        publish, warmups included (only for methods with 3 such waits in

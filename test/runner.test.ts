@@ -65,6 +65,13 @@ describe('resolveServerConfig', () => {
         expect(resolveServerConfig(...args)).not.toHaveProperty('allowExitSignals');
     });
 
+    it('sets allowUnrepliedShutdown only when requested', () => {
+        const args = ['cmd', undefined, undefined, undefined, undefined, undefined, undefined, undefined] as const;
+        expect(resolveServerConfig(...args, true).allowUnrepliedShutdown).toBe(true);
+        expect(resolveServerConfig(...args, false)).not.toHaveProperty('allowUnrepliedShutdown');
+        expect(resolveServerConfig(...args)).not.toHaveProperty('allowUnrepliedShutdown');
+    });
+
     it('sets advertisePullDiagnostics only when requested', () => {
         const args = ['cmd', undefined, undefined, undefined, undefined, undefined] as const;
         expect(resolveServerConfig(...args, true).advertisePullDiagnostics).toBe(true);
@@ -739,6 +746,7 @@ describe('runBenchmark with allowExitCodes', () => {
         output: string,
         allowExitCodes?: number[],
         allowExitSignals?: NodeJS.Signals[],
+        allowUnrepliedShutdown?: boolean,
     ): BenchOptions {
         return {
             server: process.execPath,
@@ -752,6 +760,7 @@ describe('runBenchmark with allowExitCodes', () => {
             verbose: false,
             allowExitCodes,
             allowExitSignals,
+            allowUnrepliedShutdown,
         };
     }
 
@@ -815,6 +824,27 @@ describe('runBenchmark with allowExitCodes', () => {
             [0, 'teardown of iteration 2'],
         ]);
     });
+
+    for (const restart of [false, true]) {
+        it(`records an exit 0 after an unreplied shutdown as tolerated with allowUnrepliedShutdown (${restart ? 'restart' : 'keep alive'})`, async () => {
+            const output = path.join(tmpDir, `report-unreplied-${restart}.json`);
+            const report = await runBenchmark(options('quit', restart, output, undefined, undefined, true));
+
+            expect(report.abnormal_exits).toBeUndefined();
+            const expected = restart
+                ? ['teardown of warmup 1', 'teardown of iteration 1', 'teardown of iteration 2']
+                : ['final teardown'];
+            expect(report.tolerated_exits).toEqual(
+                expected.map((during) => ({
+                    during,
+                    code: 0,
+                    signal: null,
+                    reason: 'exited after unreplied shutdown with code 0 (allowed)',
+                })),
+            );
+            expect(report.summary['lifecycle/shutdown']?.failure_rate).toBe(0);
+        });
+    }
 });
 
 describe('runBenchmark progress lines', () => {

@@ -161,6 +161,32 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
         expect(report.tolerated_exits).toBeUndefined();
     });
 
+    it('exits zero with --allow-unreplied-shutdown for a server exiting 0 without a shutdown reply', () => {
+        const output = path.join(tmpDir, 'cli-quit-allowed.json');
+        const result = runCli(quitOnShutdownServer, output, ['--allow-unreplied-shutdown']);
+        expect(result.stderr).not.toMatch(/abnormally/);
+        expect(result.status).toBe(0);
+        expect(result.stdout).toMatch(/Allow exit: without shutdown reply/);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.abnormal_exits).toBeUndefined();
+        expect(report.tolerated_exits).toHaveLength(2);
+        expect(report.tolerated_exits[0]).toMatchObject({
+            code: 0,
+            signal: null,
+            reason: 'exited after unreplied shutdown with code 0 (allowed)',
+        });
+        expect(report.summary['lifecycle/shutdown'].failure_rate).toBe(0);
+    });
+
+    it('still exits non zero with --allow-unreplied-shutdown for an unreplied exit with a code not allowed', () => {
+        const output = path.join(tmpDir, 'cli-crash-unreplied.json');
+        const result = runCli(crashOnShutdownServer, output, ['--allow-unreplied-shutdown']);
+        expect(result.status).toBe(1);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.abnormal_exits).toHaveLength(2);
+        expect(report.tolerated_exits).toBeUndefined();
+    });
+
     it('exits zero with --allow-exit-signal for a server crashing with SIGSEGV after a replied shutdown', () => {
         const output = path.join(tmpDir, 'cli-signal-allowed.json');
         const result = runCli(segvAfterExitServer, output, ['--allow-exit-signal', 'SIGSEGV']);

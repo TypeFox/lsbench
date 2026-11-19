@@ -412,6 +412,8 @@ Options:
   --shutdown-timeout <ms>     Wait for a shutdown reply, then kill (default: 5000)
   --allow-exit-code <n>       Tolerate exit code n after a replied shutdown (repeatable)
   --allow-exit-signal <name>  Tolerate a signal such as SIGSEGV after a replied shutdown (repeatable)
+  --allow-unreplied-shutdown  Tolerate an exit with code 0, or an allowed code or signal, after shutdown
+                              was sent but before the server replied
   --content-modified-retries <n>
                               Retry requests rejected with ContentModified (default: 3)
   --no-skip-unsupported       Send requests even when the server does not advertise their provider
@@ -518,7 +520,7 @@ Like VS Code, lsbench first expands dotted keys into nested objects, at every le
 
 Only the keys in the file are sent. VS Code sends every setting with its default, so a server written against VS Code may read a missing key as `false`. For example, vscode-json-language-server turns schema validation off unless `json.validate.enable` is `true`, so a settings file with only `"json.format.enable": true` disables validation and diagnostics waits time out. List every setting the server needs. Verbose mode logs the settings sent with `didChangeConfiguration`, so a missing key is easy to spot.
 
-For full control over `command`, `args`, `env`, `initializationOptions`, `clientCapabilities`, `settings`, `allowExitCodes` and `allowExitSignals`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults, and `expandSettings()` shows how settings are expanded.
+For full control over `command`, `args`, `env`, `initializationOptions`, `clientCapabilities`, `settings`, `allowExitCodes`, `allowExitSignals` and `allowUnrepliedShutdown`, drive `LspHarness` programmatically with a `ServerConfig`. `defaultClientCapabilities()` and `mergeCapabilities()` are exported for building on the defaults, and `expandSettings()` shows how settings are expanded.
 
 ## Output format
 
@@ -529,7 +531,7 @@ The JSON report contains:
 - **runs**: Full per-iteration, per-request breakdown
 - **lifecycle**: Keep alive mode only. Spawn, initialize, idle and final shutdown timings of the single server
 - **abnormal_exits**: Servers that crashed or exited unexpectedly, only present when any did. The report is still written, and lsbench exits non zero. Each exit's `during` is `iteration N` or `warmup N` for a server that exited during an iteration, `teardown of iteration N` or `teardown of warmup N` for one that exited while being stopped under `--restart`, and `final teardown` for the single server without it when it exits while being stopped after the last iteration. Without `--restart`, a server that exits during an iteration ends the run: the exit is labeled with that iteration, no further iterations run, and the report keeps the runs completed so far, including the crashed one
-- **tolerated_exits**: Servers that replied to `shutdown` and then exited with a code allowed by `--allow-exit-code` (`ServerConfig.allowExitCodes`) or a signal allowed by `--allow-exit-signal` (`ServerConfig.allowExitSignals`), only present when any did. They have the same shape as `abnormal_exits` but do not make lsbench exit non zero. Use this for servers known to exit non zero or crash after `exit`, such as TypeScript 7 exiting 1 or nixd crashing with `SIGSEGV`. A server that exits without replying to `shutdown` stays in `abnormal_exits` whatever its code or signal
+- **tolerated_exits**: Servers that replied to `shutdown` and then exited with a code allowed by `--allow-exit-code` (`ServerConfig.allowExitCodes`) or a signal allowed by `--allow-exit-signal` (`ServerConfig.allowExitSignals`), only present when any did. They have the same shape as `abnormal_exits` but do not make lsbench exit non zero. Use this for servers known to exit non zero or crash after `exit`, such as TypeScript 7 exiting 1 or nixd crashing with `SIGSEGV`. A server that exits without replying to `shutdown` stays in `abnormal_exits` whatever its code or signal, unless `--allow-unreplied-shutdown` (`ServerConfig.allowUnrepliedShutdown`) is set: an exit with code 0, an allowed code or an allowed signal after `shutdown` was sent but before its reply is then listed here, with a reason such as `exited after unreplied shutdown with code 0 (allowed)`, and `lifecycle/shutdown` is timed up to the exit. Use this for servers that exit on `shutdown` without waiting for `exit`, such as neocmakelsp. An exit before `shutdown` was sent stays abnormal
 
 Each request timing has a `result`:
 

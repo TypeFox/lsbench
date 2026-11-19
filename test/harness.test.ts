@@ -473,6 +473,7 @@ function shutdownHarness(
     mode: 'crash' | 'quit' | 'hang' | 'fail' | 'segv' | 'segv-early' | 'clean',
     allowExitCodes?: number[],
     allowExitSignals?: NodeJS.Signals[],
+    allowUnrepliedShutdown?: boolean,
 ): LspHarness {
     return new LspHarness(
         {
@@ -480,6 +481,7 @@ function shutdownHarness(
             args: ['--input-type=module', '-e', shutdownServer, mode],
             allowExitCodes,
             allowExitSignals,
+            allowUnrepliedShutdown,
         },
         process.cwd(),
     );
@@ -613,6 +615,87 @@ describe('LspHarness.stop', () => {
             expect(exit?.reason).toMatch(/unexpectedly/);
         });
     }
+
+    it('tolerates an exit with code 0 after an unreplied shutdown when allowed', async () => {
+        const harness = shutdownHarness('quit', undefined, undefined, true);
+        await harness.start();
+        harness.takeLifecycleTimings();
+        expect(await harness.stop()).toMatchObject({
+            code: 0,
+            signal: null,
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after unreplied shutdown with code 0 (allowed)',
+        });
+        const [shutdown, ...rest] = harness.takeLifecycleTimings();
+        expect(rest).toEqual([]);
+        expect(shutdown).toMatchObject({ method: 'lifecycle/shutdown', success: true, result: 'ok' });
+        expect(shutdown.error).toBeUndefined();
+    });
+
+    it('keeps an exit with code 0 after an unreplied shutdown abnormal without the flag', async () => {
+        const harness = shutdownHarness('quit');
+        await harness.start();
+        harness.takeLifecycleTimings();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ code: 0, abnormal: true, reason: 'exited unexpectedly (code 0)' });
+        expect(exit?.tolerated).toBeUndefined();
+        expect(harness.takeLifecycleTimings()).toEqual([
+            expect.objectContaining({ method: 'lifecycle/shutdown', success: false }),
+        ]);
+    });
+
+    it('tolerates a non zero code after an unreplied shutdown only when the code is allowed', async () => {
+        const denied = shutdownHarness('crash', undefined, undefined, true);
+        await denied.start();
+        const deniedExit = await denied.stop();
+        expect(deniedExit).toMatchObject({ code: 3, abnormal: true, reason: 'exited unexpectedly (code 3)' });
+        expect(deniedExit?.tolerated).toBeUndefined();
+
+        const allowed = shutdownHarness('crash', [3], undefined, true);
+        await allowed.start();
+        expect(await allowed.stop()).toMatchObject({
+            code: 3,
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after unreplied shutdown with code 3 (allowed)',
+        });
+    });
+
+    it('tolerates a signal after an unreplied shutdown only when the signal is allowed', async () => {
+        const denied = shutdownHarness('segv-early', undefined, undefined, true);
+        await denied.start();
+        const deniedExit = await denied.stop();
+        expect(deniedExit).toMatchObject({ signal: 'SIGSEGV', abnormal: true });
+        expect(deniedExit?.tolerated).toBeUndefined();
+
+        const allowed = shutdownHarness('segv-early', undefined, ['SIGSEGV'], true);
+        await allowed.start();
+        expect(await allowed.stop()).toMatchObject({
+            code: null,
+            signal: 'SIGSEGV',
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after unreplied shutdown with signal SIGSEGV (allowed)',
+        });
+    });
+
+    it('keeps an exit before stop sent shutdown abnormal even with the flag', async () => {
+        const harness = shutdownHarness('quit', undefined, undefined, true);
+        await harness.start();
+        harness.sendRequest('shutdown', null).catch(() => {});
+        await new Promise<void>((resolve) => {
+            const poll = setInterval(() => {
+                if (harness.exit) {
+                    clearInterval(poll);
+                    resolve();
+                }
+            }, 10);
+        });
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ code: 0, abnormal: true, reason: 'exited unexpectedly (code 0)' });
+        expect(exit?.tolerated).toBeUndefined();
+    });
 
     it('records spawn, initialize and shutdown timings', async () => {
         const harness = shutdownHarness('clean');

@@ -30,6 +30,7 @@ export function resolveServerConfig(
     allowExitCodes?: number[],
     advertisePullDiagnostics?: boolean,
     allowExitSignals?: NodeJS.Signals[],
+    allowUnrepliedShutdown?: boolean,
 ): ServerConfig {
     const parts = serverArg.split(/\s+/).filter(Boolean);
     const command = parts[0];
@@ -41,6 +42,9 @@ export function resolveServerConfig(
     }
     if (allowExitSignals && allowExitSignals.length > 0) {
         config.allowExitSignals = allowExitSignals;
+    }
+    if (allowUnrepliedShutdown) {
+        config.allowUnrepliedShutdown = true;
     }
     if (advertisePullDiagnostics) {
         config.advertisePullDiagnostics = true;
@@ -113,6 +117,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         opts.allowExitCodes,
         opts.advertisePullDiagnostics,
         opts.allowExitSignals,
+        opts.allowUnrepliedShutdown,
     );
     const actionFn = await loadActionScript(opts.script);
     const setup = await loadSetupScript(opts.script);
@@ -134,6 +139,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (serverConfig.allowExitCodes || serverConfig.allowExitSignals) {
         const allowed = [...(serverConfig.allowExitCodes ?? []), ...(serverConfig.allowExitSignals ?? [])];
         console.log(`  Allow exit: ${allowed.join(', ')} after shutdown`);
+    }
+    if (serverConfig.allowUnrepliedShutdown) {
+        console.log('  Allow exit: without shutdown reply');
     }
     if (serverConfig.advertisePullDiagnostics) {
         console.log('  Pull diag:  textDocument.diagnostic advertised');

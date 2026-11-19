@@ -32,6 +32,7 @@ export interface ServerConfig {
      */
     allowExitCodes?: number[];
     allowExitSignals?: NodeJS.Signals[];
+    allowUnrepliedShutdown?: boolean;
 }
 
 // ── CLI Options ─────────────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ export interface BenchOptions {
     /** Non zero exit codes tolerated after a replied shutdown, see ServerConfig.allowExitCodes */
     allowExitCodes?: number[];
     allowExitSignals?: NodeJS.Signals[];
+    allowUnrepliedShutdown?: boolean;
     /** Verbose logging */
     verbose: boolean;
     /**

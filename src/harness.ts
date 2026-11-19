@@ -1141,6 +1141,7 @@ export class LspHarness {
     private _exit: ServerExit | null = null;
     /** set once the server replies to shutdown, so a following exit is expected */
     private shutdownReplied = false;
+    private shutdownSent = false;
     /** set once we signal the process, so the resulting exit is not abnormal */
     private killRequested = false;
     /** set while stop() runs, an exit then is part of our own shutdown */
@@ -1264,6 +1265,7 @@ export class LspHarness {
         });
         this._exit = null;
         this.shutdownReplied = false;
+        this.shutdownSent = false;
         this.killRequested = false;
         this.stopping = false;
         this.exitError = null;
@@ -1527,6 +1529,7 @@ export class LspHarness {
 
         if (!this._exit) {
             const shutdownStart = process.hrtime.bigint();
+            this.shutdownSent = true;
             const shutdown = connection.sendRequest('shutdown').then(
                 () => {
                     this.shutdownReplied = true;
@@ -1542,7 +1545,9 @@ export class LspHarness {
                 exited: new Error('server exited before replying to shutdown'),
                 timeout: new Error(`no shutdown reply within ${timeoutMs}ms`),
             };
-            this.recordLifecycle('lifecycle/shutdown', shutdownStart, shutdownErrors[outcome]);
+            const toleratedExit = outcome !== 'timeout' && this.exit?.tolerated === true;
+            const shutdownError = toleratedExit ? undefined : shutdownErrors[outcome];
+            this.recordLifecycle('lifecycle/shutdown', shutdownStart, shutdownError);
             if (outcome === 'replied') {
                 try {
                     await connection.sendNotification('exit');
@@ -1638,12 +1643,22 @@ export class LspHarness {
             return { code, signal, abnormal: false, reason: `killed by lsbench (${status})` };
         }
         if (!this.shutdownReplied) {
+            const unrepliedAllowed =
+                this.shutdownSent &&
+                this.config.allowUnrepliedShutdown &&
+                ((signal === null && code === 0) || this.isAllowedExit(code, signal));
+            if (unrepliedAllowed) {
+                return {
+                    code,
+                    signal,
+                    abnormal: false,
+                    tolerated: true,
+                    reason: `exited after unreplied shutdown with ${status} (allowed)`,
+                };
+            }
             return { code, signal, abnormal: true, reason: `exited unexpectedly (${status})` };
         }
-        const allowedCode =
-            signal === null && code !== null && code !== 0 && this.config.allowExitCodes?.includes(code);
-        const allowedSignal = signal !== null && this.config.allowExitSignals?.includes(signal);
-        if (allowedCode || allowedSignal) {
+        if (this.isAllowedExit(code, signal)) {
             return {
                 code,
                 signal,
@@ -1656,6 +1671,13 @@ export class LspHarness {
             return { code, signal, abnormal: true, reason: `exited after shutdown with ${status}` };
         }
         return { code, signal, abnormal: false, reason: 'exited cleanly' };
+    }
+
+    private isAllowedExit(code: number | null, signal: NodeJS.Signals | null): boolean {
+        if (signal !== null) {
+            return this.config.allowExitSignals?.includes(signal) ?? false;
+        }
+        return code !== null && code !== 0 && (this.config.allowExitCodes?.includes(code) ?? false);
     }
 
     /** Get cached diagnostics for a URI */
