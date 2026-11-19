@@ -120,7 +120,7 @@ if (ctx.supports("textDocument/diagnostic")) {
 | `documentHighlight(path, line, char)` | `textDocument/documentHighlight` |
 | `prepareRename(path, line, char)` | `textDocument/prepareRename` |
 | `rename(path, line, char, newName)` | `textDocument/rename` |
-| `codeAction(path, range, codes? \| { diagnosticCodes?, only? })` | `textDocument/codeAction`. `codes` (or `diagnosticCodes`) selects cached diagnostics by `code`, falling back to `data.code` (as used by Langium). `only` lists the requested `CodeActionKind`s, sent as `context.only` and left out when not given. Some servers offer source actions only on request, e.g. tsgo needs `only: ['source.organizeImports']` |
+| `codeAction(path, range, codes? \| { diagnosticCodes?, only?, overlappingDiagnostics? })` | `textDocument/codeAction`. `codes` (or `diagnosticCodes`) selects cached diagnostics by `code`, falling back to `data.code` (as used by Langium). `overlappingDiagnostics: true` selects cached diagnostics whose range overlaps `range`, boundaries included, whatever their code, as editors do. Servers that publish diagnostics without a code and build quick fixes from `context.diagnostics`, such as elixir-ls, need it. Combined with `diagnosticCodes`, a diagnostic must match both. Without either, no diagnostics are sent. `only` lists the requested `CodeActionKind`s, sent as `context.only` and left out when not given. Some servers offer source actions only on request, e.g. tsgo needs `only: ['source.organizeImports']` |
 | `formatting(path)` | `textDocument/formatting` |
 | `rangeFormatting(path, range)` | `textDocument/rangeFormatting` |
 | `onTypeFormatting(path, line, char, ch)` | `textDocument/onTypeFormatting` |
@@ -271,7 +271,7 @@ The result's `source` is `push` or `pull`, telling which one resolved the wait, 
 - `auto` mode: timed like a push wait, from the latest `didOpen` or `didChange` to the resolving response (from the call of the wait for a document that is not open, or that was already pulled since its latest sync). So the timing is open (or edit) to diagnostics as the script saw it, for push and pull alike. When the wait first waited for a push from a server whose delivery was unknown, that grace is part of `ms` and is also recorded as `grace_ms` in the timing and `graceMs` in the result. The summary entry then adds `graced`, how many timings include a grace, and `grace_median_ms`, and the printed summary notes them below the table. The first auto wait on a pull only server pays the grace once (under `--restart`, once per run unless a warmup taught the delivery, see above)
 - `pull` mode: timed from the first pull request to the resolving response, the round trip the script asked to measure. No grace is involved, but the wait for a held placeholder is
 
-To avoid the grace on a server known to be pull only, such as ts7, pass `mode: "pull"`, or a short `pullAfterMs`. A `tentative` pull may have measured a placeholder rather than real diagnostics, so leave such timings out or wait for idle first. `codeAction` codes match against pulled diagnostics when the server never published for the document.
+To avoid the grace on a server known to be pull only, such as ts7, pass `mode: "pull"`, or a short `pullAfterMs`. A `tentative` pull may have measured a placeholder rather than real diagnostics, so leave such timings out or wait for idle first. `codeAction` codes and `overlappingDiagnostics` match against pulled diagnostics when the server never published for the document.
 
 ### Waiting for idle
 

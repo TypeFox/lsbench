@@ -950,6 +950,136 @@ describe('BenchContextImpl', () => {
             });
         });
 
+        describe('codeAction overlappingDiagnostics', () => {
+            const at = (startLine: number, startChar: number, endLine: number, endChar: number) => ({
+                start: { line: startLine, character: startChar },
+                end: { line: endLine, character: endChar },
+            });
+
+            function sentContext(): { diagnostics: Diagnostic[]; only?: string[] } {
+                const req = harness.requests.find((r) => r.method === 'textDocument/codeAction');
+                const params = req?.params as { context: { diagnostics: Diagnostic[]; only?: string[] } };
+                return params.context;
+            }
+
+            function setDiagnostics(diagnostics: Diagnostic[]): void {
+                harness.setDiagnostics(`file://${path.resolve(tmpDir, 'sample.ts')}`, diagnostics);
+            }
+
+            it('sends overlapping diagnostics without a code as is', async () => {
+                const warning: Diagnostic = {
+                    data: null,
+                    message: 'Geometry.Circle.perimeter/1 is undefined or private',
+                    range: at(4, 4, 4, 30),
+                    relatedInformation: [],
+                    severity: 2,
+                    source: 'Elixir',
+                    tags: [],
+                };
+                setDiagnostics([warning]);
+                await ctx.codeAction('sample.ts', at(4, 0, 4, 40), { overlappingDiagnostics: true });
+                expect(sentContext()).toEqual({ diagnostics: [warning] });
+            });
+
+            it('leaves out diagnostics before and after the range', async () => {
+                setDiagnostics([
+                    { range: at(1, 0, 1, 5), message: 'before' },
+                    { range: at(3, 2, 3, 6), message: 'inside' },
+                    { range: at(3, 10, 3, 12), message: 'after on the line' },
+                    { range: at(6, 0, 6, 5), message: 'after' },
+                ]);
+                await ctx.codeAction('sample.ts', at(3, 0, 3, 8), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['inside']);
+            });
+
+            it('includes diagnostics touching the range at a boundary', async () => {
+                setDiagnostics([
+                    { range: at(2, 0, 2, 4), message: 'ends at start' },
+                    { range: at(2, 8, 2, 12), message: 'starts at end' },
+                    { range: at(2, 13, 2, 14), message: 'apart' },
+                ]);
+                await ctx.codeAction('sample.ts', at(2, 4, 2, 8), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['ends at start', 'starts at end']);
+            });
+
+            it('selects diagnostics around an empty range', async () => {
+                setDiagnostics([
+                    { range: at(5, 2, 5, 10), message: 'around' },
+                    { range: at(5, 12, 5, 14), message: 'later' },
+                ]);
+                await ctx.codeAction('sample.ts', at(5, 6, 5, 6), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['around']);
+            });
+
+            it('compares lines before characters', async () => {
+                setDiagnostics([
+                    { range: at(1, 20, 4, 0), message: 'spans the range' },
+                    { range: at(4, 1, 5, 0), message: 'after on a later line' },
+                ]);
+                await ctx.codeAction('sample.ts', at(2, 30, 3, 2), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['spans the range']);
+            });
+
+            it('keeps the order of several diagnostics in the range', async () => {
+                setDiagnostics([
+                    { range: at(3, 0, 3, 1), message: 'c' },
+                    { range: at(1, 0, 1, 1), message: 'a' },
+                    { range: at(9, 0, 9, 1), message: 'out' },
+                    { range: at(2, 0, 2, 1), message: 'b' },
+                ]);
+                await ctx.codeAction('sample.ts', at(1, 0, 3, 5), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['c', 'a', 'b']);
+            });
+
+            it('accepts a range whose start is after its end', async () => {
+                setDiagnostics([{ range: at(2, 3, 2, 4), message: 'a' }]);
+                await ctx.codeAction('sample.ts', at(2, 8, 2, 0), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['a']);
+            });
+
+            it('skips diagnostics with a malformed range', async () => {
+                setDiagnostics([
+                    { range: {}, message: 'empty' },
+                    { range: null, message: 'null' },
+                    {
+                        range: { start: { line: 0, character: 0 }, end: { line: '0', character: 1 } },
+                        message: 'string',
+                    },
+                    { range: at(0, 0, 0, 1), message: 'valid' },
+                ]);
+                await ctx.codeAction('sample.ts', at(0, 0, 0, 1), { overlappingDiagnostics: true });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['valid']);
+            });
+
+            it('requires matching codes when combined with diagnosticCodes', async () => {
+                setDiagnostics([
+                    { range: at(0, 0, 0, 1), message: 'a', code: 1 },
+                    { range: at(0, 0, 0, 1), message: 'b', code: 2 },
+                    { range: at(5, 0, 5, 1), message: 'c', code: 1 },
+                ]);
+                await ctx.codeAction('sample.ts', at(0, 0, 0, 1), {
+                    diagnosticCodes: [1],
+                    overlappingDiagnostics: true,
+                });
+                expect(sentContext().diagnostics.map((d) => d.message)).toEqual(['a']);
+            });
+
+            it('still sends only', async () => {
+                setDiagnostics([{ range: at(0, 0, 0, 1), message: 'a' }]);
+                await ctx.codeAction('sample.ts', at(0, 0, 0, 1), { overlappingDiagnostics: true, only: ['quickfix'] });
+                expect(sentContext()).toEqual({
+                    diagnostics: [{ range: at(0, 0, 0, 1), message: 'a' }],
+                    only: ['quickfix'],
+                });
+            });
+
+            it('sends no diagnostics when false', async () => {
+                setDiagnostics([{ range: at(0, 0, 0, 1), message: 'a' }]);
+                await ctx.codeAction('sample.ts', at(0, 0, 0, 1), { overlappingDiagnostics: false });
+                expect(sentContext()).toEqual({ diagnostics: [] });
+            });
+        });
+
         describe('codeAction diagnostic matching', () => {
             const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
 
@@ -3761,6 +3891,25 @@ describe('BenchContextImpl', () => {
                     'sample.ts',
                     { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
                     ['y'],
+                );
+                const sent = harness.requests.find((r) => r.method === 'textDocument/codeAction');
+                const params = sent?.params as { context: { diagnostics: Diagnostic[] } } | undefined;
+                expect(params?.context.diagnostics.map((d) => d.message)).toEqual(['b']);
+            });
+
+            it('codeAction sends overlapping pulled diagnostics when nothing was pushed', async () => {
+                const located = (message: string, line: number): Diagnostic => ({
+                    range: { start: { line, character: 0 }, end: { line, character: 3 } },
+                    message,
+                });
+                servePulls(full('1', located('a', 0), located('b', 2)));
+                harness.capabilities = { ...harness.capabilities, codeActionProvider: true };
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
+                await ctx.codeAction(
+                    'sample.ts',
+                    { start: { line: 2, character: 1 }, end: { line: 2, character: 1 } },
+                    { overlappingDiagnostics: true },
                 );
                 const sent = harness.requests.find((r) => r.method === 'textDocument/codeAction');
                 const params = sent?.params as { context: { diagnostics: Diagnostic[] } } | undefined;

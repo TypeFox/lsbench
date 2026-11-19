@@ -4,6 +4,7 @@
 
 ### New features
 
+- `codeAction` accepts `overlappingDiagnostics: true` in its options object, sending the document's current diagnostics whose range overlaps the requested range, boundaries included, whatever their code. Servers that publish diagnostics without a code and build quick fixes from `context.diagnostics`, such as elixir-ls, can now be benchmarked for code actions. Combined with `diagnosticCodes`, a diagnostic must match both. Diagnostics without a well formed range are skipped, and the pulled diagnostics are used when the server never published for the document. Requests without the option are unchanged.
 - `codeAction` accepts an options object `{ diagnosticCodes?, only? }` as its third argument, besides the array of codes. `only` lists the requested `CodeActionKind`s and is sent as `context.only`, so servers that offer source actions only on request, such as tsgo, can be benchmarked for code actions. `context.only` is left out when `only` is not given, and an empty `only: []` is sent as is. `CodeActionOptions` is exported.
 
 ### Fixes

@@ -516,9 +516,20 @@ export class BenchContextImpl implements BenchContext {
         range: Range,
         options?: (string | number)[] | CodeActionOptions,
     ): Promise<unknown | null> {
-        const { diagnosticCodes, only } = Array.isArray(options) ? { diagnosticCodes: options } : (options ?? {});
+        const { diagnosticCodes, only, overlappingDiagnostics } = Array.isArray(options)
+            ? { diagnosticCodes: options }
+            : (options ?? {});
         const uri = this.getUri(relativePath);
-        const diagnostics = diagnosticCodes ? filterDiagnosticsByCode(this.diagnosticsFor(uri), diagnosticCodes) : [];
+        let diagnostics: Diagnostic[] = [];
+        if (diagnosticCodes || overlappingDiagnostics) {
+            diagnostics = this.diagnosticsFor(uri);
+            if (diagnosticCodes) {
+                diagnostics = filterDiagnosticsByCode(diagnostics, diagnosticCodes);
+            }
+            if (overlappingDiagnostics) {
+                diagnostics = filterDiagnosticsByRange(diagnostics, range);
+            }
+        }
 
         return this.timedRequest('textDocument/codeAction', {
             textDocument: { uri },
@@ -1744,6 +1755,41 @@ function filterDiagnosticsByCode(diagnostics: Diagnostic[], codes: (string | num
             if ((typeof dataCode === 'string' || typeof dataCode === 'number') && codes.includes(dataCode)) {
                 matched.push(d);
             }
+        }
+    }
+    return matched;
+}
+
+function isLspPosition(value: unknown): value is { line: number; character: number } {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const { line, character } = value as { line?: unknown; character?: unknown };
+    return typeof line === 'number' && typeof character === 'number';
+}
+
+function isLspRange(value: unknown): value is Range {
+    if (typeof value !== 'object' || value === null) {
+        return false;
+    }
+    const { start, end } = value as { start?: unknown; end?: unknown };
+    return isLspPosition(start) && isLspPosition(end);
+}
+
+function comparePositions(a: Position, b: Position): number {
+    return a.line !== b.line ? a.line - b.line : a.character - b.character;
+}
+
+function filterDiagnosticsByRange(diagnostics: Diagnostic[], range: Range): Diagnostic[] {
+    const [start, end] =
+        comparePositions(range.start, range.end) <= 0 ? [range.start, range.end] : [range.end, range.start];
+    const matched: Diagnostic[] = [];
+    for (const d of diagnostics) {
+        if (!isLspRange(d.range)) {
+            continue;
+        }
+        if (comparePositions(d.range.end, start) >= 0 && comparePositions(end, d.range.start) >= 0) {
+            matched.push(d);
         }
     }
     return matched;

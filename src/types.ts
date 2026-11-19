@@ -439,6 +439,7 @@ export interface WaitForIdleResult {
 export interface CodeActionOptions {
     diagnosticCodes?: (string | number)[];
     only?: string[];
+    overlappingDiagnostics?: boolean;
 }
 
 /** Options for opening a document */
