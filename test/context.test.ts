@@ -209,6 +209,12 @@ describe('detectLanguageId', () => {
         ['Notes.LHS', 'literate haskell'],
         ['lib.nix', 'nix'],
         ['flake.NIX', 'nix'],
+        ['main.tex', 'latex'],
+        ['chapters/Intro.TEX', 'latex'],
+        ['mystyle.sty', 'latex'],
+        ['thesis.cls', 'latex'],
+        ['refs.bib', 'bibtex'],
+        ['Refs.BIB', 'bibtex'],
         ['notes.txt', 'plaintext'],
     ])('maps %s to %s', (file, languageId) => {
         expect(detectLanguageId(file)).toBe(languageId);

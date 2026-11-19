@@ -1854,6 +1854,10 @@ const RegisteredLanguages: Record<string, string> = {
     '.hs': 'haskell',
     '.lhs': 'literate haskell',
     '.nix': 'nix',
+    '.tex': 'latex',
+    '.sty': 'latex',
+    '.cls': 'latex',
+    '.bib': 'bibtex',
     '.txt': 'plaintext',
 };
 
