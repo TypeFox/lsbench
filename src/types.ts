@@ -31,6 +31,7 @@ export interface ServerConfig {
      * An exit without a shutdown reply stays abnormal whatever its code
      */
     allowExitCodes?: number[];
+    allowExitSignals?: NodeJS.Signals[];
 }
 
 // ── CLI Options ─────────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ export interface BenchOptions {
     settings?: Record<string, unknown>;
     /** Non zero exit codes tolerated after a replied shutdown, see ServerConfig.allowExitCodes */
     allowExitCodes?: number[];
+    allowExitSignals?: NodeJS.Signals[];
     /** Verbose logging */
     verbose: boolean;
     /**

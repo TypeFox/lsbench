@@ -364,6 +364,31 @@ describe('printSummary', () => {
         return '';
     }
 
+    it('describes the codes and signals of tolerated exits', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const report = buildReport(opts, [{ iteration: 1, requests: [timing()], total_ms: 10 }], 10);
+        const exit = (code: number | null, signal: NodeJS.Signals | null) => ({
+            during: 'final teardown',
+            code,
+            signal,
+            reason: 'allowed',
+        });
+        report.tolerated_exits = [exit(null, 'SIGSEGV'), exit(null, 'SIGSEGV')];
+        printSummary(report);
+        report.tolerated_exits = [exit(2, null), exit(1, null), exit(null, 'SIGSEGV'), exit(null, 'SIGABRT')];
+        printSummary(report);
+        report.tolerated_exits = [exit(1, null)];
+        printSummary(report);
+        expect(lines.filter((line) => line.includes('Tolerated exits'))).toEqual([
+            '  Tolerated exits: 2 (signal SIGSEGV after shutdown, allowed)',
+            '  Tolerated exits: 4 (codes 1, 2, signals SIGABRT, SIGSEGV after shutdown, allowed)',
+            '  Tolerated exits: 1 (code 1 after shutdown, allowed)',
+        ]);
+    });
+
     it('prints n/a for the latencies of a method where every wait timed out', () => {
         const lines: string[] = [];
         vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {

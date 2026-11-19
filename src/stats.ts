@@ -213,8 +213,25 @@ export function buildReport(
 
 /** "code 1" or "codes 1, 2" for the distinct exit codes of some exits */
 function describeExitCodes(exits: AbnormalExit[]): string {
-    const codes = [...new Set(exits.map((e) => e.code))].sort((a, b) => (a ?? -1) - (b ?? -1));
-    return `${codes.length === 1 ? 'code' : 'codes'} ${codes.join(', ')} after shutdown, allowed`;
+    const codes = new Set<number>();
+    const signals = new Set<string>();
+    for (const exit of exits) {
+        if (exit.signal) {
+            signals.add(exit.signal);
+        } else if (exit.code !== null) {
+            codes.add(exit.code);
+        }
+    }
+    const parts: string[] = [];
+    if (codes.size > 0) {
+        const sorted = [...codes].sort((a, b) => a - b);
+        parts.push(`${sorted.length === 1 ? 'code' : 'codes'} ${sorted.join(', ')}`);
+    }
+    if (signals.size > 0) {
+        const sorted = [...signals].sort();
+        parts.push(`${sorted.length === 1 ? 'signal' : 'signals'} ${sorted.join(', ')}`);
+    }
+    return `${parts.join(', ')} after shutdown, allowed`;
 }
 
 /** Pretty-print a summary table to the console */

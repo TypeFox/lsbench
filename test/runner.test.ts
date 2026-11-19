@@ -57,6 +57,13 @@ describe('resolveServerConfig', () => {
         );
     });
 
+    it('sets allowExitSignals only when some are given', () => {
+        const args = ['cmd', undefined, undefined, undefined, undefined, undefined, undefined] as const;
+        expect(resolveServerConfig(...args, ['SIGSEGV']).allowExitSignals).toEqual(['SIGSEGV']);
+        expect(resolveServerConfig(...args, [])).not.toHaveProperty('allowExitSignals');
+        expect(resolveServerConfig(...args)).not.toHaveProperty('allowExitSignals');
+    });
+
     it('sets advertisePullDiagnostics only when requested', () => {
         const args = ['cmd', undefined, undefined, undefined, undefined, undefined] as const;
         expect(resolveServerConfig(...args, true).advertisePullDiagnostics).toBe(true);
@@ -597,7 +604,7 @@ const mode = process.argv[1];
 conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true } }));
 conn.onRequest('textDocument/hover', () => null);
 conn.onRequest('shutdown', () => (mode === 'quit' ? process.exit(0) : null));
-conn.onNotification('exit', () => process.exit(1));
+conn.onNotification('exit', () => (mode === 'segv' ? process.kill(process.pid, 'SIGSEGV') : process.exit(1)));
 conn.listen();
 `;
 
@@ -621,7 +628,13 @@ describe('runBenchmark with allowExitCodes', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    function options(mode: 'fail' | 'quit', restart: boolean, output: string, allowExitCodes?: number[]): BenchOptions {
+    function options(
+        mode: 'fail' | 'quit' | 'segv',
+        restart: boolean,
+        output: string,
+        allowExitCodes?: number[],
+        allowExitSignals?: NodeJS.Signals[],
+    ): BenchOptions {
         return {
             server: process.execPath,
             serverArgs: ['--input-type=module', '-e', exitCodeServer, mode],
@@ -633,6 +646,7 @@ describe('runBenchmark with allowExitCodes', () => {
             restart,
             verbose: false,
             allowExitCodes,
+            allowExitSignals,
         };
     }
 
@@ -665,6 +679,27 @@ describe('runBenchmark with allowExitCodes', () => {
             expect(written.tolerated_exits).toHaveLength(expected.length);
         });
     }
+
+    it('records an allowed signal after a replied shutdown as tolerated, not abnormal', async () => {
+        const output = path.join(tmpDir, 'report-signal-allowed.json');
+        const report = await runBenchmark(options('segv', true, output, undefined, ['SIGSEGV']));
+
+        expect(report.abnormal_exits).toBeUndefined();
+        expect(report.tolerated_exits).toEqual(
+            ['teardown of warmup 1', 'teardown of iteration 1', 'teardown of iteration 2'].map((during) => ({
+                during,
+                code: null,
+                signal: 'SIGSEGV',
+                reason: 'exited after shutdown with signal SIGSEGV (allowed)',
+            })),
+        );
+    });
+
+    it('records a signal after a replied shutdown as abnormal when only codes are allowed', async () => {
+        const report = await runBenchmark(options('segv', true, path.join(tmpDir, 'report-signal.json'), [1]));
+        expect(report.tolerated_exits).toBeUndefined();
+        expect(report.abnormal_exits?.map((e) => e.signal)).toEqual(['SIGSEGV', 'SIGSEGV', 'SIGSEGV']);
+    });
 
     it('keeps an exit 0 without a shutdown reply abnormal whatever codes are allowed', async () => {
         const report = await runBenchmark(options('quit', true, path.join(tmpDir, 'report-quit.json'), [0, 1]));

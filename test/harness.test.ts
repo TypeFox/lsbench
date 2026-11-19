@@ -250,18 +250,37 @@ conn.onRequest('shutdown', () => {
     if (mode === 'quit') {
         process.exit(0);
     }
+    if (mode === 'segv-early') {
+        process.kill(process.pid, 'SIGSEGV');
+        return new Promise(() => {});
+    }
     if (mode === 'hang') {
         return new Promise(() => {});
     }
     return null;
 });
-conn.onNotification('exit', () => process.exit(mode === 'fail' ? 1 : 0));
+conn.onNotification('exit', () => {
+    if (mode === 'segv') {
+        process.kill(process.pid, 'SIGSEGV');
+        return;
+    }
+    process.exit(mode === 'fail' ? 1 : 0);
+});
 conn.listen();
 `;
 
-function shutdownHarness(mode: 'crash' | 'quit' | 'hang' | 'fail' | 'clean', allowExitCodes?: number[]): LspHarness {
+function shutdownHarness(
+    mode: 'crash' | 'quit' | 'hang' | 'fail' | 'segv' | 'segv-early' | 'clean',
+    allowExitCodes?: number[],
+    allowExitSignals?: NodeJS.Signals[],
+): LspHarness {
     return new LspHarness(
-        { command: process.execPath, args: ['--input-type=module', '-e', shutdownServer, mode], allowExitCodes },
+        {
+            command: process.execPath,
+            args: ['--input-type=module', '-e', shutdownServer, mode],
+            allowExitCodes,
+            allowExitSignals,
+        },
         process.cwd(),
     );
 }
@@ -337,6 +356,48 @@ describe('LspHarness.stop', () => {
         const harness = shutdownHarness('fail', [2]);
         await harness.start();
         expect(await harness.stop()).toMatchObject({ code: 1, abnormal: true });
+    });
+
+    it('reports a signal after a replied shutdown as abnormal by default', async () => {
+        const harness = shutdownHarness('segv');
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({
+            code: null,
+            signal: 'SIGSEGV',
+            abnormal: true,
+            reason: 'exited after shutdown with signal SIGSEGV',
+        });
+        expect(exit?.tolerated).toBeUndefined();
+    });
+
+    it('tolerates an allowed signal after a replied shutdown', async () => {
+        const harness = shutdownHarness('segv', undefined, ['SIGSEGV']);
+        await harness.start();
+        expect(await harness.stop()).toMatchObject({
+            code: null,
+            signal: 'SIGSEGV',
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after shutdown with signal SIGSEGV (allowed)',
+        });
+    });
+
+    it('does not tolerate a signal that is not allowed', async () => {
+        const harness = shutdownHarness('segv', [1], ['SIGABRT']);
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ signal: 'SIGSEGV', abnormal: true });
+        expect(exit?.tolerated).toBeUndefined();
+    });
+
+    it('keeps a signal without a shutdown reply abnormal even when it is allowed', async () => {
+        const harness = shutdownHarness('segv-early', undefined, ['SIGSEGV']);
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({ signal: 'SIGSEGV', abnormal: true });
+        expect(exit?.tolerated).toBeUndefined();
+        expect(exit?.reason).toMatch(/unexpectedly \(signal SIGSEGV\)/);
     });
 
     for (const [mode, code] of [

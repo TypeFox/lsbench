@@ -1593,7 +1593,10 @@ export class LspHarness {
         if (!this.shutdownReplied) {
             return { code, signal, abnormal: true, reason: `exited unexpectedly (${status})` };
         }
-        if (signal === null && code !== null && code !== 0 && this.config.allowExitCodes?.includes(code)) {
+        const allowedCode =
+            signal === null && code !== null && code !== 0 && this.config.allowExitCodes?.includes(code);
+        const allowedSignal = signal !== null && this.config.allowExitSignals?.includes(signal);
+        if (allowedCode || allowedSignal) {
             return {
                 code,
                 signal,

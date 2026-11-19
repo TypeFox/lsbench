@@ -28,6 +28,7 @@ export function resolveServerConfig(
     settings?: Record<string, unknown>,
     allowExitCodes?: number[],
     advertisePullDiagnostics?: boolean,
+    allowExitSignals?: NodeJS.Signals[],
 ): ServerConfig {
     const parts = serverArg.split(/\s+/).filter(Boolean);
     const command = parts[0];
@@ -36,6 +37,9 @@ export function resolveServerConfig(
     const config: ServerConfig = { command, args, initializationOptions, clientCapabilities, settings };
     if (allowExitCodes && allowExitCodes.length > 0) {
         config.allowExitCodes = allowExitCodes;
+    }
+    if (allowExitSignals && allowExitSignals.length > 0) {
+        config.allowExitSignals = allowExitSignals;
     }
     if (advertisePullDiagnostics) {
         config.advertisePullDiagnostics = true;
@@ -93,6 +97,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         opts.settings,
         opts.allowExitCodes,
         opts.advertisePullDiagnostics,
+        opts.allowExitSignals,
     );
     const actionFn = await loadActionScript(opts.script);
 
@@ -110,8 +115,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (opts.shortenSilentWaits !== undefined) {
         console.log(`  Shorten:    diagnostics waits known to time out to ${opts.shortenSilentWaits}ms`);
     }
-    if (serverConfig.allowExitCodes) {
-        console.log(`  Allow exit: ${serverConfig.allowExitCodes.join(', ')} after shutdown`);
+    if (serverConfig.allowExitCodes || serverConfig.allowExitSignals) {
+        const allowed = [...(serverConfig.allowExitCodes ?? []), ...(serverConfig.allowExitSignals ?? [])];
+        console.log(`  Allow exit: ${allowed.join(', ')} after shutdown`);
     }
     if (serverConfig.advertisePullDiagnostics) {
         console.log('  Pull diag:  textDocument.diagnostic advertised');

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { Command } from 'commander';
 import {
     type CheckedRun,
@@ -66,6 +67,12 @@ program
         collectExitCode,
         [] as number[],
     )
+    .option(
+        '--allow-exit-signal <name>',
+        'Tolerate this signal (e.g. SIGSEGV) after a replied shutdown (repeatable), recorded in tolerated_exits',
+        collectExitSignal,
+        [] as string[],
+    )
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
     .option('--no-skip-unsupported', 'Send requests even when the server does not advertise their provider')
     .option(
@@ -120,6 +127,9 @@ program
             allowExitCodes: (rawOpts.allowExitCode as number[]).length
                 ? (rawOpts.allowExitCode as number[])
                 : undefined,
+            allowExitSignals: (rawOpts.allowExitSignal as string[]).length
+                ? (rawOpts.allowExitSignal as NodeJS.Signals[])
+                : undefined,
         };
 
         // Validate inputs
@@ -153,6 +163,10 @@ program
         }
         if (opts.allowExitCodes?.some((code) => Number.isNaN(code))) {
             console.error('Error: --allow-exit-code must be a non-negative integer');
+            process.exit(1);
+        }
+        if (opts.allowExitSignals?.some((signal) => !isSignalName(signal))) {
+            console.error('Error: --allow-exit-signal must be a signal name such as SIGSEGV');
             process.exit(1);
         }
         if (opts.waitIdle !== undefined && (Number.isNaN(opts.waitIdle) || opts.waitIdle < 1)) {
@@ -329,6 +343,16 @@ program.parse();
 function collectExitCode(value: string, previous: number[]): number[] {
     const code = /^\d+$/.test(value) ? parseInt(value, 10) : Number.NaN;
     return previous.includes(code) ? previous : [...previous, code];
+}
+
+function collectExitSignal(value: string, previous: string[]): string[] {
+    const upper = value.trim().toUpperCase();
+    const signal = upper.startsWith('SIG') ? upper : `SIG${upper}`;
+    return previous.includes(signal) ? previous : [...previous, signal];
+}
+
+function isSignalName(name: string): boolean {
+    return Object.hasOwn(os.constants.signals, name);
 }
 
 function parseOptionalMs(value: string | boolean | undefined, bare: number): number | undefined {
@@ -734,6 +758,9 @@ experimental/serverStatus (verbose mode logs progress titles).
           --shutdown-timeout <ms>  Wait this long for a shutdown reply, then kill   (default: 5000)
           --allow-exit-code <n>    Tolerate exit code n after a replied shutdown,
                                    recorded in tolerated_exits (repeatable)
+          --allow-exit-signal <name>
+                                   Tolerate a signal such as SIGSEGV after a replied
+                                   shutdown, recorded in tolerated_exits (repeatable)
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
           --no-skip-unsupported    Send requests even when the server does not
@@ -788,7 +815,8 @@ The JSON report (and the printed summary) contains:
                        Without --restart, a crash during an iteration ends the run and
                        is labeled with that iteration)
   - tolerated_exits    servers that exited after a replied shutdown with a code allowed by
-                       --allow-exit-code (only when any did, these do not fail the run)
+                       --allow-exit-code or a signal allowed by --allow-exit-signal
+                       (only when any did, these do not fail the run)
   - silent_waits       diagnostics push waits per method that timed out without any
                        publish, warmups included (only for methods with 3 such waits in
                        a row over documents: the server may never publish for a clean

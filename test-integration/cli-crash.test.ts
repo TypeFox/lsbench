@@ -33,6 +33,8 @@ conn.onNotification('exit', () => process.exit(1));
 conn.listen();
 `;
 
+const segvAfterExitServer = exitOneServer.replace('process.exit(1)', "process.kill(process.pid, 'SIGSEGV')");
+
 // holds a hover request and exits 5 while it is pending
 const crashOnHoverServer = `
 import * as rpc from 'vscode-jsonrpc/node';
@@ -159,6 +161,37 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
         expect(report.tolerated_exits).toBeUndefined();
     });
 
+    it('exits zero with --allow-exit-signal for a server crashing with SIGSEGV after a replied shutdown', () => {
+        const output = path.join(tmpDir, 'cli-signal-allowed.json');
+        const result = runCli(segvAfterExitServer, output, ['--allow-exit-signal', 'SIGSEGV']);
+        expect(result.stderr).not.toMatch(/abnormally/);
+        expect(result.status).toBe(0);
+        expect(result.stdout).toMatch(/Allow exit: SIGSEGV after shutdown/);
+        expect(result.stdout).toMatch(/Tolerated exits: 2 \(signal SIGSEGV after shutdown, allowed\)/);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.abnormal_exits).toBeUndefined();
+        expect(report.tolerated_exits).toHaveLength(2);
+        expect(report.tolerated_exits[0]).toMatchObject({ code: null, signal: 'SIGSEGV' });
+    });
+
+    it('normalizes lower case --allow-exit-signal names without the SIG prefix', () => {
+        const output = path.join(tmpDir, 'cli-signal-normalized.json');
+        const result = runCli(segvAfterExitServer, output, ['--allow-exit-signal', 'segv']);
+        expect(result.status).toBe(0);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.tolerated_exits).toHaveLength(2);
+    });
+
+    it('still exits non zero without --allow-exit-signal for that server', () => {
+        const output = path.join(tmpDir, 'cli-signal-not-allowed.json');
+        const result = runCli(segvAfterExitServer, output, ['--allow-exit-code', '1']);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/exited abnormally during teardown of iteration 1 \(signal SIGSEGV\)/);
+        const report = JSON.parse(fs.readFileSync(output, 'utf-8'));
+        expect(report.abnormal_exits).toHaveLength(2);
+        expect(report.tolerated_exits).toBeUndefined();
+    });
+
     function runCrashOnHover(output: string, restart: boolean) {
         return spawnSync(
             process.execPath,
@@ -220,5 +253,14 @@ describe('lsbench CLI with a server crashing at shutdown', () => {
         const result = runCli(exitOneServer, path.join(tmpDir, 'cli-invalid.json'), ['--allow-exit-code', 'one']);
         expect(result.status).toBe(1);
         expect(result.stderr).toMatch(/--allow-exit-code must be a non-negative integer/);
+    });
+
+    it('rejects an unknown --allow-exit-signal', () => {
+        const result = runCli(segvAfterExitServer, path.join(tmpDir, 'cli-invalid-signal.json'), [
+            '--allow-exit-signal',
+            'NOPE',
+        ]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/--allow-exit-signal must be a signal name such as SIGSEGV/);
     });
 });
