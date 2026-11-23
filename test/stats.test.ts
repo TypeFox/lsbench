@@ -289,11 +289,11 @@ describe('buildReport', () => {
     it('produces an empty iteration summary when there are no runs', () => {
         const report = buildReport(opts, [], 0);
         expect(report.iteration_summary).toEqual({
-            avg_ms: 0,
-            median_ms: 0,
-            p95_ms: 0,
-            min_ms: 0,
-            max_ms: 0,
+            avg_ms: null,
+            median_ms: null,
+            p95_ms: null,
+            min_ms: null,
+            max_ms: null,
         });
         expect(report.summary).toEqual({});
     });
@@ -387,6 +387,29 @@ describe('printSummary', () => {
             '  Tolerated exits: 4 (codes 1, 2, signals SIGABRT, SIGSEGV after shutdown, allowed)',
             '  Tolerated exits: 1 (code 1 after shutdown, allowed)',
         ]);
+    });
+
+    it('prints n/a for the iteration totals of a report without runs', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        printSummary(buildReport(opts, [], 0));
+        expect(lines).toContain('    avg=n/a  median=n/a  p95=n/a  min=n/a  max=n/a');
+        expect(lines.some((line) => line.includes('=0ms'))).toBe(false);
+    });
+
+    it('prints the iteration totals in ms for a report with runs', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const runs = [
+            { iteration: 1, requests: [timing()], total_ms: 10 },
+            { iteration: 2, requests: [timing()], total_ms: 30 },
+        ];
+        printSummary(buildReport(opts, runs, 40));
+        expect(lines).toContain('    avg=20ms  median=10ms  p95=30ms  min=10ms  max=30ms');
     });
 
     it('prints n/a for the latencies of a method where every wait timed out', () => {

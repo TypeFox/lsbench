@@ -132,11 +132,11 @@ export function computeMethodStats(timings: RequestTiming[]): MethodStats {
 }
 
 /** Compute per-iteration total stats */
-function computeIterationSummary(runs: IterationResult[]) {
+function computeIterationSummary(runs: IterationResult[]): BenchReport['iteration_summary'] {
     const totals = sorted(runs.map((r) => r.total_ms));
     const n = totals.length;
     if (n === 0) {
-        return { avg_ms: 0, median_ms: 0, p95_ms: 0, min_ms: 0, max_ms: 0 };
+        return { avg_ms: null, median_ms: null, p95_ms: null, min_ms: null, max_ms: null };
     }
     const sum = totals.reduce((a, b) => a + b, 0);
     return {
@@ -257,9 +257,10 @@ export function printSummary(report: BenchReport): void {
 
     // Iteration summary
     const is = report.iteration_summary;
+    const total = (ms: number | null) => (ms === null ? 'n/a' : `${ms}ms`);
     console.log('  Iteration totals:');
     console.log(
-        `    avg=${is.avg_ms}ms  median=${is.median_ms}ms  p95=${is.p95_ms}ms  min=${is.min_ms}ms  max=${is.max_ms}ms`,
+        `    avg=${total(is.avg_ms)}  median=${total(is.median_ms)}  p95=${total(is.p95_ms)}  min=${total(is.min_ms)}  max=${total(is.max_ms)}`,
     );
     console.log();
 

@@ -42,7 +42,7 @@
 | Field | Content |
 | --- | --- |
 | `summary` | per method aggregate stats, see [summary](#summary) |
-| `iteration_summary` | per iteration total time stats |
+| `iteration_summary` | per iteration total time stats. Without timed iterations, such as when a keep alive server exits during a warmup, its fields are `null`, printed as `n/a` |
 | `runs` | the full per iteration, per request breakdown |
 | `lifecycle` | without `--restart` only: spawn, initialize, idle and final shutdown timings of the single server |
 | `abnormal_exits` | servers that crashed or exited unexpectedly, see [server exits](#server-exits) |

@@ -231,11 +231,11 @@ export interface BenchReport {
     total_duration_ms: number;
     summary: Record<string, MethodStats>;
     iteration_summary: {
-        avg_ms: number;
-        median_ms: number;
-        p95_ms: number;
-        min_ms: number;
-        max_ms: number;
+        avg_ms: number | null;
+        median_ms: number | null;
+        p95_ms: number | null;
+        min_ms: number | null;
+        max_ms: number | null;
     };
     runs: IterationResult[];
     /**
