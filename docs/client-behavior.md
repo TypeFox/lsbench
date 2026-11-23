@@ -23,6 +23,8 @@ A server that registers a provider only after `initialized` gets it skipped unti
 | Full (1) | one change holding the whole tracked text after the edits, without a `range` |
 | None (0) | not sent, logged in verbose mode. The tracked text and version still update, so later saves and edits stay consistent, but diagnostics waits stay keyed to the `didOpen` |
 
+An edit range whose start comes after its end is swapped before it is applied locally and sent, so the server receives the same range lsbench applies.
+
 A server that doesn't state a change kind gets incremental changes. The LSP default is None, but every server measured so far that omits it accepts incremental changes, so only an explicit `0` disables `didChange`.
 
 ## Save Sync

@@ -711,10 +711,11 @@ export class BenchContextImpl implements BenchContext {
         const editArray = Array.isArray(edits) ? edits : [edits];
         doc.version++;
 
-        const ranged = editArray.map((e) => ({ range: toLspRange(e.range), text: e.text }));
+        const normalized = editArray.map((e) => ({ range: normalizeRange(e.range), text: e.text }));
+        const ranged = normalized.map((e) => ({ range: toLspRange(e.range), text: e.text }));
 
         // mirror the change locally, each edit applies to the result of the previous one
-        for (const e of editArray) {
+        for (const e of normalized) {
             doc.text = applyEdit(doc.text, e);
         }
 
@@ -1680,6 +1681,12 @@ function toLspRange(range: Range): {
         start: { line: range.start.line, character: range.start.character },
         end: { line: range.end.line, character: range.end.character },
     };
+}
+
+function normalizeRange(range: Range): Range {
+    const { start, end } = range;
+    const reversed = start.line > end.line || (start.line === end.line && start.character > end.character);
+    return reversed ? { start: end, end: start } : range;
 }
 
 /** Replace the text covered by `edit.range` with `edit.text` */

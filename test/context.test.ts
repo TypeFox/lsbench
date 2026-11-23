@@ -1389,6 +1389,39 @@ describe('BenchContextImpl', () => {
             });
         });
 
+        it('sends a reversed range with its ends swapped for incremental sync', async () => {
+            harness.saveOptions.includeText = true;
+            fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'line0\nline1\nline2\n', 'utf-8');
+            await ctx.openDocument('edit.txt');
+            const edit = op(2, 0, 0, 0, 'X');
+            await ctx.edit('edit.txt', edit);
+            const change = harness.notifications[harness.notifications.length - 1];
+            expect(change.params).toEqual({
+                textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 2 },
+                contentChanges: [
+                    { range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } }, text: 'X' },
+                ],
+            });
+            expect(edit).toEqual(op(2, 0, 0, 0, 'X'));
+            await ctx.saveDocument('edit.txt');
+            const save = harness.notifications.find((n) => n.method === 'textDocument/didSave');
+            expect(save?.params).toMatchObject({ text: 'Xline2\n' });
+        });
+
+        it('swaps a reversed range within one line by character', async () => {
+            harness.saveOptions.includeText = true;
+            fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abcdef', 'utf-8');
+            await ctx.openDocument('edit.txt');
+            await ctx.edit('edit.txt', op(0, 4, 0, 1, ''));
+            const change = harness.notifications[harness.notifications.length - 1];
+            expect((change.params as { contentChanges: unknown[] }).contentChanges).toEqual([
+                { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } }, text: '' },
+            ]);
+            await ctx.saveDocument('edit.txt');
+            const save = harness.notifications.find((n) => n.method === 'textDocument/didSave');
+            expect(save?.params).toMatchObject({ text: 'aef' });
+        });
+
         it('sends the whole text without a range for full sync', async () => {
             harness.changeKind = 1;
             fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abc\n', 'utf-8');
