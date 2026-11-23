@@ -345,7 +345,7 @@ export class BenchContextImpl implements BenchContext {
     }
 
     /** Reset open document state (e.g. between iterations without restart) */
-    async resetDocuments(): Promise<void> {
+    resetDocuments(): void {
         for (const [, doc] of this.openDocuments) {
             try {
                 this.harness.sendNotification('textDocument/didClose', {
@@ -1253,6 +1253,7 @@ export class BenchContextImpl implements BenchContext {
             backoffMs = Math.min(backoffMs * 2, PULL_MAX_BACKOFF_MS);
         }
         unsubscribe();
+        onPushed();
         if (outcome === 'held') {
             this.log(
                 `Server answered a pull for ${relativePath} with no diagnostics while busy, ` +

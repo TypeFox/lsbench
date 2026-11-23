@@ -328,11 +328,29 @@ export function printSummary(report: BenchReport): void {
     // auto mode pulls that first waited for a push include that grace in their durations,
     // and those that held back empty answers of a busy server include the wait for it. Push
     // waits holding an empty publish in a close window do not include that hold
-    const graced = methods.filter((m) => report.summary[m].graced !== undefined);
-    const held = methods.filter((m) => report.summary[m].held !== undefined);
-    const heldPublishes = methods.filter((m) => report.summary[m].held_publishes !== undefined);
-    const closeWindowed = methods.filter((m) => report.summary[m].close_windowed !== undefined);
-    const shortened = methods.filter((m) => report.summary[m].shortened !== undefined);
+    const graced: string[] = [];
+    const held: string[] = [];
+    const heldPublishes: string[] = [];
+    const closeWindowed: string[] = [];
+    const shortened: string[] = [];
+    for (const m of methods) {
+        const s = report.summary[m];
+        if (s.graced !== undefined) {
+            graced.push(m);
+        }
+        if (s.held !== undefined) {
+            held.push(m);
+        }
+        if (s.held_publishes !== undefined) {
+            heldPublishes.push(m);
+        }
+        if (s.close_windowed !== undefined) {
+            closeWindowed.push(m);
+        }
+        if (s.shortened !== undefined) {
+            shortened.push(m);
+        }
+    }
     if (
         graced.length > 0 ||
         held.length > 0 ||

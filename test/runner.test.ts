@@ -4,7 +4,15 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BenchOptions, BenchReport, ServerConfigOptions } from 'lsbench';
 import { LspHarness, loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+beforeEach(() => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+});
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
 
 describe('resolveServerConfig', () => {
     it('splits a bare command with no args', () => {

@@ -312,7 +312,6 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             const iterMs = Number(iterEnd - iterStart) / 1_000_000;
 
             // Collect timings
-            // biome-ignore lint/style/noNonNullAssertion: ctx is always set at this point
             const timings = ctx!.collectTimings();
 
             let run: IterationResult | null = null;
@@ -330,7 +329,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
             // Reset document state between iterations (if not restarting)
             if (!opts.restart) {
-                await ctx?.resetDocuments();
+                ctx?.resetDocuments();
             }
 
             // without restart, a server that exited during this iteration (or the reset after it)

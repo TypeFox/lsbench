@@ -74,6 +74,8 @@ Each `didOpen` starts a new open generation. A publish counts when it belongs to
 
 Publishes for other versions are ignored, and so are publishes read from the server while the document was closed, even when they are handled after the next `didOpen`. For a document that isn't open, the wait resolves on the next publish.
 
+A publish without a `diagnostics` array is taken as empty. lsbench warns about it once per run.
+
 ## Reopens and the Close Window
 
 Servers often clear a closed document with an empty publish that can land after the next `didOpen`, while others never publish on close. An empty publish right after a quick reopen is therefore ambiguous.

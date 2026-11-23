@@ -224,6 +224,7 @@ export class DiagnosticsTracker {
     /** URI keys already hinted at as matching an open document apart from case */
     private caseHinted = new Set<string>();
     private closeClearHinted = false;
+    private malformedPublishWarned = false;
     /** whether the server currently reports it is loading, an empty publish then is a placeholder */
     private loading: () => boolean = () => false;
 
@@ -327,6 +328,15 @@ export class DiagnosticsTracker {
         const doc = this.documents.get(key);
         const read = this.reads.get(params) ?? this.readState(doc);
         this.reads.delete(params);
+        if (!Array.isArray(params.diagnostics)) {
+            if (!this.malformedPublishWarned) {
+                this.malformedPublishWarned = true;
+                console.error(
+                    `[lsbench] Warning: publishDiagnostics for ${params.uri} has no diagnostics array, taken as empty`,
+                );
+            }
+            params = { ...params, diagnostics: [] };
+        }
         let generation = read.generation;
         let tentative = false;
         let clearsClose = false;
@@ -1492,6 +1502,9 @@ export class LspHarness {
                     this.connection.sendRequest('initialize', initParams),
                     earlyExit,
                 ])) as InitializeResult;
+                if (typeof result !== 'object' || result === null) {
+                    throw new Error(`invalid initialize result: ${JSON.stringify(result)}`);
+                }
                 this.recordLifecycle('lifecycle/initialize', initStart);
             } catch (err: unknown) {
                 this.recordLifecycle('lifecycle/initialize', initStart, err);
@@ -2279,14 +2292,16 @@ function toChangeSyncKind(value: unknown): ChangeSyncKind | null {
     return value === 0 || value === 1 || value === 2 ? value : null;
 }
 
+const UNDECLARED_CHANGE_SYNC_KIND: ChangeSyncKind = 2;
+
 function staticChangeSyncKind(sync: unknown): ChangeSyncKind {
     if (typeof sync === 'number') {
-        return toChangeSyncKind(sync) ?? 2;
+        return toChangeSyncKind(sync) ?? UNDECLARED_CHANGE_SYNC_KIND;
     }
     if (typeof sync === 'object' && sync !== null) {
-        return toChangeSyncKind((sync as { change?: unknown }).change) ?? 2;
+        return toChangeSyncKind((sync as { change?: unknown }).change) ?? UNDECLARED_CHANGE_SYNC_KIND;
     }
-    return 2;
+    return UNDECLARED_CHANGE_SYNC_KIND;
 }
 
 function hasIncludeText(options: unknown): boolean {
@@ -2374,7 +2389,9 @@ export class ServerOutput {
         const stream = fs.createWriteStream(this.file, { flags: 'a' });
         stream.on('error', (err) => {
             console.error(`[lsbench] Cannot write server log ${this.file}: ${err.message}`);
-            this.stream = null;
+            if (this.stream === stream) {
+                this.stream = null;
+            }
         });
         this.stream = stream;
         stream.write(`${formatServerLogHeader(command, args)}\n`);

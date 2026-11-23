@@ -371,6 +371,9 @@ conn.onRequest('initialize', () => {
     if (mode === 'init-error') {
         throw new Error('nope');
     }
+    if (mode === 'init-null') {
+        return null;
+    }
     return { capabilities: {} };
 });
 conn.listen();
@@ -406,6 +409,15 @@ describe('LspHarness failed start', () => {
         const started = Date.now();
         expect(await harness.stop()).toBe(harness.exit);
         expect(Date.now() - started).toBeLessThan(100);
+    });
+
+    it('fails with invalid initialize result when initialize answers null', async () => {
+        const { harness, pid } = failingHarness('init-null');
+        await expect(harness.start()).rejects.toThrow('invalid initialize result: null');
+        expect(isAlive(pid())).toBe(false);
+        expect(harness.takeLifecycleTimings()).toContainEqual(
+            expect.objectContaining({ method: 'lifecycle/initialize', success: false }),
+        );
     });
 
     async function waitForFile(file: string): Promise<void> {
@@ -1759,6 +1771,24 @@ async function firstPublish(
 describe('DiagnosticsTracker', () => {
     const uri = 'file:///w/a.ts';
     const open = (version = 1) => ({ textDocument: { uri, languageId: 'typescript', version, text: '' } });
+
+    it('takes a publish without a diagnostics array as empty and warns once', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const tracker = new DiagnosticsTracker();
+            tracker.noteNotification('textDocument/didOpen', open());
+            const wait = firstPublish(tracker, uri, () => true, 1000);
+            const malformed = { uri } as unknown as Parameters<DiagnosticsTracker['receive']>[0];
+            expect(tracker.receive(malformed)).toMatchObject({ uri, diagnostics: [] });
+            expect((await wait)?.diagnostics).toEqual([]);
+            tracker.receive({ uri: 'file:///w/b.ts' } as unknown as Parameters<DiagnosticsTracker['receive']>[0]);
+            expect(error.mock.calls).toEqual([
+                [`[lsbench] Warning: publishDiagnostics for ${uri} has no diagnostics array, taken as empty`],
+            ]);
+        } finally {
+            error.mockRestore();
+        }
+    });
 
     it('bumps the generation on each didOpen and stamps publishes with it', () => {
         const tracker = new DiagnosticsTracker();

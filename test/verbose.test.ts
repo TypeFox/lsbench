@@ -152,6 +152,24 @@ describe('ServerOutput', () => {
         expect(lines.slice(6)).toEqual(['second start', '']);
         expect(out).toEqual([]);
     });
+
+    it('keeps writing to the new file stream when the previous one errors late', async () => {
+        const file = path.join(tmpDir, 'server.log');
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const output = new ServerOutput(file, false);
+            output.open('my-server', []);
+            const first = (output as unknown as { stream: fs.WriteStream }).stream;
+            output.open('my-server', []);
+            first.emit('error', new Error('late'));
+            output.message('after the late error');
+            await output.close();
+            expect(fs.readFileSync(file, 'utf-8')).toContain('after the late error\n');
+            expect(error).toHaveBeenCalledWith(`[lsbench] Cannot write server log ${file}: late`);
+        } finally {
+            error.mockRestore();
+        }
+    });
 });
 
 /** a fake server that writes to stderr, logs and publishes for the file named by argv while initializing */
