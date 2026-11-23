@@ -1142,7 +1142,7 @@ export class LspHarness {
     private shutdownSent = false;
     private shutdownErrored = false;
     /** set once we signal the process, so the resulting exit is not abnormal */
-    private killRequested = false;
+    private readonly sentSignals = new Set<NodeJS.Signals>();
     /** set while stop() runs, an exit then is part of our own shutdown */
     private stopping = false;
     /** set once the server exited outside stop(), requests and notifications then fail with it */
@@ -1267,7 +1267,7 @@ export class LspHarness {
         this.shutdownReplied = false;
         this.shutdownSent = false;
         this.shutdownErrored = false;
-        this.killRequested = false;
+        this.sentSignals.clear();
         this.stopping = false;
         this.exitError = null;
         const child = this.process;
@@ -1664,11 +1664,12 @@ export class LspHarness {
         if (this._exit || child.pid === undefined) {
             return;
         }
-        this.killRequested = true;
+        this.sentSignals.add('SIGTERM');
         child.kill('SIGTERM');
         // force kill a server that ignores SIGTERM, `killed` only reports that a
         // signal was sent, so check the recorded exit instead
         if ((await raceTimeout([this.exited], 3000)) === 'timeout') {
+            this.sentSignals.add('SIGKILL');
             child.kill('SIGKILL');
             if ((await raceTimeout([this.exited], KILL_WAIT_MS)) === 'timeout' && !this._exit) {
                 this.log(`Server pid ${child.pid} did not exit within ${KILL_WAIT_MS}ms of SIGKILL, leaving it`);
@@ -1751,7 +1752,8 @@ export class LspHarness {
     /** Classify a process exit, signals we sent and a clean (or allowed) exit after shutdown are normal */
     private describeExit(code: number | null, signal: NodeJS.Signals | null): ServerExit {
         const status = signal ? `signal ${signal}` : `code ${code}`;
-        if (this.killRequested) {
+        const killed = signal === null ? this.sentSignals.size > 0 : this.sentSignals.has(signal);
+        if (killed) {
             return { code, signal, abnormal: false, reason: `killed by lsbench (${status})` };
         }
         if (this.shutdownErrored) {

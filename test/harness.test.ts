@@ -698,6 +698,12 @@ const conn = rpc.createMessageConnection(
     new rpc.StreamMessageWriter(process.stdout),
 );
 const mode = process.argv[1];
+if (mode === 'segv-late') {
+    process.on('SIGTERM', () => {});
+}
+if (mode === 'term-143') {
+    process.on('SIGTERM', () => process.exit(143));
+}
 conn.onRequest('initialize', () => ({ capabilities: {} }));
 conn.onRequest('shutdown', () => {
     if (mode === 'crash') {
@@ -729,6 +735,13 @@ conn.onNotification('exit', () => {
         process.kill(process.pid, 'SIGSEGV');
         return;
     }
+    if (mode === 'segv-late') {
+        setTimeout(() => process.kill(process.pid, 'SIGSEGV'), 1500);
+        return;
+    }
+    if (mode === 'term-143') {
+        return;
+    }
     process.exit(mode === 'fail' || mode === 'reject' ? 1 : 0);
 });
 conn.listen();
@@ -745,6 +758,8 @@ function shutdownHarness(
         | 'reject-ignore'
         | 'segv'
         | 'segv-early'
+        | 'segv-late'
+        | 'term-143'
         | 'clean',
     allowExitCodes?: number[],
     allowExitSignals?: NodeJS.Signals[],
@@ -916,6 +931,46 @@ describe('LspHarness.stop', () => {
         expect(exit?.tolerated).toBeUndefined();
     });
 
+    it('reports a signal after the exit wait as abnormal, not as a kill', async () => {
+        const harness = shutdownHarness('segv-late');
+        await harness.start();
+        const started = Date.now();
+        const exit = await harness.stop();
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
+        expect(exit).toMatchObject({
+            code: null,
+            signal: 'SIGSEGV',
+            abnormal: true,
+            reason: 'exited after shutdown with signal SIGSEGV',
+        });
+        expect(exit?.tolerated).toBeUndefined();
+    });
+
+    it('tolerates an allowed signal after the exit wait', async () => {
+        const harness = shutdownHarness('segv-late', undefined, ['SIGSEGV']);
+        await harness.start();
+        expect(await harness.stop()).toMatchObject({
+            code: null,
+            signal: 'SIGSEGV',
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after shutdown with signal SIGSEGV (allowed)',
+        });
+    });
+
+    it('reports a code exit in response to SIGTERM as a kill', async () => {
+        const harness = shutdownHarness('term-143');
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({
+            code: 143,
+            signal: null,
+            abnormal: false,
+            reason: 'killed by lsbench (code 143)',
+        });
+        expect(exit?.tolerated).toBeUndefined();
+    });
+
     it('keeps a signal without a shutdown reply abnormal even when it is allowed', async () => {
         const harness = shutdownHarness('segv-early', undefined, ['SIGSEGV']);
         await harness.start();
@@ -1084,7 +1139,12 @@ describe('LspHarness.stop', () => {
         );
         await harness.start();
         const pid = harness.capabilities?.pid as number;
-        await harness.stop();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({
+            signal: 'SIGKILL',
+            abnormal: false,
+            reason: 'killed by lsbench (signal SIGKILL)',
+        });
 
         // signal 0 only probes for existence, and throws once the process is gone
         let alive = true;

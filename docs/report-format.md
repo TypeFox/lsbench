@@ -160,3 +160,11 @@ A server that answers `shutdown` with an error reply is still sent `exit`, then 
 | none, the server ignores `exit` | `killed by lsbench (signal SIGTERM)` | neither |
 
 Code 1 is what the LSP spec asks of a server that gets `exit` without a successful `shutdown`.
+
+An exit reads `killed by lsbench (...)` and is not abnormal only when it comes from lsbench:
+
+| Exit after lsbench sent `SIGTERM` | Reason | Listed in |
+| --- | --- | --- |
+| the `SIGTERM` or `SIGKILL` lsbench sent | `killed by lsbench (signal SIGTERM)` | neither |
+| any code, for example from a `SIGTERM` handler | `killed by lsbench (code 143)` | neither |
+| another signal, such as a crash that outlasts the exit wait | by the rules above, e.g. `exited after shutdown with signal SIGSEGV` | `abnormal_exits`, or `tolerated_exits` if allowed |
