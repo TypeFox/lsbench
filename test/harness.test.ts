@@ -451,6 +451,49 @@ describe('LspHarness failed start', () => {
     });
 });
 
+describe('LspHarness start of a server exiting with stderr output', () => {
+    function shellHarness(script: string) {
+        return new LspHarness({ command: 'sh', args: ['-c', script] }, process.cwd(), false);
+    }
+
+    async function startError(harness: LspHarness): Promise<Error> {
+        try {
+            await harness.start();
+        } catch (err: unknown) {
+            return err as Error;
+        }
+        throw new Error('start did not fail');
+    }
+
+    it('keeps stderr written after the exit in the error', async () => {
+        const harness = shellHarness('echo first >&2; (sleep 0.15; echo LAST >&2) & sleep 0.05; exit 1');
+        const err = await startError(harness);
+        expect(err.message).toBe(
+            'Server exited before initialize (code=1 signal=null).\nServer stderr:\nfirst\nLAST\n',
+        );
+        expect(harness.exit).toMatchObject({ code: 1, abnormal: true });
+    });
+
+    it('keeps the last 4000 characters of a long trace written around the exit', async () => {
+        const harness = shellHarness(
+            'i=0; while [ $i -lt 300 ]; do echo "at frame $i of a long stack trace" >&2; i=$((i+1)); done; ' +
+                '(sleep 0.15; echo END-OF-TRACE >&2) & sleep 0.05; exit 1',
+        );
+        const err = await startError(harness);
+        const tail = err.message.split('\nServer stderr:\n')[1];
+        expect(tail).toHaveLength(4000);
+        expect(tail.endsWith('at frame 299 of a long stack trace\nEND-OF-TRACE\n')).toBe(true);
+    });
+
+    it('fails the start promptly when a grandchild keeps stderr open', async () => {
+        const harness = shellHarness('echo before >&2; (sleep 5) & sleep 0.05; exit 1');
+        const started = Date.now();
+        const err = await startError(harness);
+        expect(Date.now() - started).toBeLessThan(1000);
+        expect(err.message).toBe('Server exited before initialize (code=1 signal=null).\nServer stderr:\nbefore\n');
+    });
+});
+
 describe('LspHarness publishes read before a reopen', () => {
     for (const traced of [false, true]) {
         it(`credits a close publish received after the reopen to the close${traced ? ' when tracing' : ''}`, async () => {

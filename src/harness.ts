@@ -1,6 +1,7 @@
 import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as rpc from 'vscode-jsonrpc/node';
 import type {
@@ -1312,15 +1313,18 @@ export class LspHarness {
             if (this._exit?.reason !== KILL_TIMEOUT_REASON) {
                 this._exit = this.describeExit(code, signal);
             }
-            if (!this.stopping) {
-                this.failPendingRequests(child, `server ${this._exit.reason}`);
+            const rejectStart = () =>
+                onEarlyExit(
+                    new Error(
+                        `Server exited before initialize (code=${code} signal=${signal}).` +
+                            (stderrTail ? `\nServer stderr:\n${stderrTail}` : ''),
+                    ),
+                );
+            if (this.stopping) {
+                rejectStart();
+            } else {
+                this.failPendingRequests(child, `server ${this._exit.reason}`, rejectStart);
             }
-            onEarlyExit(
-                new Error(
-                    `Server exited before initialize (code=${code} signal=${signal}).` +
-                        (stderrTail ? `\nServer stderr:\n${stderrTail}` : ''),
-                ),
-            );
         });
 
         // Create JSON-RPC connection over stdio
@@ -1519,9 +1523,22 @@ export class LspHarness {
                 this.connection.sendNotification('workspace/didChangeConfiguration', { settings: this.settings });
             }
         } catch (err: unknown) {
+            const failure = await this.preferExitError(err, earlyExit);
             await this.abortStart(child);
-            throw err;
+            throw failure;
         }
+    }
+
+    private async preferExitError(err: unknown, earlyExit: Promise<never>): Promise<unknown> {
+        if (err instanceof rpc.ResponseError && err.code !== rpc.ErrorCodes.MessageWriteError) {
+            return err;
+        }
+        await raceTimeout([this.exited], 100);
+        if (!this._exit) {
+            return err;
+        }
+        const exitError = await raceTimeout([earlyExit.catch((e: unknown) => e)], 300);
+        return exitError === 'timeout' ? err : exitError;
     }
 
     /**
@@ -1625,21 +1642,32 @@ export class LspHarness {
      * requests awaiting a reply once the server's output is drained, since vscode-jsonrpc
      * rejects them only on dispose. A reply written just before the exit still arrives
      */
-    private failPendingRequests(child: cp.ChildProcess, message: string): void {
+    private failPendingRequests(child: cp.ChildProcess, message: string, beforeFail?: () => void): void {
         const error = new Error(message);
         this.exitError = error;
         const connection = this.connection;
-        const drained = new Promise<void>((resolve) => {
-            const stdout = child.stdout;
-            if (!stdout || stdout.readableEnded || stdout.destroyed) {
-                resolve();
-                return;
-            }
-            stdout.once('end', () => resolve());
-            stdout.once('close', () => resolve());
-        });
+        const cleanups: Array<() => void> = [];
+        const drain = (stream: Readable | null) =>
+            new Promise<void>((resolve) => {
+                if (!stream || stream.readableEnded || stream.destroyed) {
+                    resolve();
+                    return;
+                }
+                const done = () => resolve();
+                stream.once('end', done);
+                stream.once('close', done);
+                cleanups.push(() => {
+                    stream.off('end', done);
+                    stream.off('close', done);
+                });
+            });
+        const drained = Promise.all([drain(child.stdout), drain(child.stderr)]).then(() => undefined);
         // a grandchild may keep stdout open, so do not wait on it for long
         void raceTimeout([drained], 200).then(() => {
+            for (const cleanup of cleanups) {
+                cleanup();
+            }
+            beforeFail?.();
             // a restart may have replaced the connection meanwhile
             if (this.exitError !== error) {
                 return;

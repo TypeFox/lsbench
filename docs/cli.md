@@ -97,6 +97,10 @@ Server stderr, `window/logMessage`, `window/showMessage` and `$/logTrace` are fo
 
 When a server crashes, the tail of its stderr is included in the error message either way.
 
+- The tail holds the last 4000 characters.
+- For a server that exits before `initialize` completes, lsbench waits up to 200 ms after the exit for stderr to close, so a stack trace written just before the exit is complete.
+- A grandchild that keeps stderr open does not delay the error past that wait.
+
 With `--settings-file`, the expanded settings are logged as `Sending workspace/didChangeConfiguration: {...}` each time they're sent.
 
 ## Wire Trace
