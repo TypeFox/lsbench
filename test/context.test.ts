@@ -3326,6 +3326,47 @@ describe('BenchContextImpl', () => {
                 ]);
             });
 
+            it('auto: cancels a pull the server holds once it pushes', async () => {
+                servePulls(full('1'));
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, pullAfterMs: 10 });
+                expect(harness.tokens.at(-1)?.isCancellationRequested).toBe(false);
+                harness.respond = () => new Promise(() => {});
+                await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                const edited = ctx.waitForDiagnostics('sample.ts', { timeout: 5000 });
+                await new Promise((r) => setTimeout(r, 20));
+                const held = harness.tokens.at(-1);
+                expect(held?.isCancellationRequested).toBe(false);
+                harness.setDiagnostics(uri, [diag('pushed')], 2);
+                await edited;
+                expect(held?.isCancellationRequested).toBe(true);
+            });
+
+            it('pull: cancels a pull still pending at the deadline', async () => {
+                servePulls(() => new Promise(() => {}));
+                await ctx.openDocument('sample.ts');
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 50, mode: 'pull' });
+                expect(result).toMatchObject({ timedOut: true, source: 'pull', pulls: 1 });
+                expect(harness.tokens.at(-1)?.isCancellationRequested).toBe(true);
+            });
+
+            it('pull: ignores a late reply to a cancelled pull', async () => {
+                servePulls(
+                    () => new Promise((resolve) => setTimeout(() => resolve(full('late', diag('late'))), 100)),
+                    full('2'),
+                );
+                await ctx.openDocument('sample.ts');
+                const timedOut = await ctx.waitForDiagnostics('sample.ts', { timeout: 30, mode: 'pull' });
+                expect(timedOut.timedOut).toBe(true);
+                expect(messages(timedOut)).not.toContain('late');
+                await new Promise((r) => setTimeout(r, 120));
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'pull' });
+                expect(result).toMatchObject({ timedOut: false, source: 'pull' });
+                expect(messages(result)).toEqual([]);
+                expect(previousResultIds()).toEqual([undefined, undefined]);
+                expect(harness.tokens.at(-1)?.isCancellationRequested).toBe(false);
+            });
+
             it('auto: a pull returning diagnostics settles a tentative pull only server', async () => {
                 servePulls(full('1'), full('2', diag('a')));
                 await ctx.openDocument('sample.ts');

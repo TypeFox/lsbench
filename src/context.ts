@@ -1194,11 +1194,27 @@ export class BenchContextImpl implements BenchContext {
         while (remainingMs() > 0) {
             const previous = this.pulled.get(uri);
             pulls++;
-            const request = this.harness.sendRequest<DocumentDiagnosticReport | null>('textDocument/diagnostic', {
-                textDocument: { uri },
-                ...(previous?.resultId !== undefined ? { previousResultId: previous.resultId } : {}),
-            });
-            const response = await raceDeadline(Promise.race([request, pushedSignal]), remainingMs());
+            const source = new CancellationTokenSource();
+            let response: { value: DocumentDiagnosticReport | null } | { error: unknown } | undefined;
+            try {
+                const request = this.harness.sendRequest<DocumentDiagnosticReport | null>(
+                    'textDocument/diagnostic',
+                    {
+                        textDocument: { uri },
+                        ...(previous?.resultId !== undefined ? { previousResultId: previous.resultId } : {}),
+                    },
+                    source.token,
+                );
+                response = await raceDeadline(Promise.race([request, pushedSignal]), remainingMs());
+                if (pushed || !response) {
+                    source.cancel();
+                    this.log(
+                        `textDocument/diagnostic ${relativePath}: cancelled, ${pushed ? 'server pushed' : 'deadline passed'}`,
+                    );
+                }
+            } finally {
+                source.dispose();
+            }
             if (pushed) {
                 outcome = 'push';
                 break;

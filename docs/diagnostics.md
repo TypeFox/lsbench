@@ -186,6 +186,7 @@ Verbose mode logs each refresh.
 - Each pull sends the `resultId` of the document's previous report as `previousResultId`, and an `unchanged` report resolves to that previous report's diagnostics. Closing the document forgets its `resultId`.
 - A request rejected with `ContentModified` or `ServerCancelled` is pulled again. Any other error ends the wait with `result: "error"`.
 - `settleMs` doesn't apply, since a report is the server's complete answer.
+- A pull still pending when the `timeout` runs out, or when an `auto` wait learns the server pushes, is cancelled with `$/cancelRequest`. A late reply to it is ignored, so the next pull sends no `resultId` from it.
 
 ### Pull Timings
 
