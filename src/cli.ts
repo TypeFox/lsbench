@@ -11,6 +11,7 @@ import {
     formatCheckResult,
     validateCheckedRun,
 } from './check.js';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from './context.js';
 import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
 import type { BenchOptions, BenchReport } from './types.js';
 import { CLI_VERSION } from './version.js';
@@ -79,6 +80,11 @@ program
         false,
     )
     .option('--content-modified-retries <n>', 'Retry a request rejected with ContentModified up to n times', '3')
+    .option(
+        '--request-timeout <ms>',
+        'Cancel a request the server has not answered after ms, per attempt, recorded as a timeout',
+        String(DEFAULT_REQUEST_TIMEOUT_MS),
+    )
     .option('--no-skip-unsupported', 'Send requests even when the server does not advertise their provider')
     .option(
         '--wait-idle [ms]',
@@ -118,6 +124,7 @@ program
             trace: rawOpts.trace as string | undefined,
             shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
             contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
+            requestTimeout: parseInt(rawOpts.requestTimeout as string, 10),
             skipUnsupported: rawOpts.skipUnsupported as boolean,
             waitIdle: parseOptionalMs(rawOpts.waitIdle as string | boolean | undefined, DEFAULT_WAIT_IDLE_MS),
             shortenSilentWaits: parseOptionalMs(
@@ -188,6 +195,10 @@ program
         }
         if (Number.isNaN(opts.contentModifiedRetries) || (opts.contentModifiedRetries ?? 0) < 0) {
             console.error('Error: --content-modified-retries must be a non-negative integer');
+            process.exit(1);
+        }
+        if (Number.isNaN(opts.requestTimeout) || (opts.requestTimeout ?? 0) < 1) {
+            console.error('Error: --request-timeout must be a positive integer');
             process.exit(1);
         }
 
@@ -787,6 +798,8 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    server replied, recorded in tolerated_exits
           --content-modified-retries <n>
                                    Retry requests rejected with ContentModified     (default: 3)
+          --request-timeout <ms>   Cancel a request unanswered after ms ($/cancelRequest),
+                                   per attempt, recorded as a timeout               (default: 60000)
           --no-skip-unsupported    Send requests even when the server does not
                                    advertise their provider
           --wait-idle [ms]         After initialized (and each restart), wait up to ms
@@ -903,7 +916,8 @@ These timings carry the diagnostic count in \`diagnostics\`.
 Each request in runs has a \`result\`: ok, empty (empty list, or a list wrapper
 such as a CompletionList with no items), null, error (with \`error\` set),
 skipped (not sent, the server lacks the provider), or timeout (a diagnostics
-or idle wait ran out). \`success\` is kept and is false exactly for errors, skips and
+or idle wait ran out, or a request got no reply within --request-timeout and
+was cancelled, the script then gets null and goes on). \`success\` is kept and is false exactly for errors, skips and
 timeouts. count and skipped include skips; the rates cover only requests
 actually sent, and durations also leave out timeouts, which only count toward
 timeout_rate (a server that never publishes for clean files shows 1 there).

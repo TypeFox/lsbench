@@ -90,6 +90,7 @@ export interface BenchOptions {
      */
     waitIdle?: number;
     shortenSilentWaits?: number;
+    requestTimeout?: number;
 }
 
 // ── Timing & Results ────────────────────────────────────────────────────────

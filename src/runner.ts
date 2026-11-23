@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
-import { BenchContextImpl, SilenceTracker } from './context.js';
+import { BenchContextImpl, DEFAULT_REQUEST_TIMEOUT_MS, SilenceTracker } from './context.js';
 import { type DiagnosticsDelivery, LspHarness, WireTrace } from './harness.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
@@ -133,6 +133,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     if (opts.waitIdle !== undefined) {
         console.log(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
     }
+    if (opts.requestTimeout !== undefined && opts.requestTimeout !== DEFAULT_REQUEST_TIMEOUT_MS) {
+        console.log(`  Timeout:    requests unanswered after ${opts.requestTimeout}ms`);
+    }
     if (opts.shortenSilentWaits !== undefined) {
         console.log(`  Shorten:    diagnostics waits known to time out to ${opts.shortenSilentWaits}ms`);
     }
@@ -193,6 +196,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         const silence = new SilenceTracker();
         const ctxOptions = {
             contentModifiedRetries: opts.contentModifiedRetries,
+            requestTimeoutMs: opts.requestTimeout,
             skipUnsupported: opts.skipUnsupported,
             silence,
             ...(opts.shortenSilentWaits !== undefined ? { shortenSilentWaitsMs: opts.shortenSilentWaits } : {}),

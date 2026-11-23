@@ -61,7 +61,7 @@ Each request timing has a `result`:
 | `null` | a `null` result. A high `null_rate` usually means a position misses a symbol, so its fast timings mean little |
 | `error` | the request failed, with the message in `error` |
 | `skipped` | never sent, since the server doesn't advertise the provider (see [unsupported requests](client-behavior.md#unsupported-requests)) |
-| `timeout` | a [diagnostics](diagnostics.md) or [idle](readiness.md#waiting-for-idle) wait ran out |
+| `timeout` | a [diagnostics](diagnostics.md) or [idle](readiness.md#waiting-for-idle) wait ran out, or a request got no reply in time (see [request timeouts](#request-timeouts)) |
 
 `success` is kept for compatibility and is `false` exactly for `error`, `skipped` and `timeout`.
 
@@ -111,6 +111,15 @@ Time to diagnostics (`diagnostics/*`, `diagnostics/pull/*`) and idle waits (`ser
 
 Requests rejected with `ContentModified` (-32801), as servers do while loading or when an edit races a request, are retried up to `--content-modified-retries` times (default 3) with a short backoff. The timing records the count in `retries` and covers only the final attempt.
 
+## Request Timeouts
+
+A request the server doesn't answer within `--request-timeout` (default 60000 ms, `BenchContextOptions.requestTimeoutMs`) is abandoned:
+
+- lsbench sends `$/cancelRequest` for it and stops waiting.
+- The timing has `result: 'timeout'` and `error: 'no reply within Nms'`, and counts toward `timeout_rate`.
+- The script gets `null`, `ctx.lastError` holds the timeout, and the iteration goes on.
+- The limit applies per attempt, so `ContentModified` [retries](#retries) can take longer in total. A timeout ends the retries.
+
 ## Server Exits
 
 `abnormal_exits` lists servers that crashed or exited unexpectedly, only when any did. The report is still written, and lsbench exits non zero. Each exit's `during` says when:
@@ -128,6 +137,8 @@ A server whose start fails is stopped before the error is reported, so no proces
 - After an `initialize` error reply or a `setup` export that throws, the server gets `SIGTERM`, then `SIGKILL` after 3 seconds. No `shutdown` is sent. `LspHarness.start()` does this itself before rejecting, and `harness.exit` reads `killed by lsbench (...)` unless the server already exited on its own.
 - After a failing `--wait-idle`, the server is stopped as usual, with `shutdown` and `exit`.
 - Under `--restart`, a failed start after collected runs is listed as `failed to start: <error>`, with `code` and `signal` only when the server exited on its own.
+
+A server that is still running 3 seconds after `SIGKILL`, for example after `EPERM` or while stuck in uninterruptible I/O, is left behind so the run can finish. Its exit reads `did not exit after SIGKILL` and is listed in `abnormal_exits`. Verbose mode logs its pid.
 
 `tolerated_exits` has the same shape, only when any exit was tolerated, and doesn't make lsbench exit non zero:
 

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { CancellationTokenSource } from 'vscode-jsonrpc/node';
 import { supportsMethod } from './capabilities.js';
 import { PLAINTEXT_FALLBACK_NOTE } from './stats.js';
 import {
@@ -38,6 +39,7 @@ const SERVER_CANCELLED = -32802;
 
 /** auto mode: how long a diagnostics wait waits for a push from an unknown server before pulling */
 const DEFAULT_PULL_AFTER_MS = 1000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
 /** first wait between two pulls, doubling up to PULL_MAX_BACKOFF_MS */
 const PULL_BACKOFF_MS = 25;
 const PULL_MAX_BACKOFF_MS = 250;
@@ -281,6 +283,7 @@ export interface BenchContextOptions {
     /** Tracks push waits that saw no publish across the run, a private one when absent */
     silence?: SilenceTracker;
     shortenSilentWaitsMs?: number;
+    requestTimeoutMs?: number;
 }
 
 /**
@@ -299,6 +302,7 @@ export class BenchContextImpl implements BenchContext {
     private skipUnsupported: boolean;
     private silence: SilenceTracker;
     private shortenSilentWaitsMs: number | undefined;
+    private requestTimeoutMs: number;
     private _lastError: RequestError | undefined;
     /** the latest pulled diagnostics per URI, for previousResultId and unchanged reports */
     private pulled = new Map<string, PulledDiagnostics>();
@@ -312,6 +316,7 @@ export class BenchContextImpl implements BenchContext {
         this.skipUnsupported = options.skipUnsupported ?? true;
         this.silence = options.silence ?? new SilenceTracker();
         this.shortenSilentWaitsMs = options.shortenSilentWaitsMs;
+        this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     }
 
     get lastError(): RequestError | undefined {
@@ -1535,11 +1540,25 @@ export class BenchContextImpl implements BenchContext {
             const start = process.hrtime.bigint();
             let result: R;
             let failure: RequestError | undefined;
+            const source = new CancellationTokenSource();
             try {
-                result = await this.harness.sendRequest<R>(method, params);
+                const outcome = await raceDeadline(
+                    this.harness.sendRequest<R>(method, params, source.token),
+                    this.requestTimeoutMs,
+                );
+                if (outcome === undefined) {
+                    source.cancel();
+                    return this.recordRequestTimeout<R>(method, label, start, retries);
+                }
+                if ('error' in outcome) {
+                    throw outcome.error;
+                }
+                result = outcome.value;
             } catch (err: unknown) {
                 failure = toRequestError(method, err);
                 result = null as R;
+            } finally {
+                source.dispose();
             }
             const duration_ms = Number(process.hrtime.bigint() - start) / 1_000_000; // nanoseconds → milliseconds
 
@@ -1571,6 +1590,26 @@ export class BenchContextImpl implements BenchContext {
 
             return result;
         }
+    }
+
+    private recordRequestTimeout<R>(method: string, label: string | undefined, start: bigint, retries: number): R {
+        const duration_ms = Number(process.hrtime.bigint() - start) / 1_000_000;
+        const failure: RequestError = { method, message: `no reply within ${this.requestTimeoutMs}ms` };
+        const timing: RequestTiming = {
+            method,
+            label,
+            duration_ms: Math.round(duration_ms * 1000) / 1000,
+            success: false,
+            result: 'timeout',
+            error: failure.message,
+        };
+        if (retries > 0) {
+            timing.retries = retries;
+        }
+        this.timings.push(timing);
+        this._lastError = failure;
+        this.log(`${method}${label ? ` [${label}]` : ''}: ${duration_ms.toFixed(1)}ms timeout, cancelled`);
+        return null as R;
     }
 
     private plaintextNote(): string {

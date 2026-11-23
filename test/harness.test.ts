@@ -17,6 +17,7 @@ import {
     uriToPath,
     WireTrace,
 } from 'lsbench';
+import * as rpc from 'vscode-jsonrpc/node';
 import { describe, expect, it, vi } from 'vitest';
 
 describe('pathToUri', () => {
@@ -871,6 +872,34 @@ describe('LspHarness.stop', () => {
         }
         expect(alive).toBe(false);
     });
+
+    it('gives up on a server that survives SIGKILL and records the exit as abnormal', async () => {
+        const harness = new LspHarness(
+            { command: process.execPath, args: ['--input-type=module', '-e', stubbornServer] },
+            process.cwd(),
+        );
+        await harness.start();
+        const pid = harness.capabilities?.pid as number;
+        const child = (harness as unknown as { process: import('node:child_process').ChildProcess }).process;
+        const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
+        try {
+            const started = Date.now();
+            const exit = await harness.stop(100);
+            expect(Date.now() - started).toBeLessThan(9000);
+            expect(kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+            expect(exit).toEqual({ code: null, signal: null, abnormal: true, reason: 'did not exit after SIGKILL' });
+
+            const exited = new Promise((resolve) => child.once('exit', resolve));
+            process.kill(pid, 'SIGKILL');
+            await exited;
+            expect(harness.exit).toEqual(exit);
+        } finally {
+            kill.mockRestore();
+            try {
+                process.kill(pid, 'SIGKILL');
+            } catch {}
+        }
+    }, 15000);
 });
 
 /**
@@ -906,6 +935,62 @@ conn.onRequest('textDocument/hover', () => {
 conn.onRequest('shutdown', () => null);
 conn.listen();
 `;
+
+const cancelServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+const state = { started: [], cancelled: [] };
+conn.onRequest('initialize', () => ({ capabilities: {} }));
+conn.onRequest('test/hang', (params, token) => {
+    state.started.push(params.n);
+    token.onCancellationRequested(() => state.cancelled.push(params.n));
+    return new Promise(() => {});
+});
+conn.onRequest('test/state', () => state);
+conn.onRequest('shutdown', () => null);
+conn.listen();
+`;
+
+describe('LspHarness.sendRequest with a cancellation token', () => {
+    it('sends $/cancelRequest and rejects at once when the token is cancelled', async () => {
+        const harness = new LspHarness(
+            { command: process.execPath, args: ['--input-type=module', '-e', cancelServer] },
+            process.cwd(),
+        );
+        await harness.start();
+        try {
+            const poll = async (done: (state: { started: number[]; cancelled: number[] }) => boolean) => {
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    const state = await harness.sendRequest<{ started: number[]; cancelled: number[] }>(
+                        'test/state',
+                        {},
+                    );
+                    if (done(state)) {
+                        return state;
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 10));
+                }
+                throw new Error('server state never matched');
+            };
+
+            const source = new rpc.CancellationTokenSource();
+            const hang = harness.sendRequest('test/hang', { n: 1 }, source.token);
+            await poll((state) => state.started.includes(1));
+            source.cancel();
+            await expect(hang).rejects.toThrow('test/hang cancelled');
+            expect((await poll((state) => state.cancelled.includes(1))).cancelled).toEqual([1]);
+
+            const done = new rpc.CancellationTokenSource();
+            done.cancel();
+            await expect(harness.sendRequest('test/hang', { n: 2 }, done.token)).rejects.toThrow('test/hang cancelled');
+        } finally {
+            await harness.stop(500);
+        }
+    });
+});
 
 function crashOnHoverHarness(): LspHarness {
     return new LspHarness(

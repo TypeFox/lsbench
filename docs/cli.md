@@ -26,6 +26,7 @@ Options:
                               was sent but before the server replied
   --content-modified-retries <n>
                               Retry requests rejected with ContentModified (default: 3)
+  --request-timeout <ms>      Cancel a request unanswered after ms, recorded as a timeout (default: 60000)
   --no-skip-unsupported       Send requests even when the server does not advertise their provider
   --wait-idle [ms]            Wait up to ms for the server to become idle after initialized,
                               and after each restart (default: 30000)
@@ -56,6 +57,7 @@ Where to read more:
 | `--shorten-silent-waits` | [shortening known timeouts](diagnostics-timings.md#shortening-known-timeouts) |
 | `--allow-exit-code`, `--allow-exit-signal`, `--allow-unreplied-shutdown` | [server exits](report-format.md#server-exits) |
 | `--content-modified-retries` | [retries](report-format.md#retries) |
+| `--request-timeout` | [request timeouts](report-format.md#request-timeouts) |
 | `--no-skip-unsupported` | [unsupported requests](client-behavior.md#unsupported-requests) |
 | `baseline`, `check` | [regression checks](regression-checks.md) |
 

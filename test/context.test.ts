@@ -22,6 +22,7 @@ import {
     addRegisteredLanguage,
     BenchContextImpl,
     classifyResult,
+    computeMethodStats,
     DiagnosticsTracker,
     detectLanguageId,
     linkPlaceholders,
@@ -73,8 +74,11 @@ class FakeHarness {
     capabilities: ServerCapabilities | null = null;
     registrations: Registration[] = [];
 
-    async sendRequest<R>(method: string, params: unknown): Promise<R> {
+    tokens: Array<{ isCancellationRequested: boolean } | undefined> = [];
+
+    async sendRequest<R>(method: string, params: unknown, token?: { isCancellationRequested: boolean }): Promise<R> {
         this.requests.push({ method, params });
+        this.tokens.push(token);
         if (this.rejections.length > 0) {
             throw this.rejections.shift();
         }
@@ -1238,6 +1242,64 @@ describe('BenchContextImpl', () => {
             expect(harness.requests).toHaveLength(2);
             expect(ctx.lastError?.code).toBe(-32801);
             expect(ctx.collectTimings()[0]).toMatchObject({ result: 'error', retries: 1, error: 'modified' });
+        });
+
+        describe('request timeouts', () => {
+            beforeEach(() => {
+                ctx = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, {
+                    requestTimeoutMs: 50,
+                    retryBackoffMs: 0,
+                });
+            });
+
+            it('records a request the server never answers as a timeout and cancels it', async () => {
+                harness.respond = (method) => (method === 'custom/hang' ? new Promise(() => {}) : [1]);
+
+                expect(await ctx.request('custom/hang', {}, 'stuck')).toBeNull();
+                expect(harness.tokens[0]?.isCancellationRequested).toBe(true);
+                expect(ctx.lastError).toEqual({ method: 'custom/hang', message: 'no reply within 50ms' });
+
+                expect(await ctx.request('custom/answered', {})).toEqual([1]);
+                expect(ctx.lastError).toBeUndefined();
+
+                const timings = ctx.collectTimings();
+                expect(timings).toHaveLength(2);
+                expect(timings[0]).toMatchObject({
+                    method: 'custom/hang',
+                    label: 'stuck',
+                    success: false,
+                    result: 'timeout',
+                    error: 'no reply within 50ms',
+                });
+                expect(timings[0].duration_ms).toBeGreaterThanOrEqual(45);
+                expect(timings[1]).toMatchObject({ method: 'custom/answered', result: 'ok' });
+                expect(computeMethodStats([timings[0], { ...timings[1], method: 'custom/hang' }]).timeout_rate).toBe(
+                    0.5,
+                );
+            });
+
+            it('records a timeout when the request rejects only after the deadline', async () => {
+                harness.respond = () =>
+                    new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error('custom/hang cancelled')), 100);
+                    });
+
+                expect(await ctx.request('custom/hang', {})).toBeNull();
+                expect(ctx.collectTimings()[0]).toMatchObject({ result: 'timeout' });
+            });
+
+            it('times out a request that hangs after a ContentModified retry', async () => {
+                harness.rejections.push(responseError(-32801, 'modified'));
+                harness.respond = () => new Promise(() => {});
+
+                expect(await ctx.hover('sample.ts', 0, 0)).toBeNull();
+                expect(harness.requests).toHaveLength(2);
+                expect(harness.tokens[0]?.isCancellationRequested).toBe(false);
+                expect(harness.tokens[1]?.isCancellationRequested).toBe(true);
+                expect(ctx.collectTimings()).toEqual([
+                    expect.objectContaining({ method: 'textDocument/hover', result: 'timeout', retries: 1 }),
+                ]);
+            });
         });
 
         it('does not retry other errors and omits retries when there were none', async () => {

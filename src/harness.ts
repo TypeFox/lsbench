@@ -1102,6 +1102,8 @@ export function linkPlaceholders(diagnostics: DiagnosticsTracker, progress: Prog
 
 /** default time to wait for a shutdown reply before giving up on the server */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
+const KILL_WAIT_MS = 3000;
+const KILL_TIMEOUT_REASON = 'did not exit after SIGKILL';
 
 /** How the server process ended */
 export interface ServerExit {
@@ -1306,7 +1308,9 @@ export class LspHarness {
 
         this.process.on('exit', (code, signal) => {
             this.log(`Server exited: code=${code} signal=${signal}`);
-            this._exit = this.describeExit(code, signal);
+            if (this._exit?.reason !== KILL_TIMEOUT_REASON) {
+                this._exit = this.describeExit(code, signal);
+            }
             if (!this.stopping) {
                 this.failPendingRequests(child, `server ${this._exit.reason}`);
             }
@@ -1602,7 +1606,10 @@ export class LspHarness {
         // signal was sent, so check the recorded exit instead
         if ((await raceTimeout([this.exited], 3000)) === 'timeout') {
             child.kill('SIGKILL');
-            await this.exited;
+            if ((await raceTimeout([this.exited], KILL_WAIT_MS)) === 'timeout' && !this._exit) {
+                this.log(`Server pid ${child.pid} did not exit within ${KILL_WAIT_MS}ms of SIGKILL, leaving it`);
+                this._exit = { code: null, signal: null, abnormal: true, reason: KILL_TIMEOUT_REASON };
+            }
         }
     }
 
@@ -1826,7 +1833,7 @@ export class LspHarness {
     }
 
     /** Send a typed LSP request */
-    sendRequest<R>(method: string, params: unknown): Promise<R> {
+    sendRequest<R>(method: string, params: unknown, token?: rpc.CancellationToken): Promise<R> {
         if (this.exitError) {
             return Promise.reject(this.exitError);
         }
@@ -1843,10 +1850,18 @@ export class LspHarness {
             this.pendingRequests.add(fail);
             let request: Promise<unknown>;
             try {
-                request = this.conn.sendRequest(method, params);
+                request = token ? this.conn.sendRequest(method, params, token) : this.conn.sendRequest(method, params);
             } catch (err: unknown) {
                 fail(err);
                 return;
+            }
+            if (token) {
+                const cancelled = () => fail(new Error(`${method} cancelled`));
+                if (token.isCancellationRequested) {
+                    cancelled();
+                } else {
+                    token.onCancellationRequested(cancelled);
+                }
             }
             request.then((value) => {
                 if (!settled) {
