@@ -65,6 +65,7 @@ export {
     uriToPath,
     WireTrace,
 } from './harness.js';
+export type { ServerConfigOptions } from './runner.js';
 export { loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from './runner.js';
 export { buildReport, computeMethodStats, printSummary } from './stats.js';
 

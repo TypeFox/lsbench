@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- `resolveServerConfig(server, options?)` takes an options object instead of 8 positional parameters after the command. `ServerConfigOptions` picks `serverArgs`, `initializationOptions`, `clientCapabilities`, `settings`, `allowExitCodes`, `allowExitSignals`, `allowUnrepliedShutdown` and `advertisePullDiagnostics` from `BenchOptions`, so a `BenchOptions` object can be passed as is. The second argument used to be the extra args array, which now throws a `TypeError`. Write `resolveServerConfig(cmd, { serverArgs: args })` instead. `ServerConfigOptions` is exported.
+
 ### New features
 
 - An action script can export `setup(client)` to handle custom server to client notifications and requests. lsbench calls it on every server spawn before `initialize`, so its handlers apply from the first message on, also with `--restart`. `client.onNotification(method, handler)` and `client.onRequest(method, handler)` receive params as on the wire, and `client.notify(method, params)` answers a notification with one, right away or after an async call. vue-language-server, which waits for a `tsserver/response` to each `tsserver/request` before serving any request on a `file:` document, can now be benchmarked by answering `[id, null]`. Registering a method lsbench handles itself, such as `workspace/configuration` or `$/progress`, throws. Verbose mode logs each unhandled server notification or request method once. `ClientHooks`, `SetupScript`, `loadSetupScript` and `LspHarnessOptions.setup` are exported.

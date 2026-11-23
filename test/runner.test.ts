@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { BenchOptions, BenchReport } from 'lsbench';
+import type { BenchOptions, BenchReport, ServerConfigOptions } from 'lsbench';
 import { LspHarness, loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -28,54 +28,85 @@ describe('resolveServerConfig', () => {
         expect(cfg.args).toEqual(['--a', '--b']);
     });
 
-    it('appends extra args after the inline ones', () => {
-        const cfg = resolveServerConfig('cmd --stdio', ['--log-level', 'debug']);
+    it('appends serverArgs after the inline ones', () => {
+        const cfg = resolveServerConfig('cmd --stdio', { serverArgs: ['--log-level', 'debug'] });
         expect(cfg.args).toEqual(['--stdio', '--log-level', 'debug']);
     });
 
     it('passes initializationOptions through untouched', () => {
         const initOptions = { preferences: { includeCompletionsForModuleExports: true } };
-        const cfg = resolveServerConfig('cmd', undefined, initOptions);
+        const cfg = resolveServerConfig('cmd', { initializationOptions: initOptions });
         expect(cfg.initializationOptions).toBe(initOptions);
     });
 
     it('passes clientCapabilities through untouched', () => {
         const caps = { experimental: { custom: true } };
-        const cfg = resolveServerConfig('cmd', undefined, undefined, caps);
+        const cfg = resolveServerConfig('cmd', { clientCapabilities: caps });
         expect(cfg.clientCapabilities).toBe(caps);
     });
 
     it('passes settings through untouched', () => {
         const settings = { html: { format: { enable: true } } };
-        const cfg = resolveServerConfig('cmd', undefined, undefined, undefined, settings);
+        const cfg = resolveServerConfig('cmd', { settings });
         expect(cfg.settings).toBe(settings);
     });
 
     it('sets allowExitCodes only when some are given', () => {
-        expect(resolveServerConfig('cmd', undefined, undefined, undefined, undefined, [1]).allowExitCodes).toEqual([1]);
-        expect(resolveServerConfig('cmd', undefined, undefined, undefined, undefined, [])).not.toHaveProperty(
-            'allowExitCodes',
-        );
+        expect(resolveServerConfig('cmd', { allowExitCodes: [1] }).allowExitCodes).toEqual([1]);
+        expect(resolveServerConfig('cmd', { allowExitCodes: [] })).not.toHaveProperty('allowExitCodes');
+        expect(resolveServerConfig('cmd', {})).not.toHaveProperty('allowExitCodes');
     });
 
     it('sets allowExitSignals only when some are given', () => {
-        const args = ['cmd', undefined, undefined, undefined, undefined, undefined, undefined] as const;
-        expect(resolveServerConfig(...args, ['SIGSEGV']).allowExitSignals).toEqual(['SIGSEGV']);
-        expect(resolveServerConfig(...args, [])).not.toHaveProperty('allowExitSignals');
-        expect(resolveServerConfig(...args)).not.toHaveProperty('allowExitSignals');
+        expect(resolveServerConfig('cmd', { allowExitSignals: ['SIGSEGV'] }).allowExitSignals).toEqual(['SIGSEGV']);
+        expect(resolveServerConfig('cmd', { allowExitSignals: [] })).not.toHaveProperty('allowExitSignals');
+        expect(resolveServerConfig('cmd', {})).not.toHaveProperty('allowExitSignals');
     });
 
     it('sets allowUnrepliedShutdown only when requested', () => {
-        const args = ['cmd', undefined, undefined, undefined, undefined, undefined, undefined, undefined] as const;
-        expect(resolveServerConfig(...args, true).allowUnrepliedShutdown).toBe(true);
-        expect(resolveServerConfig(...args, false)).not.toHaveProperty('allowUnrepliedShutdown');
-        expect(resolveServerConfig(...args)).not.toHaveProperty('allowUnrepliedShutdown');
+        expect(resolveServerConfig('cmd', { allowUnrepliedShutdown: true }).allowUnrepliedShutdown).toBe(true);
+        expect(resolveServerConfig('cmd', { allowUnrepliedShutdown: false })).not.toHaveProperty(
+            'allowUnrepliedShutdown',
+        );
+        expect(resolveServerConfig('cmd', {})).not.toHaveProperty('allowUnrepliedShutdown');
     });
 
     it('sets advertisePullDiagnostics only when requested', () => {
-        const args = ['cmd', undefined, undefined, undefined, undefined, undefined] as const;
-        expect(resolveServerConfig(...args, true).advertisePullDiagnostics).toBe(true);
-        expect(resolveServerConfig(...args, false)).not.toHaveProperty('advertisePullDiagnostics');
+        expect(resolveServerConfig('cmd', { advertisePullDiagnostics: true }).advertisePullDiagnostics).toBe(true);
+        expect(resolveServerConfig('cmd', { advertisePullDiagnostics: false })).not.toHaveProperty(
+            'advertisePullDiagnostics',
+        );
+        expect(resolveServerConfig('cmd', {})).not.toHaveProperty('advertisePullDiagnostics');
+    });
+
+    it('takes only the server fields from a full BenchOptions object', () => {
+        const opts: BenchOptions = {
+            server: 'cmd --stdio',
+            workspace: '/tmp/ws',
+            script: 'script.ts',
+            iterations: 5,
+            warmup: 1,
+            output: 'report.json',
+            restart: false,
+            verbose: false,
+            serverArgs: ['--debug'],
+            allowExitCodes: [2],
+            allowUnrepliedShutdown: true,
+        };
+        expect(resolveServerConfig(opts.server, opts)).toEqual({
+            command: 'cmd',
+            args: ['--stdio', '--debug'],
+            initializationOptions: undefined,
+            clientCapabilities: undefined,
+            settings: undefined,
+            allowExitCodes: [2],
+            allowUnrepliedShutdown: true,
+        });
+    });
+
+    it('rejects positional args in place of the options object', () => {
+        const legacy = ['--stdio'] as unknown as ServerConfigOptions;
+        expect(() => resolveServerConfig('cmd', legacy)).toThrow(TypeError);
     });
 });
 

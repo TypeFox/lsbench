@@ -16,25 +16,42 @@ import type {
     SetupScript,
 } from './types.js';
 
+export type ServerConfigOptions = Pick<
+    BenchOptions,
+    | 'serverArgs'
+    | 'initializationOptions'
+    | 'clientCapabilities'
+    | 'settings'
+    | 'allowExitCodes'
+    | 'allowExitSignals'
+    | 'allowUnrepliedShutdown'
+    | 'advertisePullDiagnostics'
+>;
+
 /**
  * Resolve a server config from the CLI --server command string.
  * The argument is always a plain command like "typescript-language-server --stdio";
  * structured options (initializationOptions, clientCapabilities, settings) are supplied separately via CLI flags.
  */
-export function resolveServerConfig(
-    serverArg: string,
-    extraArgs?: string[],
-    initializationOptions?: unknown,
-    clientCapabilities?: Record<string, unknown>,
-    settings?: Record<string, unknown>,
-    allowExitCodes?: number[],
-    advertisePullDiagnostics?: boolean,
-    allowExitSignals?: NodeJS.Signals[],
-    allowUnrepliedShutdown?: boolean,
-): ServerConfig {
+export function resolveServerConfig(serverArg: string, options: ServerConfigOptions = {}): ServerConfig {
+    if (Array.isArray(options)) {
+        throw new TypeError(
+            'resolveServerConfig() takes an options object, such as { serverArgs }, as its second argument.',
+        );
+    }
+    const {
+        serverArgs,
+        initializationOptions,
+        clientCapabilities,
+        settings,
+        allowExitCodes,
+        allowExitSignals,
+        allowUnrepliedShutdown,
+        advertisePullDiagnostics,
+    } = options;
     const parts = serverArg.split(/\s+/).filter(Boolean);
     const command = parts[0];
-    const args = [...parts.slice(1), ...(extraArgs ?? [])];
+    const args = [...parts.slice(1), ...(serverArgs ?? [])];
 
     const config: ServerConfig = { command, args, initializationOptions, clientCapabilities, settings };
     if (allowExitCodes && allowExitCodes.length > 0) {
@@ -108,17 +125,7 @@ async function importActionScript(scriptPath: string): Promise<Record<string, un
  */
 export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     const workspaceRoot = path.resolve(opts.workspace);
-    const serverConfig = resolveServerConfig(
-        opts.server,
-        opts.serverArgs,
-        opts.initializationOptions,
-        opts.clientCapabilities,
-        opts.settings,
-        opts.allowExitCodes,
-        opts.advertisePullDiagnostics,
-        opts.allowExitSignals,
-        opts.allowUnrepliedShutdown,
-    );
+    const serverConfig = resolveServerConfig(opts.server, opts);
     const actionFn = await loadActionScript(opts.script);
     const setup = await loadSetupScript(opts.script);
 
