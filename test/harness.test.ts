@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { DiagnosticsPublish, PublishStatus, SetupScript } from 'lsbench';
 import {
     BenchContextImpl,
@@ -26,8 +27,12 @@ describe('pathToUri', () => {
     });
 
     it('resolves relative paths against the cwd', () => {
-        const expected = `file://${path.resolve('some/rel/path.ts')}`;
+        const expected = pathToFileURL(path.resolve('some/rel/path.ts')).href;
         expect(pathToUri('some/rel/path.ts')).toBe(expected);
+    });
+
+    it('percent-encodes #, ?, % and spaces', () => {
+        expect(pathToUri('/tmp/a#b 100%/x?.ts')).toBe('file:///tmp/a%23b%20100%25/x%3F.ts');
     });
 });
 
@@ -40,6 +45,16 @@ describe('uriToPath', () => {
         expect(uriToPath('/already/a/path.ts')).toBe('/already/a/path.ts');
         expect(uriToPath('untitled:Untitled-1')).toBe('untitled:Untitled-1');
     });
+
+    it('decodes percent-encoding', () => {
+        expect(uriToPath('file:///tmp/a%20b/x.ts')).toBe('/tmp/a b/x.ts');
+        expect(uriToPath('file:///tmp/a%23b%20100%25/x%3F.ts')).toBe('/tmp/a#b 100%/x?.ts');
+    });
+
+    it('returns malformed file URIs unchanged', () => {
+        expect(uriToPath('file:///tmp/a%2Fb.ts')).toBe('file:///tmp/a%2Fb.ts');
+        expect(uriToPath('file://host/tmp/a.ts')).toBe('file://host/tmp/a.ts');
+    });
 });
 
 describe('pathToUri / uriToPath round-trip', () => {
@@ -47,6 +62,13 @@ describe('pathToUri / uriToPath round-trip', () => {
         const abs = '/Users/example/workspace/src/index.ts';
         expect(uriToPath(pathToUri(abs))).toBe(abs);
     });
+
+    it.each(['/tmp/a#b/x.ts', '/tmp/a?b/x.ts', '/tmp/100%/x.ts', '/tmp/a b/x.ts', 'rel/a#b 100%/x.ts'])(
+        'recovers %s',
+        (p) => {
+            expect(uriToPath(pathToUri(p))).toBe(path.resolve(p));
+        },
+    );
 });
 
 /**
@@ -1698,6 +1720,22 @@ describe('DiagnosticsTracker', () => {
             expect(tracker.latestPublish(opened)).toBe(publish);
             // the publish keeps the URI the server sent
             expect(publish.uri).toBe('file:///Users/Me/My%20Project/a.ts');
+        });
+
+        it.each([
+            ['raw', 'file:///tmp/a#b 100%/x.ts'],
+            ['encoded the same', 'file:///tmp/a%23b%20100%25/x.ts'],
+            ['encoded differently', 'file:///tmp/a%23b%20100%25/%78.%74s'],
+        ])('matches a publish %s to a document opened with pathToUri', async (_how, published) => {
+            const tracker = new DiagnosticsTracker(undefined, undefined, undefined, 'linux');
+            const uri = pathToUri('/tmp/a#b 100%/x.ts');
+            tracker.noteNotification('textDocument/didOpen', {
+                textDocument: { uri, languageId: 'typescript', version: 1, text: '' },
+            });
+            const wait = tracker.waitFor(uri, () => true, 5000);
+            const publish = tracker.receive({ uri: published, diagnostics: message });
+            expect(publish.generation).toBe(1);
+            expect(await wait).toBe(publish);
         });
 
         it.each(['darwin', 'win32'] as const)('matches a publish differing only in case on %s', async (platform) => {

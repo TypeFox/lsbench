@@ -2,6 +2,14 @@
 
 lsbench acts as the LSP client. This page covers how it adapts to what a server advertises, and how it answers the server.
 
+## File URIs
+
+`rootUri`, `workspaceFolders` and every `textDocument.uri` are percent encoded file URIs, as Node's `pathToFileURL()` builds them.
+
+- A workspace path with `#`, `?`, `%` or a space, such as `/tmp/a#b 100%`, is sent as `file:///tmp/a%23b%20100%25`.
+- Publishes are matched after decoding, so a server may encode the same characters or not, see [publishes](cli.md#publishes).
+- The exported `pathToUri()` and `uriToPath()` encode and decode the same way. `uriToPath()` returns a URI it can't decode, such as one with `%2F`, unchanged.
+
 ## Unsupported Requests
 
 A timed request whose provider the server advertises neither statically nor through `client/registerCapability` isn't sent. It returns `null` without a round trip and records a timing with `result: "skipped"` and `duration_ms: 0`, so it shows in the report as skipped instead of as a fast failure.

@@ -1,6 +1,7 @@
 import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as rpc from 'vscode-jsonrpc/node';
 import type {
     ClientHooks,
@@ -2266,14 +2267,17 @@ function hasIncludeText(options: unknown): boolean {
 
 /** Convert an absolute file path to a file:// URI */
 export function pathToUri(filePath: string): string {
-    const resolved = path.resolve(filePath);
-    return `file://${resolved}`;
+    return pathToFileURL(path.resolve(filePath)).href;
 }
 
 /** Convert a file:// URI back to an absolute path */
 export function uriToPath(uri: string): string {
-    if (uri.startsWith('file://')) {
-        return uri.slice(7);
+    if (uri.startsWith('file:')) {
+        try {
+            return fileURLToPath(uri);
+        } catch {
+            return uri;
+        }
     }
     return uri;
 }
@@ -2292,9 +2296,10 @@ export function formatPublishLine(
     workspaceRoot: string,
 ): string {
     let where = publish.uri;
-    if (publish.uri.startsWith('file://')) {
-        const rel = path.relative(path.resolve(workspaceRoot), uriToPath(publish.uri));
-        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    const filePath = uriToPath(publish.uri);
+    if (publish.uri.startsWith('file://') && filePath !== publish.uri) {
+        const rel = path.relative(path.resolve(workspaceRoot), filePath);
+        if (rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
             where = rel;
         }
     }

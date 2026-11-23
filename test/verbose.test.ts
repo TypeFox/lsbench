@@ -23,9 +23,24 @@ describe('formatPublishLine', () => {
         expect(line).toBe('Publish a.ts v=- n=0 stale');
     });
 
+    it('decodes the relative path and keeps files whose name starts with ..', () => {
+        expect(formatPublishLine({ uri: 'file:///w/..foo', diagnostics: [] }, 'current', root)).toBe(
+            'Publish ..foo v=- n=0 current',
+        );
+        expect(formatPublishLine({ uri: 'file:///w/sub%20dir/a%23b.ts', diagnostics: [] }, 'current', root)).toBe(
+            'Publish sub dir/a#b.ts v=- n=0 current',
+        );
+    });
+
     it('falls back to the URI outside the workspace and for other schemes', () => {
         expect(formatPublishLine({ uri: 'file:///other/a.ts', diagnostics: [] }, 'unopened', root)).toBe(
             'Publish file:///other/a.ts v=- n=0 unopened',
+        );
+        expect(formatPublishLine({ uri: 'file:///a.ts', diagnostics: [] }, 'unopened', root)).toBe(
+            'Publish file:///a.ts v=- n=0 unopened',
+        );
+        expect(formatPublishLine({ uri: 'file:///w/a%2Fb.ts', diagnostics: [] }, 'unopened', root)).toBe(
+            'Publish file:///w/a%2Fb.ts v=- n=0 unopened',
         );
         expect(formatPublishLine({ uri: 'untitled:Untitled-1', diagnostics: [] }, 'unopened', root)).toBe(
             'Publish untitled:Untitled-1 v=- n=0 unopened',

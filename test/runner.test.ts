@@ -1363,3 +1363,74 @@ describe('runBenchmark kills a server whose start failed', () => {
         expect(isAlive(started[1])).toBe(false);
     });
 });
+
+const uriServer = `
+import * as fs from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+let root = '';
+conn.onRequest('initialize', (params) => {
+    root = fileURLToPath(new URL(params.rootUri).href);
+    return { capabilities: { textDocumentSync: 1 } };
+});
+conn.onNotification('textDocument/didOpen', ({ textDocument }) => {
+    const file = fileURLToPath(new URL(textDocument.uri).href);
+    if (fs.existsSync(file) && fs.statSync(root).isDirectory()) {
+        const diagnostic = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'x' };
+        conn.sendNotification('textDocument/publishDiagnostics', { uri: pathToFileURL(file).href, diagnostics: [diagnostic] });
+    }
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('runBenchmark in a workspace whose path needs percent-encoding', () => {
+    let tmpDir: string;
+    let workspace: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-uri-'));
+        workspace = path.join(tmpDir, 'a#b 100%');
+        fs.mkdirSync(workspace);
+        fs.writeFileSync(path.join(workspace, 'main.ts'), 'const a = 1;\n', 'utf-8');
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.openDocument('main.ts');
+                await ctx.waitForDiagnostics('main.ts', 1000);
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('sends URIs the server resolves to the files and matches its publishes', async () => {
+        const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            const report = await runBenchmark({
+                server: process.execPath,
+                serverArgs: ['--input-type=module', '-e', uriServer],
+                workspace,
+                script,
+                iterations: 1,
+                warmup: 0,
+                output: '',
+            });
+            expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 0 });
+        } finally {
+            log.mockRestore();
+            write.mockRestore();
+        }
+    });
+});
