@@ -402,6 +402,31 @@ describe('BenchContextImpl', () => {
             expect(harness.notifications.filter((n) => n.method === 'textDocument/didOpen')).toHaveLength(1);
         });
 
+        it('sends one didOpen for every spelling of the same path', async () => {
+            fs.mkdirSync(path.join(tmpDir, 'sub'), { recursive: true });
+            await ctx.openDocument('sample.ts');
+            await ctx.openDocument('./sample.ts');
+            await ctx.openDocument('sub/../sample.ts');
+            await ctx.openDocument(path.join(tmpDir, 'sample.ts'));
+            expect(harness.notifications.filter((n) => n.method === 'textDocument/didOpen')).toHaveLength(1);
+        });
+
+        it('closes a document opened under a different spelling of its path', async () => {
+            await ctx.openDocument('sample.ts');
+            await ctx.closeDocument('./sample.ts');
+
+            expect(harness.notifications.filter((n) => n.method === 'textDocument/didClose')).toHaveLength(1);
+            await expect(ctx.saveDocument('sample.ts')).rejects.toThrow(/is not open/);
+        });
+
+        it('resetDocuments sends one didClose for a document opened under two spellings', async () => {
+            await ctx.openDocument('sample.ts');
+            await ctx.openDocument('./sample.ts');
+            await ctx.resetDocuments();
+
+            expect(harness.notifications.filter((n) => n.method === 'textDocument/didClose')).toHaveLength(1);
+        });
+
         it('sends didClose only for open documents', async () => {
             await ctx.closeDocument('sample.ts'); // not open → no-op
             expect(harness.notifications).toHaveLength(0);
@@ -1379,6 +1404,25 @@ describe('BenchContextImpl', () => {
                 {
                     textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 3 },
                     contentChanges: [{ text: 'bcd\nx = 1\n' }],
+                },
+            ]);
+        });
+
+        it('edits one document whatever spelling of its path is used', async () => {
+            harness.changeKind = 1;
+            fs.writeFileSync(path.join(tmpDir, 'edit.txt'), 'abc\n', 'utf-8');
+            await ctx.openDocument('edit.txt');
+            await ctx.edit('./edit.txt', op(0, 0, 0, 1, ''));
+            await ctx.edit('edit.txt', op(1, 0, 1, 0, 'x\n'));
+            const changes = harness.notifications.filter((n) => n.method === 'textDocument/didChange');
+            expect(changes.map((n) => n.params)).toEqual([
+                {
+                    textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 2 },
+                    contentChanges: [{ text: 'bc\n' }],
+                },
+                {
+                    textDocument: { uri: expect.stringMatching(/edit\.txt$/), version: 3 },
+                    contentChanges: [{ text: 'bc\nx\n' }],
                 },
             ]);
         });

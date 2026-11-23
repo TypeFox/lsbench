@@ -358,7 +358,7 @@ export class BenchContextImpl implements BenchContext {
         const absPath = path.resolve(this.workspaceRoot, relativePath);
         const uri = pathToUri(absPath);
 
-        if (this.openDocuments.has(relativePath)) {
+        if (this.openDocuments.has(uri)) {
             return; // Already open
         }
 
@@ -376,7 +376,7 @@ export class BenchContextImpl implements BenchContext {
         }
 
         const doc = { uri, version: 1, text };
-        this.openDocuments.set(relativePath, doc);
+        this.openDocuments.set(uri, doc);
 
         this.harness.sendNotification('textDocument/didOpen', {
             textDocument: {
@@ -391,7 +391,8 @@ export class BenchContextImpl implements BenchContext {
     }
 
     async closeDocument(relativePath: string): Promise<void> {
-        const doc = this.openDocuments.get(relativePath);
+        const uri = this.getUri(relativePath);
+        const doc = this.openDocuments.get(uri);
         if (!doc) {
             return;
         }
@@ -400,8 +401,8 @@ export class BenchContextImpl implements BenchContext {
             textDocument: { uri: doc.uri },
         });
 
-        this.openDocuments.delete(relativePath);
-        this.pulled.delete(doc.uri);
+        this.openDocuments.delete(uri);
+        this.pulled.delete(uri);
         this.log(`Closed ${relativePath}`);
     }
 
@@ -1504,7 +1505,7 @@ export class BenchContextImpl implements BenchContext {
     // ── Internal helpers ────────────────────────────────────────────────
 
     private getOpenDocument(relativePath: string): { uri: string; version: number; text: string } {
-        const doc = this.openDocuments.get(relativePath);
+        const doc = this.openDocuments.get(this.getUri(relativePath));
         if (!doc) {
             throw new Error(`Document ${relativePath} is not open. Call openDocument() first.`);
         }
@@ -1512,11 +1513,6 @@ export class BenchContextImpl implements BenchContext {
     }
 
     private getUri(relativePath: string): string {
-        const doc = this.openDocuments.get(relativePath);
-        if (doc) {
-            return doc.uri;
-        }
-        // If not opened yet, compute the URI anyway
         return pathToUri(path.resolve(this.workspaceRoot, relativePath));
     }
 

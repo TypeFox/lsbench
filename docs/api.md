@@ -6,6 +6,8 @@ Paths are relative to the workspace root, and positions are zero based. Methods 
 
 All but `openDocument` and `closeDocument` require an open document.
 
+A document is identified by its URI, so `a.txt`, `./a.txt`, `sub/../a.txt` and the absolute path name the same document. Opening an open document under another spelling is a no op.
+
 | Method | Description |
 | --- | --- |
 | `openDocument(path, options?)` | Send `textDocument/didOpen`. `options.languageId` overrides the detected language ID for this document only |
