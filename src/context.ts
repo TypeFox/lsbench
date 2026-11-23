@@ -10,6 +10,7 @@ import {
     type LspHarness,
     type PublishWaitResult,
     pathToUri,
+    uriToPath,
 } from './harness.js';
 import type {
     BenchContext,
@@ -1522,9 +1523,76 @@ export class BenchContextImpl implements BenchContext {
 
     notify(method: string, params: unknown): void {
         this.harness.sendNotification(method, params);
+        this.mirrorSyncNotification(method, params);
     }
 
     // ── Internal helpers ────────────────────────────────────────────────
+
+    private mirrorSyncNotification(method: string, params: unknown): void {
+        if (
+            method !== 'textDocument/didOpen' &&
+            method !== 'textDocument/didChange' &&
+            method !== 'textDocument/didClose'
+        ) {
+            return;
+        }
+        const textDocument = isRecord(params) ? params.textDocument : undefined;
+        if (!isRecord(textDocument) || typeof textDocument.uri !== 'string') {
+            return;
+        }
+        const uri = textDocument.uri;
+        const key = this.findOpenDocumentKey(uri);
+
+        if (method === 'textDocument/didOpen') {
+            const version = typeof textDocument.version === 'number' ? textDocument.version : 1;
+            const text = typeof textDocument.text === 'string' ? textDocument.text : '';
+            const target = key ?? canonicalUri(uri);
+            this.openDocuments.set(target, { uri, version, text });
+            this.pulled.delete(target);
+            return;
+        }
+        if (key === undefined) {
+            return;
+        }
+        if (method === 'textDocument/didClose') {
+            this.openDocuments.delete(key);
+            this.pulled.delete(key);
+            return;
+        }
+
+        const doc = this.openDocuments.get(key);
+        if (!doc) {
+            return;
+        }
+        doc.version = typeof textDocument.version === 'number' ? textDocument.version : doc.version + 1;
+        const changes = isRecord(params) && Array.isArray(params.contentChanges) ? params.contentChanges : [];
+        for (const change of changes) {
+            if (!isRecord(change) || typeof change.text !== 'string') {
+                continue;
+            }
+            if (change.range === undefined) {
+                doc.text = change.text;
+            } else if (isLspRange(change.range)) {
+                doc.text = applyEdit(doc.text, { range: change.range, text: change.text });
+            }
+        }
+    }
+
+    private findOpenDocumentKey(uri: string): string | undefined {
+        const canonical = canonicalUri(uri);
+        if (this.openDocuments.has(canonical)) {
+            return canonical;
+        }
+        if (process.platform === 'darwin' || process.platform === 'win32') {
+            const lower = canonical.toLowerCase();
+            for (const key of this.openDocuments.keys()) {
+                if (key.toLowerCase() === lower) {
+                    return key;
+                }
+            }
+        }
+        return undefined;
+    }
 
     private getOpenDocument(relativePath: string): { uri: string; version: number; text: string } {
         const doc = this.openDocuments.get(this.getUri(relativePath));
@@ -1742,6 +1810,15 @@ function normalizeRange(range: Range): Range {
     const { start, end } = range;
     const reversed = start.line > end.line || (start.line === end.line && start.character > end.character);
     return reversed ? { start: end, end: start } : range;
+}
+
+function canonicalUri(uri: string): string {
+    const filePath = uriToPath(uri);
+    return filePath === uri ? uri : pathToUri(filePath);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
 }
 
 /** Replace the text covered by `edit.range` with `edit.text` */

@@ -17,6 +17,18 @@ A document is identified by its URI, so `a.txt`, `./a.txt`, `sub/../a.txt` and t
 | `willSave(path, reason?)` | Send `textDocument/willSave` only if the server asks for it. `reason` defaults to 1 (Manual) |
 | `willSaveWaitUntil(path, reason?)` | `textDocument/willSaveWaitUntil` (timed, skipped unless the server asks for it). `reason` defaults to 1 (Manual) |
 
+### Document Sync Through Notify
+
+`notify()` keeps the open documents in step with the sync notifications it sends:
+
+| Method | Effect |
+| --- | --- |
+| `textDocument/didOpen` | Tracks the document with the sent `version` (default 1) and `text`, so `openDocument` is a no op |
+| `textDocument/didChange` | Takes the sent `version`, or increments it, and applies each content change in order. A change without `range` replaces the text. Ignored for a document that is not open |
+| `textDocument/didClose` | Forgets the document and its pulled result id, so `openDocument` opens it again and `resetDocuments` does not close it twice |
+
+The URI matches an open document despite another percent encoding, and on macOS and Windows another case. Malformed params are sent as they are without changing the open documents.
+
 ## Navigation and Editing
 
 All timed.
@@ -129,4 +141,4 @@ lsbench advertises `resolveSupport` for completion items, code actions, inlay hi
 | `waitForIdle(options?)` | Wait until the server finished background work such as loading the workspace, see [waiting for idle](readiness.md#waiting-for-idle) |
 | `sleep(ms)` | Pause execution |
 | `request(method, params, label?)` | Arbitrary LSP request (timed) |
-| `notify(method, params)` | Arbitrary LSP notification |
+| `notify(method, params)` | Arbitrary LSP notification, see [document sync through notify](#document-sync-through-notify) |

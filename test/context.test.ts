@@ -26,6 +26,7 @@ import {
     DiagnosticsTracker,
     detectLanguageId,
     linkPlaceholders,
+    pathToUri,
     ProgressTracker,
     SILENT_WAIT_STREAK,
     SilenceTracker,
@@ -264,6 +265,8 @@ describe('BenchContextImpl', () => {
         harness = new FakeHarness();
         ctx = new BenchContextImpl(harness as unknown as LspHarness, tmpDir);
     });
+
+    const docUri = (relativePath: string) => pathToUri(path.join(tmpDir, relativePath));
 
     describe('document lifecycle', () => {
         it('sends didOpen with detected languageId and reads file text', async () => {
@@ -1410,6 +1413,150 @@ describe('BenchContextImpl', () => {
             await ctx.hover('sample.ts', 0, 0);
             expect(ctx.collectTimings()).toHaveLength(1);
             expect(ctx.collectTimings()).toHaveLength(0);
+        });
+    });
+
+    describe('notify document sync', () => {
+        const methods = () => harness.notifications.map((n) => n.method);
+        const lastChange = () =>
+            harness.notifications[harness.notifications.length - 1].params as {
+                textDocument: { version: number };
+                contentChanges: unknown[];
+            };
+
+        beforeEach(() => {
+            fs.writeFileSync(path.join(tmpDir, 'sync.txt'), 'hello', 'utf-8');
+        });
+
+        it('reopens a document closed through notify', async () => {
+            await ctx.openDocument('sync.txt');
+            ctx.notify('textDocument/didClose', { textDocument: { uri: docUri('sync.txt') } });
+            await ctx.openDocument('sync.txt');
+            await ctx.resetDocuments();
+
+            expect(methods()).toEqual([
+                'textDocument/didOpen',
+                'textDocument/didClose',
+                'textDocument/didOpen',
+                'textDocument/didClose',
+            ]);
+            const reopen = harness.notifications[2].params as { textDocument: { version: number } };
+            expect(reopen.textDocument.version).toBe(1);
+        });
+
+        it('sends no didClose on reset for a document closed through notify', async () => {
+            fs.writeFileSync(path.join(tmpDir, 'other.txt'), 'x', 'utf-8');
+            await ctx.openDocument('sync.txt');
+            await ctx.openDocument('other.txt');
+            ctx.notify('textDocument/didClose', { textDocument: { uri: docUri('sync.txt') } });
+            await ctx.resetDocuments();
+
+            const closes = harness.notifications.filter((n) => n.method === 'textDocument/didClose');
+            expect(closes.map((n) => (n.params as { textDocument: { uri: string } }).textDocument.uri)).toEqual([
+                docUri('sync.txt'),
+                docUri('other.txt'),
+            ]);
+        });
+
+        it('continues from the version and text of a didChange sent through notify', async () => {
+            harness.changeKind = 1;
+            await ctx.openDocument('sync.txt');
+            ctx.notify('textDocument/didChange', {
+                textDocument: { uri: docUri('sync.txt'), version: 5 },
+                contentChanges: [{ text: 'x' }],
+            });
+            await ctx.edit('sync.txt', op(0, 1, 0, 1, 'y'));
+
+            expect(lastChange()).toEqual({
+                textDocument: { uri: docUri('sync.txt'), version: 6 },
+                contentChanges: [{ text: 'xy' }],
+            });
+        });
+
+        it('mirrors ranged changes sent through notify, in order', async () => {
+            harness.changeKind = 1;
+            await ctx.openDocument('sync.txt');
+            ctx.notify('textDocument/didChange', {
+                textDocument: { uri: docUri('sync.txt'), version: 2 },
+                contentChanges: [
+                    { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, text: 'j' },
+                    { range: { start: { line: 0, character: 5 }, end: { line: 0, character: 5 } }, text: '!' },
+                ],
+            });
+            await ctx.edit('sync.txt', op(0, 0, 0, 0, '>'));
+
+            expect(lastChange()).toEqual({
+                textDocument: { uri: docUri('sync.txt'), version: 3 },
+                contentChanges: [{ text: '>jello!' }],
+            });
+        });
+
+        it('increments the version for a didChange without one', async () => {
+            await ctx.openDocument('sync.txt');
+            ctx.notify('textDocument/didChange', {
+                textDocument: { uri: docUri('sync.txt') },
+                contentChanges: [{ text: 'x' }],
+            });
+            await ctx.edit('sync.txt', op(0, 0, 0, 0, 'y'));
+
+            expect(lastChange().textDocument.version).toBe(3);
+        });
+
+        it('skips malformed changes sent through notify', async () => {
+            harness.changeKind = 1;
+            await ctx.openDocument('sync.txt');
+            ctx.notify('textDocument/didChange', {
+                textDocument: { uri: docUri('sync.txt'), version: 2 },
+                contentChanges: [{ range: { start: {} }, text: 'bad' }, { text: 7 }, null],
+            });
+            await ctx.edit('sync.txt', op(0, 0, 0, 0, '>'));
+
+            expect(lastChange().contentChanges).toEqual([{ text: '>hello' }]);
+        });
+
+        it('tracks a document opened through notify', async () => {
+            harness.changeKind = 1;
+            ctx.notify('textDocument/didOpen', {
+                textDocument: { uri: docUri('sync.txt'), languageId: 'plaintext', version: 3, text: 'abc' },
+            });
+            await ctx.openDocument('sync.txt');
+            await ctx.edit('sync.txt', op(0, 3, 0, 3, 'd'));
+            await ctx.resetDocuments();
+
+            expect(methods()).toEqual(['textDocument/didOpen', 'textDocument/didChange', 'textDocument/didClose']);
+            expect(harness.notifications[1].params).toEqual({
+                textDocument: { uri: docUri('sync.txt'), version: 4 },
+                contentChanges: [{ text: 'abcd' }],
+            });
+        });
+
+        it('matches a URI sent through notify with another percent encoding', async () => {
+            fs.writeFileSync(path.join(tmpDir, 'a b.txt'), 'x', 'utf-8');
+            await ctx.openDocument('a b.txt');
+            const uri = docUri('a b.txt');
+            expect(uri).toContain('%20');
+            ctx.notify('textDocument/didClose', { textDocument: { uri: uri.replace('%20', ' ') } });
+            await ctx.openDocument('a b.txt');
+
+            expect(methods()).toEqual(['textDocument/didOpen', 'textDocument/didClose', 'textDocument/didOpen']);
+        });
+
+        it('forwards other notifications without touching open documents', async () => {
+            await ctx.openDocument('sync.txt');
+            ctx.notify('textDocument/didSave', { textDocument: { uri: docUri('sync.txt') } });
+            ctx.notify('textDocument/didClose', { textDocument: { uri: 42 } });
+            ctx.notify('textDocument/didClose', null);
+            await ctx.openDocument('sync.txt');
+            await ctx.edit('sync.txt', op(0, 0, 0, 0, 'y'));
+
+            expect(methods()).toEqual([
+                'textDocument/didOpen',
+                'textDocument/didSave',
+                'textDocument/didClose',
+                'textDocument/didClose',
+                'textDocument/didChange',
+            ]);
+            expect(lastChange().textDocument.version).toBe(2);
         });
     });
 
@@ -4018,6 +4165,16 @@ describe('BenchContextImpl', () => {
                 await ctx.openDocument('sample.ts');
                 await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
                 await ctx.closeDocument('sample.ts');
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
+                expect(previousResultIds()).toEqual([undefined, undefined]);
+            });
+
+            it('forgets the resultId when the document closes through notify', async () => {
+                servePulls(full('1', diag('a')));
+                await ctx.openDocument('sample.ts');
+                await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
+                ctx.notify('textDocument/didClose', { textDocument: { uri: docUri('sample.ts') } });
                 await ctx.openDocument('sample.ts');
                 await ctx.waitForDiagnostics('sample.ts', { mode: 'pull' });
                 expect(previousResultIds()).toEqual([undefined, undefined]);
