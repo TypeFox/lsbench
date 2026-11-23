@@ -13,6 +13,7 @@ import type {
     PublishWaitOptions,
     PublishWaitResult,
     Registration,
+    RequestTiming,
     ChangeSyncKind,
     SaveSyncOptions,
     ServerCapabilities,
@@ -3613,6 +3614,36 @@ describe('BenchContextImpl', () => {
                     expect(harness.tracker.deliveryTentative).toBe(true);
                 });
 
+                it('counts timeouts with the placeholder as silent waits of the push method', async () => {
+                    servePulls(full('1'));
+                    harness.tracker.seedDelivery('pull', true);
+                    busy();
+                    const silence = new SilenceTracker();
+                    const lines: string[] = [];
+                    const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                        lines.push(String(line));
+                    });
+                    try {
+                        const verbose = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true, {
+                            silence,
+                        });
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            await verbose.openDocument('sample.ts');
+                            const result = await verbose.waitForDiagnostics('sample.ts', { timeout: 40 });
+                            expect(result).toMatchObject({ timedOut: true, source: 'pull', publishes: 0 });
+                            await verbose.closeDocument('sample.ts');
+                        }
+                    } finally {
+                        spy.mockRestore();
+                    }
+                    expect(silence.silentWaits()).toEqual({
+                        'diagnostics/open': { waits: SILENT_WAIT_STREAK, longest_streak: SILENT_WAIT_STREAK },
+                    });
+                    expect(
+                        lines.filter((l) => l.includes('has not published for diagnostics/open in 3 waits in a row')),
+                    ).toHaveLength(1);
+                });
+
                 it('resolves with an empty pull at once when the server never reports being busy (ts7)', async () => {
                     servePulls(full('1'));
                     harness.tracker.seedDelivery('pull', true);
@@ -4050,6 +4081,155 @@ describe('BenchContextImpl', () => {
                         { method: 'diagnostics/open' },
                         { method: 'diagnostics/edit', success: true, result: 'empty' },
                     ]);
+                });
+
+                describe('waits over several passes', () => {
+                    async function verboseRun(
+                        body: (verbose: BenchContextImpl) => Promise<void>,
+                        silence = new SilenceTracker(),
+                    ): Promise<string[]> {
+                        const lines: string[] = [];
+                        const spy = vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+                            lines.push(String(line));
+                        });
+                        try {
+                            await body(
+                                new BenchContextImpl(harness as unknown as LspHarness, tmpDir, true, { silence }),
+                            );
+                        } finally {
+                            spy.mockRestore();
+                        }
+                        return lines;
+                    }
+
+                    it('counts a publish of a pass ended by a refresh, and the wait is not silent', async () => {
+                        servePulls(full('1', diag('stale')));
+                        harness.tracker.seedDelivery('push', false);
+                        const silence = new SilenceTracker();
+                        const results: WaitForDiagnosticsResult[] = [];
+                        const lines = await verboseRun(async (verbose) => {
+                            for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                                const waiting = verbose.waitForDiagnostics('sample.ts', {
+                                    timeout: 100,
+                                    until: (d) => d.length === 0,
+                                });
+                                await tick(10);
+                                harness.setDiagnostics(uri, [diag('x')]);
+                                await tick(10);
+                                harness.refresh();
+                                results.push(await waiting);
+                            }
+                        }, silence);
+                        for (const result of results) {
+                            expect(result).toMatchObject({ timedOut: true, source: 'push', publishes: 1 });
+                        }
+                        expect(pulls()).toHaveLength(SILENT_WAIT_STREAK);
+                        expect(lines.filter((l) => l.includes('all failing until (last: 1 diagnostics)'))).toHaveLength(
+                            SILENT_WAIT_STREAK,
+                        );
+                        expect(lines.some((l) => l.includes('has not published'))).toBe(false);
+                        expect(silence.silentWaits()).toBeUndefined();
+                        expect(silence.untilRejected()).toEqual({ 'diagnostics/wait': { waits: SILENT_WAIT_STREAK } });
+                    });
+
+                    it('resolves with a publish received during a refresh pull for a document that is not open', async () => {
+                        servePulls(() => {
+                            harness.setDiagnostics(uri, []);
+                            return full('1', diag('stale'));
+                        });
+                        harness.tracker.seedDelivery('push', false);
+                        const waiting = ctx.waitForDiagnostics('sample.ts', {
+                            timeout: 1000,
+                            until: (d) => d.length === 0,
+                        });
+                        await tick(10);
+                        harness.refresh();
+                        const result = await waiting;
+                        expect(result).toMatchObject({
+                            timedOut: false,
+                            source: 'push',
+                            publishes: 1,
+                            diagnostics: [],
+                        });
+                        expect(pulls()).toHaveLength(1);
+                    });
+
+                    it('counts the cached publish of an open document replayed to each pass once', async () => {
+                        servePulls(full('1', diag('stale')));
+                        await ctx.openDocument('sample.ts');
+                        harness.setDiagnostics(uri, [diag('stale')], 1);
+                        const waiting = ctx.waitForDiagnostics('sample.ts', {
+                            timeout: 100,
+                            until: (d) => d.length === 0,
+                        });
+                        await tick(10);
+                        harness.refresh();
+                        await tick(10);
+                        harness.refresh();
+                        const result = await waiting;
+                        expect(result).toMatchObject({ timedOut: true, source: 'push', publishes: 1 });
+                        expect(pulls()).toHaveLength(2);
+                    });
+
+                    it('reports held publishes of an earlier pass on a timeout after a held pull', async () => {
+                        servePulls(full('placeholder'));
+                        busy();
+                        await ctx.openDocument('sample.ts');
+                        await ctx.edit('sample.ts', op(0, 0, 0, 0, ' '));
+                        const silence = new SilenceTracker();
+                        let timings: RequestTiming[] = [];
+                        const lines = await verboseRun(async (verbose) => {
+                            const waiting = verbose.waitForDiagnostics('sample.ts', { timeout: 200 });
+                            await tick(10);
+                            harness.setDiagnostics(uri, [], 2);
+                            await tick(10);
+                            harness.setDiagnostics(uri, [diag('stale')], 1);
+                            await tick(10);
+                            harness.refresh();
+                            const result = await waiting;
+                            expect(result).toMatchObject({ timedOut: true, source: 'push', publishes: 1 });
+                            timings = verbose.collectTimings();
+                        }, silence);
+                        expect(pulls()).toHaveLength(1);
+                        expect(timings).toMatchObject([
+                            {
+                                method: 'diagnostics/edit',
+                                success: false,
+                                result: 'timeout',
+                                held_pulls: 1,
+                                held_publishes: 1,
+                            },
+                        ]);
+                        expect(
+                            lines.some((l) => l.includes('1 empty publishes held while the server was not quiescent')),
+                        ).toBe(true);
+                        expect(silence.silentWaits()).toBeUndefined();
+                    });
+
+                    it('logs the grace left after a refresh pull that did not pass until', async () => {
+                        servePulls(full('1', diag('stale')), full('2'));
+                        await ctx.openDocument('sample.ts');
+                        let result: WaitForDiagnosticsResult | undefined;
+                        const lines = await verboseRun(async (verbose) => {
+                            const waiting = verbose.waitForDiagnostics('sample.ts', {
+                                timeout: 5000,
+                                pullAfterMs: 200,
+                                until: (d) => d.length === 0,
+                            });
+                            await tick(120);
+                            harness.refresh();
+                            result = await waiting;
+                        });
+                        expect(result).toMatchObject({ timedOut: false, source: 'pull', pulls: 2, diagnostics: [] });
+                        const grace = lines.find((l) => l.includes('No publish from the server within'));
+                        const waitedMs = Number(/within (\d+)ms/.exec(grace ?? '')?.[1]);
+                        expect(waitedMs).toBeGreaterThan(40);
+                        expect(waitedMs).toBeLessThan(100);
+                        expect(
+                            harness.logs.some((l) => l.includes(`resolved after ${waitedMs}ms without a push`)),
+                        ).toBe(true);
+                        expect(result?.graceMs).toBeGreaterThanOrEqual(190);
+                    });
                 });
             });
 

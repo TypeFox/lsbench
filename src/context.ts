@@ -812,6 +812,8 @@ export class BenchContextImpl implements BenchContext {
         // set when a refresh ended the push wait, the loop then pulls once whatever the delivery
         let refresh = false;
         let shortened: { kind: ShortenedKind; method: string; uri: string } | undefined;
+        const after = this.harness.currentPublishSeq();
+        const seenPublishes = new Set<number>();
         let wait: PublishWaitResult;
         for (;;) {
             const delivery = auto ? this.harness.diagnosticsDelivery() : 'push';
@@ -860,17 +862,15 @@ export class BenchContextImpl implements BenchContext {
                 }
             });
             if (delivery === 'unknown' && held === 0) {
-                graceMs = timeout <= pullAfterMs ? timeout / 2 : pullAfterMs;
+                const fullGraceMs = timeout <= pullAfterMs ? timeout / 2 : pullAfterMs;
                 // the grace left after a refresh pull that did not resolve
-                const graceLeftMs = Math.max(0, graceMs - Number(graceSpentNs) / 1_000_000);
-                graceTimer = setTimeout(
-                    () => {
-                        if (this.harness.diagnosticsDelivery() === 'unknown') {
-                            abort.abort();
-                        }
-                    },
-                    Math.min(graceLeftMs, remainingMs()),
-                );
+                const graceLeftMs = Math.max(0, fullGraceMs - Number(graceSpentNs) / 1_000_000);
+                graceMs = Math.min(graceLeftMs, remainingMs());
+                graceTimer = setTimeout(() => {
+                    if (this.harness.diagnosticsDelivery() === 'unknown') {
+                        abort.abort();
+                    }
+                }, graceMs);
             }
             // a refresh tells the server has new diagnostics, a wait for a push pulls them
             let refreshed = false;
@@ -923,13 +923,16 @@ export class BenchContextImpl implements BenchContext {
                 }
                 shortenRejected = until !== undefined && this.silence.shortens('until rejected', expected.method);
             }
-            const after = this.harness.currentPublishSeq();
             const waitStartedAt = process.hrtime.bigint();
             wait = await this.harness.waitForPublishes(
                 uri,
                 (p) => {
                     const doc = this.harness.documentState(uri);
-                    return doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
+                    const accepted = doc?.open ? isCurrentPublish(p, doc) : p.seq > after;
+                    if (accepted) {
+                        seenPublishes.add(p.seq);
+                    }
+                    return accepted;
                 },
                 {
                     timeoutMs: remainingMs(),
@@ -996,10 +999,12 @@ export class BenchContextImpl implements BenchContext {
                 continue;
             }
             graceSpentNs += process.hrtime.bigint() - waitStartedAt;
-            this.log(`No publish from the server within ${graceMs}ms, pulling diagnostics for ${relativePath}`);
-            pullReason = `a pull for ${relativePath} resolved after ${graceMs}ms without a push`;
+            const waitedMs = Math.round(graceMs);
+            this.log(`No publish from the server within ${waitedMs}ms, pulling diagnostics for ${relativePath}`);
+            pullReason = `a pull for ${relativePath} resolved after ${waitedMs}ms without a push`;
         }
-        const { publish, publishes, timedOut } = wait;
+        const { publish, timedOut } = wait;
+        const publishes = seenPublishes.size;
         if (timedOut && publishes === 0 && held > 0) {
             return this.recordHeldTimeout(relativePath, uri, calledAt, held, earlierPulls, graceSpentNs);
         }
@@ -1065,12 +1070,8 @@ export class BenchContextImpl implements BenchContext {
         // a reopen that saw only close publishes is hinted below and neither silent nor resolved
         const reopenOnly =
             timedOut && publishes === 0 && method === 'diagnostics/open' && !!doc && doc.closePublishes > 0;
-        if (!reopenOnly && this.silence.record(method, uri, timedOut && publishes === 0)) {
-            this.log(
-                `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row across its documents: it may never ` +
-                    'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
-                    `Use \`until\` or a short timeout for this wait${this.plaintextNote()}`,
-            );
+        if (!reopenOnly) {
+            this.recordSilence(method, uri, timedOut && publishes === 0);
         }
         if (method === 'diagnostics/open' && doc && doc.generation > 1) {
             this.silence.recordReopen(method, uri, reopenOnly);
@@ -1111,6 +1112,16 @@ export class BenchContextImpl implements BenchContext {
             ...(closeWindowMs !== undefined ? { closeWindowMs } : {}),
             ...(shortened ? { shortened: true as const } : {}),
         };
+    }
+
+    private recordSilence(method: string, uri: string, silent: boolean): void {
+        if (this.silence.record(method, uri, silent)) {
+            this.log(
+                `The server has not published for ${method} in ${SILENT_WAIT_STREAK} waits in a row across its documents: it may never ` +
+                    'publish for a clean document, so these timeouts mean no diagnostics, not slow ones. ' +
+                    `Use \`until\` or a short timeout for this wait${this.plaintextNote()}`,
+            );
+        }
     }
 
     private expectedWait(uri: string, calledAt: bigint): { method: string; from: bigint; reopen: boolean } {
@@ -1433,7 +1444,8 @@ export class BenchContextImpl implements BenchContext {
         pulls: number,
         graceSpentNs: bigint,
     ): WaitForDiagnosticsResult {
-        const method = pullTimingMethod(this.harness.documentState(uri));
+        const doc = this.harness.documentState(uri);
+        const method = pullTimingMethod(doc);
         const ms = Math.max(0, Number(process.hrtime.bigint() - this.autoPullTimedFrom(uri, calledAt)) / 1_000_000);
         const graceMs = graceSpentNs > 0n ? Math.round(Number(graceSpentNs) / 1000) / 1000 : undefined;
         const timing: RequestTiming = {
@@ -1452,6 +1464,14 @@ export class BenchContextImpl implements BenchContext {
             `${method} ${relativePath}: ${ms.toFixed(1)}ms timeout, the server stayed busy after ` +
                 `${held} empty answers held as placeholders, ${pulls} pulls`,
         );
+        const pushMethod = this.expectedWait(uri, calledAt).method;
+        const reopenOnly = pushMethod === 'diagnostics/open' && !!doc && doc.closePublishes > 0;
+        if (!reopenOnly) {
+            this.recordSilence(pushMethod, uri, true);
+        }
+        if (pushMethod === 'diagnostics/open' && doc && doc.generation > 1) {
+            this.silence.recordReopen(pushMethod, uri, reopenOnly);
+        }
         return {
             diagnostics: [],
             timedOut: true,

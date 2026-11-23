@@ -35,7 +35,7 @@ The first matching publish isn't always the final word. rust-analyzer and zls pu
 | --- | --- |
 | `diagnostics` | diagnostics of the resolving publish (the latest one with `settleMs`). On timeout, those of the latest matching publish, otherwise the cached ones |
 | `timedOut` | `true` when the timeout fired before a matching publish (passing `until`) arrived. A timeout during the quiet period doesn't count. This comes from the timer itself, never from comparing elapsed time, since timers can fire slightly early |
-| `publishes` | matching publishes the wait saw, including a cached one and those failing `until` (0 for pull) |
+| `publishes` | matching publishes the wait saw, including a cached one and those failing `until` (0 for pull). Counted over the whole wait, also when a refresh or the grace ended a push wait that then went on, a cached publish seen again counting once |
 | `source` | `push` or `pull`, whichever resolved the wait |
 | `pulls` | pull requests sent (0 for push) |
 | `ms` | time from the latest `didOpen` or `didChange` of the document to the resolving publish, or to the timeout. With `settleMs`, to the latest publish, without the quiet period |
@@ -158,7 +158,7 @@ A loading server may answer with an empty placeholder. lsbench holds placeholder
 
 | Placeholder | Held when | Then |
 | --- | --- | --- |
-| empty pull, in `auto` mode | pull isn't settled and the server reports it's busy | keep waiting for a push, and pull again once the server is no longer busy. A timeout while busy records a pull timeout |
+| empty pull, in `auto` mode | pull isn't settled and the server reports it's busy | keep waiting for a push, and pull again once the server is no longer busy. A timeout while busy without any publish records a pull timeout, counted as a [silent wait](diagnostics-timings.md) of the push method |
 | empty pull, in `pull` mode | the server sent `experimental/serverStatus` with `quiescent: false` | pull again once quiescent, or time out with the placeholder |
 | empty publish for an opened document | the server sent `experimental/serverStatus` with `quiescent: false` (rust-analyzer publishes one while loading) | at quiescence, resolve with a newer publish if one arrived, else pull when a held pull would (the server advertises `diagnosticProvider` and push wasn't learned), else resolve with the placeholder, timed to the quiescence. A timeout first reports the placeholder |
 
@@ -177,8 +177,9 @@ A `workspace/diagnostic/refresh` while an auto wait waits for a push (in the gra
 - A result passing `until` resolves the wait as a pull, the placeholder rules still applying. Otherwise the wait keeps waiting for a push.
 - A refresh pull that returned diagnostics settles the server as pull only, even after push was learned, since rust-analyzer stops pushing for a document it was pulled for and only sends refreshes. An empty one teaches nothing.
 - A publish for an opened document still flips it back to push.
+- For a document that isn't open, the wait keeps taking any publish since its call, one received during the refresh pull included.
 
-Verbose mode logs each refresh.
+Verbose mode logs each refresh. After a refresh pull, an auto wait of unknown delivery waits only the grace left, and `No publish from the server within Nms` logs that time.
 
 ### Pulling
 
