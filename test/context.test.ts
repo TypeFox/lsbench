@@ -1793,6 +1793,23 @@ describe('BenchContextImpl', () => {
                 { method: 'server/idle', duration_ms: expect.any(Number), success: false, result: 'timeout' },
             ]);
         });
+
+        it('clears lastError left by an earlier failed request', async () => {
+            harness.rejections.push(new Error('boom'));
+            await ctx.hover('sample.ts', 0, 0);
+            expect(ctx.lastError).toBeDefined();
+            await ctx.waitForIdle({ quietMs: 10 });
+            expect(ctx.lastError).toBeUndefined();
+        });
+
+        it('clears lastError left by an earlier failed request when it times out', async () => {
+            harness.rejections.push(new Error('boom'));
+            await ctx.hover('sample.ts', 0, 0);
+            expect(ctx.lastError).toBeDefined();
+            harness.progress.progress({ token: 1, value: { kind: 'begin', title: 'Indexing' } });
+            await ctx.waitForIdle(30);
+            expect(ctx.lastError).toBeUndefined();
+        });
     });
 
     describe('notify and waitForDiagnostics', () => {
@@ -1827,6 +1844,26 @@ describe('BenchContextImpl', () => {
                 const { diagnostics } = await ctx.waitForDiagnostics('sample.ts', 5000);
                 expect(diagnostics.map((d) => d.message)).toEqual(['early']);
                 expect(Date.now() - start).toBeLessThan(100);
+            });
+
+            it('clears lastError left by an earlier failed request', async () => {
+                harness.rejections.push(new Error('boom'));
+                await ctx.hover('sample.ts', 0, 0);
+                expect(ctx.lastError).toBeDefined();
+                await ctx.openDocument('sample.ts');
+                harness.setDiagnostics(uri, [diag('x')]);
+                await ctx.waitForDiagnostics('sample.ts', { timeout: 5000, mode: 'push' });
+                expect(ctx.lastError).toBeUndefined();
+            });
+
+            it('clears lastError left by an earlier failed request when a push wait times out', async () => {
+                harness.rejections.push(new Error('boom'));
+                await ctx.hover('sample.ts', 0, 0);
+                expect(ctx.lastError).toBeDefined();
+                await ctx.openDocument('sample.ts');
+                const result = await ctx.waitForDiagnostics('sample.ts', { timeout: 30, mode: 'push' });
+                expect(result.timedOut).toBe(true);
+                expect(ctx.lastError).toBeUndefined();
             });
 
             it('does not resolve with a stale empty publish landing after close and reopen', async () => {

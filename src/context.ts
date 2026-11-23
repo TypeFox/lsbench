@@ -785,6 +785,7 @@ export class BenchContextImpl implements BenchContext {
         relativePath: string,
         options: WaitForDiagnosticsOptions | number = {},
     ): Promise<WaitForDiagnosticsResult> {
+        this._lastError = undefined;
         const {
             timeout = 30000,
             until,
@@ -1520,6 +1521,7 @@ export class BenchContextImpl implements BenchContext {
     }
 
     async waitForIdle(options: WaitForIdleOptions | number = {}): Promise<WaitForIdleResult> {
+        this._lastError = undefined;
         const { timeout = 30000, quietMs } = typeof options === 'number' ? { timeout: options } : options;
         const result = await this.harness.waitForIdle({
             timeoutMs: timeout,

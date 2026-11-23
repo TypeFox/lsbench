@@ -537,8 +537,9 @@ The object passed to your script. Import its type from 'lsbench'. Methods marked
 failure. Others are notifications or helpers.
 
 ctx.lastError is { method, message, code? } when the last timed request failed,
-and undefined otherwise (it is cleared as each request starts). Use it to tell
-a failure apart from a null result:
+and undefined otherwise (it is cleared as each timed method starts, including
+waitForDiagnostics and waitForIdle). Use it to tell a failure apart from a null
+result:
 
     const res = await ctx.definition('src/index.ts', 10, 5);
     if (ctx.lastError) { console.error(ctx.lastError.message); }
