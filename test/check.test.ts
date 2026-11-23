@@ -106,6 +106,16 @@ describe('checkReport', () => {
             const result = checkReport(run({ 'diagnostics/pull/open': stats() }), run({ 'diagnostics/open': stats() }));
             expect(result.failures.map((f) => f.rule)).toEqual(['method missing', 'method added']);
         });
+
+        it('fails an added method named like an Object.prototype member', () => {
+            const result = checkReport(run({ m: stats(), toString: stats() }), run({ m: stats() }));
+            expect(result.failures.map((f) => [f.method, f.rule])).toEqual([['toString', 'method added']]);
+        });
+
+        it('fails a missing method named like an Object.prototype member', () => {
+            const result = checkReport(run({ m: stats() }), run({ m: stats(), constructor: stats() }));
+            expect(result.failures.map((f) => [f.method, f.rule])).toEqual([['constructor', 'method missing']]);
+        });
     });
 
     describe('rates', () => {
@@ -289,6 +299,27 @@ describe('validateCheckedRun', () => {
         expect(validateCheckedRun(run({ m: { ...stats(), count: '1' } as unknown as MethodStats }))).toBe(
             'summary of m has no numeric count',
         );
+    });
+
+    it('accepts a baseline of the current format and a report without one', () => {
+        expect(validateCheckedRun(run({}))).toBeUndefined();
+        expect(validateCheckedRun({ ...run({}), lsbench_baseline: BASELINE_FORMAT })).toBeUndefined();
+    });
+
+    it('rejects an unsupported baseline format', () => {
+        expect(validateCheckedRun({ ...run({}), lsbench_baseline: 2 })).toBe(
+            `unsupported baseline format 2 (supported: ${BASELINE_FORMAT})`,
+        );
+        expect(validateCheckedRun({ ...run({}), lsbench_baseline: String(BASELINE_FORMAT) })).toBe(
+            `unsupported baseline format "${BASELINE_FORMAT}" (supported: ${BASELINE_FORMAT})`,
+        );
+        expect(validateCheckedRun({ ...run({}), lsbench_baseline: null })).toBe(
+            `unsupported baseline format null (supported: ${BASELINE_FORMAT})`,
+        );
+    });
+
+    it('reports an unsupported format before missing fields', () => {
+        expect(validateCheckedRun({ lsbench_baseline: 2 })).toMatch(/unsupported baseline format 2/);
     });
 });
 

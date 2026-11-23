@@ -97,17 +97,16 @@ export function checkReport(actual: CheckedRun, baseline: CheckedRun, options: C
 
     // methods missing from the report, then the shared ones
     for (const [method, base] of Object.entries(baseline.summary)) {
-        const stats = actual.summary[method];
-        if (!stats) {
+        if (!Object.hasOwn(actual.summary, method)) {
             failures.push({ method, field: 'method', baseline: 'present', actual: 'missing', rule: 'method missing' });
             continue;
         }
-        failures.push(...compareMethod(method, stats, base, opts));
+        failures.push(...compareMethod(method, actual.summary[method], base, opts));
     }
 
     // methods the baseline does not know
     for (const method of Object.keys(actual.summary)) {
-        if (!(method in baseline.summary)) {
+        if (!Object.hasOwn(baseline.summary, method)) {
             failures.push({ method, field: 'method', baseline: 'missing', actual: 'present', rule: 'method added' });
         }
     }
@@ -180,6 +179,9 @@ export function validateCheckedRun(value: unknown): string | undefined {
         return 'expected a JSON object';
     }
     const run = value as Record<string, unknown>;
+    if (Object.hasOwn(run, 'lsbench_baseline') && run.lsbench_baseline !== BASELINE_FORMAT) {
+        return `unsupported baseline format ${JSON.stringify(run.lsbench_baseline)} (supported: ${BASELINE_FORMAT})`;
+    }
     if (typeof run.iterations !== 'number' || typeof run.warmup !== 'number') {
         return 'missing numeric "iterations" or "warmup"';
     }

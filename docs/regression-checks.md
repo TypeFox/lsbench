@@ -14,6 +14,8 @@ lsbench check results.json -b baseline.json
 
 The baseline keeps the run settings (`iterations`, `warmup`, `restart_between_iterations`), `summary` and `iteration_summary`, without the per iteration `runs`, so it stays small and diffs well. It records behavior as it is, known timeouts included. Rewrite it with `lsbench baseline` when a change is intended, and review the diff.
 
+The baseline records its format version in `lsbench_baseline`. `check` exits 2 on a baseline of a format it does not support, such as `unsupported baseline format 2 (supported: 1)`. Regenerate it with `lsbench baseline`.
+
 ## Rules
 
 `check` fails on each rule broken:
