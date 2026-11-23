@@ -47,6 +47,8 @@ Commands:
   check                       Check a report against a baseline
 ```
 
+Integer options and values, such as `-n`, `--warmup` and `--request-timeout`, take plain decimal digits only. A value like `1e3`, `1.5`, `10abc` or `5s` is rejected with exit code 1.
+
 Where to read more:
 
 | Options | Page |

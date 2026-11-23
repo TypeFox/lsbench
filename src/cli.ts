@@ -115,16 +115,16 @@ program
             server,
             workspace: rawOpts.workspace as string,
             script: rawOpts.script as string,
-            iterations: parseInt(rawOpts.iterations as string, 10),
-            warmup: parseInt(rawOpts.warmup as string, 10),
+            iterations: parseIntStrict(rawOpts.iterations as string),
+            warmup: parseIntStrict(rawOpts.warmup as string),
             output: rawOpts.output as string,
             restart: rawOpts.restart as boolean,
             verbose: rawOpts.verbose as boolean,
             serverLog: rawOpts.serverLog as string | undefined,
             trace: rawOpts.trace as string | undefined,
-            shutdownTimeout: parseInt(rawOpts.shutdownTimeout as string, 10),
-            contentModifiedRetries: parseInt(rawOpts.contentModifiedRetries as string, 10),
-            requestTimeout: parseInt(rawOpts.requestTimeout as string, 10),
+            shutdownTimeout: parseIntStrict(rawOpts.shutdownTimeout as string),
+            contentModifiedRetries: parseIntStrict(rawOpts.contentModifiedRetries as string),
+            requestTimeout: parseIntStrict(rawOpts.requestTimeout as string),
             skipUnsupported: rawOpts.skipUnsupported as boolean,
             waitIdle: parseOptionalMs(rawOpts.waitIdle as string | boolean | undefined, DEFAULT_WAIT_IDLE_MS),
             shortenSilentWaits: parseOptionalMs(
@@ -358,7 +358,7 @@ program.parse();
 
 /** Collect repeated --allow-exit-code values, NaN for an invalid one (rejected after parsing) */
 function collectExitCode(value: string, previous: number[]): number[] {
-    const code = /^\d+$/.test(value) ? parseInt(value, 10) : Number.NaN;
+    const code = parseIntStrict(value);
     return previous.includes(code) ? previous : [...previous, code];
 }
 
@@ -379,6 +379,10 @@ function parseOptionalMs(value: string | boolean | undefined, bare: number): num
     if (value === true) {
         return bare;
     }
+    return parseIntStrict(value);
+}
+
+function parseIntStrict(value: string): number {
     return /^\d+$/.test(value) ? parseInt(value, 10) : Number.NaN;
 }
 
