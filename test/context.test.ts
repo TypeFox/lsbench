@@ -2106,6 +2106,32 @@ describe('BenchContextImpl', () => {
                     ).toHaveLength(1);
                 });
 
+                it('does not count such timeouts alternating with waits resolving after a rejected publish', async () => {
+                    const silence = new SilenceTracker();
+                    const lines = await trackedLogs(silence, async (verbose) => {
+                        for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                            await verbose.openDocument('sample.ts');
+                            harness.setDiagnostics(uri, [diag('one')]);
+                            const rejected = await verbose.waitForDiagnostics('sample.ts', {
+                                timeout: 10,
+                                until: (d) => d.length > 1,
+                            });
+                            expect(rejected).toMatchObject({ timedOut: true, publishes: 1 });
+                            const waiting = verbose.waitForDiagnostics('sample.ts', {
+                                timeout: 1000,
+                                until: (d) => d.length > 1,
+                            });
+                            harness.setDiagnostics(uri, [diag('one'), diag('two')]);
+                            const resolved = await waiting;
+                            expect(resolved.timedOut).toBe(false);
+                            await verbose.closeDocument('sample.ts');
+                        }
+                    });
+                    expect(silence.untilRejected()).toBeUndefined();
+                    expect(lines.filter((l) => l.includes('all failing until'))).toHaveLength(SILENT_WAIT_STREAK);
+                    expect(lines.some((l) => l.includes(hint))).toBe(false);
+                });
+
                 it('adds the plaintext note to the hint only after a fallback', async () => {
                     const note = 'Some documents were opened as plaintext';
                     const plain = await trackedLogs(new SilenceTracker(), (verbose) =>
@@ -2146,6 +2172,49 @@ describe('BenchContextImpl', () => {
                     });
                     expect(silence.untilRejected()).toBeUndefined();
                     expect(lines.some((l) => l.includes('failing until'))).toBe(false);
+                });
+
+                it('hints and reports only after rejected waits in a row', () => {
+                    const silence = new SilenceTracker();
+                    const hints: boolean[] = [];
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        hints.push(silence.recordUntilRejected('m'));
+                        if (i < SILENT_WAIT_STREAK - 1) {
+                            silence.recordUntilResolved('m');
+                        }
+                    }
+                    expect(hints.every((h) => !h)).toBe(true);
+                    expect(silence.untilRejected()).toBeUndefined();
+                    expect(silence.shortens('until rejected', 'm')).toBe(false);
+                });
+
+                it('hints once per method when rejected waits reach the streak', () => {
+                    const silence = new SilenceTracker();
+                    const hints: boolean[] = [];
+                    for (let i = 0; i < SILENT_WAIT_STREAK + 1; i++) {
+                        hints.push(silence.recordUntilRejected('m'));
+                    }
+                    expect(hints).toEqual([...Array<boolean>(SILENT_WAIT_STREAK - 1).fill(false), true, false]);
+                    expect(silence.untilRejected()).toEqual({ m: { waits: SILENT_WAIT_STREAK + 1 } });
+
+                    silence.recordUntilResolved('m');
+                    const later: boolean[] = [];
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        later.push(silence.recordUntilRejected('m'));
+                    }
+                    expect(later.every((h) => !h)).toBe(true);
+                    expect(silence.untilRejected()).toEqual({ m: { waits: 2 * SILENT_WAIT_STREAK + 1 } });
+                });
+
+                it('keeps reporting a method after its rejected streak ends', () => {
+                    const silence = new SilenceTracker();
+                    for (let i = 0; i < SILENT_WAIT_STREAK; i++) {
+                        silence.recordUntilRejected('m');
+                    }
+                    silence.recordUntilResolved('m');
+                    expect(silence.recordUntilRejected('m')).toBe(false);
+                    expect(silence.shortens('until rejected', 'm')).toBe(false);
+                    expect(silence.untilRejected()).toEqual({ m: { waits: SILENT_WAIT_STREAK + 1 } });
                 });
 
                 it('does not count a timeout that held a placeholder passing until', async () => {

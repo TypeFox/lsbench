@@ -116,6 +116,7 @@ export class SilenceTracker {
         Map<string, { waits: number; streak: number; longest: number; shortened: number }>
     >();
     private qualified = new Set<string>();
+    private rejectedQualified = new Set<string>();
     private fallbacks = new Set<string>();
 
     recordPlaintextFallback(extension: string): boolean {
@@ -186,7 +187,11 @@ export class SilenceTracker {
         }
         entry.waits++;
         entry.streak++;
-        return entry.waits === SILENT_WAIT_STREAK;
+        if (this.rejectedQualified.has(method) || entry.streak < SILENT_WAIT_STREAK) {
+            return false;
+        }
+        this.rejectedQualified.add(method);
+        return true;
     }
 
     recordUntilResolved(method: string): void {
@@ -199,7 +204,7 @@ export class SilenceTracker {
     untilRejected(): Record<string, UntilRejectedWaits> | undefined {
         let result: Record<string, UntilRejectedWaits> | undefined;
         for (const [method, entry] of this.rejected) {
-            if (entry.waits >= SILENT_WAIT_STREAK) {
+            if (this.rejectedQualified.has(method)) {
                 result ??= {};
                 result[method] = { waits: entry.waits, ...(entry.shortened > 0 ? { shortened: entry.shortened } : {}) };
             }

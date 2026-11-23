@@ -866,8 +866,8 @@ The JSON report (and the printed summary) contains:
                        document, so the timeouts mean no diagnostics, not slow ones)
   - until_rejected     diagnostics push waits per method that timed out after publishes
                        that all failed the wait's until, warmups included (only for
-                       methods with 3 such waits: the server may never report what until
-                       expects, so the timeouts do not mean a slow server)
+                       methods with 3 such waits in a row: the server may never report
+                       what until expects, so the timeouts do not mean a slow server)
   - reopen_waits       --shorten-silent-waits only: reopen waits per method that timed
                        out having seen only the publishes clearing the close (only for
                        methods with a shortened wait)

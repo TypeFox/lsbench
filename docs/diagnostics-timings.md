@@ -34,8 +34,9 @@ Streaks are counted over documents, without a resolving wait of the same documen
 A server may publish, but never with what `until` expects. bash-language-server without shellcheck, for example, publishes no diagnostics for a line meant to cause one, so every such wait times out.
 
 - When a push wait times out after publishes that all failed `until`, verbose mode adds `all failing until (last: N diagnostics)` to its `diagnostics/...` line.
-- After 3 such waits of one kind, warmups and restarts included and whatever resolving waits come in between, verbose mode logs that the server may never report what `until` expects.
-- The report records the method in `until_rejected`, and the printed summary notes it below the table.
+- After 3 such waits of one kind in a row, warmups and restarts included, verbose mode logs once per method that the server may never report what `until` expects.
+- A wait that resolves after a publish failing `until` ends the streak. Other resolving waits don't.
+- The report records such a method in `until_rejected` with all its waits that timed out this way, and the printed summary notes it below the table.
 
 ## Reopens
 
