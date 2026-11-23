@@ -48,6 +48,8 @@ Methods a server doesn't advertise are listed as skipped tests, and each suite a
 
 The minilogo server is cloned and built once on first use, so the first run can be slow (timeouts are 120s per test and 600s per hook, per `vitest.integration.config.ts`). CI runs both suites in a separate `integration` job.
 
+`test/primer.test.ts` checks that the CLI reference in `lsbench prime` (`src/primer.ts`) lists every option of `run`, `baseline` and `check` with its default. Add a new option there too, or the unit tests fail.
+
 ## Documentation
 
 `README.md` is the entry point: what lsbench is, how to install it, a quick start, links into `docs/`, and the contribution guidelines. Details live in `docs/`, one page per topic, listed in [`docs/index.md`](index.md).
