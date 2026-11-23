@@ -355,6 +355,22 @@ conn.onNotification('textDocument/didClose', ({ textDocument }) => {
 conn.listen();
 `;
 
+const lateClosedInputServer = `
+import * as fs from 'node:fs';
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => {
+    process.stdin.destroy();
+    fs.closeSync(0);
+    setTimeout(() => process.exit(0), 500);
+    return new Promise(() => {});
+});
+conn.listen();
+`;
+
 const failingStartServer = `
 import * as fs from 'node:fs';
 import * as rpc from 'vscode-jsonrpc/node';
@@ -536,12 +552,39 @@ describe('LspHarness start of a server exiting with stderr output', () => {
     }
 
     it('fails the start promptly when a live server closes its input', async () => {
-        const harness = shellHarness('exec 0<&-; sleep 5');
-        const started = Date.now();
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-closed-input-'));
+        const marker = path.join(dir, 'closed');
+        try {
+            const harness = new LspHarness(
+                { command: 'sh', args: ['-c', 'exec 0<&-; : > "$1"; sleep 5', 'sh', marker] },
+                process.cwd(),
+                false,
+                {
+                    setup: async () => {
+                        while (!fs.existsSync(marker)) {
+                            await new Promise((resolve) => setTimeout(resolve, 10));
+                        }
+                    },
+                },
+            );
+            const started = Date.now();
+            const err = await startError(harness);
+            expect(Date.now() - started).toBeLessThan(2000);
+            expect(err.message).toMatch(/^cannot write to server: /);
+            expect(harness.exit).toMatchObject({ reason: expect.stringMatching(/^killed by lsbench/) });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('fails the start when a server that closed its input after initialize was sent exits', async () => {
+        const harness = new LspHarness(
+            { command: process.execPath, args: ['--input-type=module', '-e', lateClosedInputServer] },
+            process.cwd(),
+            false,
+        );
         const err = await startError(harness);
-        expect(Date.now() - started).toBeLessThan(2000);
-        expect(err.message).toMatch(/^cannot write to server: /);
-        expect(harness.exit).toMatchObject({ reason: expect.stringMatching(/^killed by lsbench/) });
+        expect(err.message).toMatch(/^Server exited before initialize \(code=0 signal=null\)\./);
     });
 });
 
