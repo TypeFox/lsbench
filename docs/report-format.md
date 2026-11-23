@@ -144,8 +144,19 @@ A server that is still running 3 seconds after `SIGKILL`, for example after `EPE
 
 | Option | `ServerConfig` | Tolerates | Example |
 | --- | --- | --- | --- |
-| `--allow-exit-code <n>` | `allowExitCodes` | exit code `n` after a replied `shutdown` | TypeScript 7 exiting 1 |
-| `--allow-exit-signal <name>` | `allowExitSignals` | a signal after a replied `shutdown` | nixd crashing with `SIGSEGV` |
+| `--allow-exit-code <n>` | `allowExitCodes` | exit code `n` after a replied or failed `shutdown` | TypeScript 7 exiting 1 |
+| `--allow-exit-signal <name>` | `allowExitSignals` | a signal after a replied or failed `shutdown` | nixd crashing with `SIGSEGV` |
 | `--allow-unreplied-shutdown` | `allowUnrepliedShutdown` | an exit with code 0, an allowed code or an allowed signal after `shutdown` was sent but before its reply | neocmakelsp, which exits on `shutdown` without waiting for `exit` |
 
 An unreplied shutdown exit is listed with a reason such as `exited after unreplied shutdown with code 0 (allowed)`, and `lifecycle/shutdown` is timed up to the exit. Without `--allow-unreplied-shutdown`, a server that exits without replying to `shutdown` stays in `abnormal_exits` whatever its code or signal. An exit before `shutdown` was sent always stays abnormal.
+
+A server that answers `shutdown` with an error reply is still sent `exit`, then gets up to 1 second to exit before `SIGTERM`. `lifecycle/shutdown` records `shutdown request failed`. The exit is classified as follows:
+
+| Exit after the error reply | Reason | Listed in |
+| --- | --- | --- |
+| code 0 or 1 | `exited after failed shutdown with code 1` | neither |
+| a code or signal allowed by `--allow-exit-code` or `--allow-exit-signal` | `exited after failed shutdown with code 5 (allowed)` | `tolerated_exits` |
+| any other code or signal | `exited after failed shutdown with signal SIGSEGV` | `abnormal_exits` |
+| none, the server ignores `exit` | `killed by lsbench (signal SIGTERM)` | neither |
+
+Code 1 is what the LSP spec asks of a server that gets `exit` without a successful `shutdown`.

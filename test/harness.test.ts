@@ -619,20 +619,39 @@ conn.onRequest('shutdown', () => {
     if (mode === 'hang') {
         return new Promise(() => {});
     }
+    if (mode.startsWith('reject')) {
+        return new rpc.ResponseError(-32603, 'no');
+    }
     return null;
 });
 conn.onNotification('exit', () => {
+    if (mode === 'reject-ignore') {
+        return;
+    }
+    if (mode === 'reject-5') {
+        process.exit(5);
+    }
     if (mode === 'segv') {
         process.kill(process.pid, 'SIGSEGV');
         return;
     }
-    process.exit(mode === 'fail' ? 1 : 0);
+    process.exit(mode === 'fail' || mode === 'reject' ? 1 : 0);
 });
 conn.listen();
 `;
 
 function shutdownHarness(
-    mode: 'crash' | 'quit' | 'hang' | 'fail' | 'segv' | 'segv-early' | 'clean',
+    mode:
+        | 'crash'
+        | 'quit'
+        | 'hang'
+        | 'fail'
+        | 'reject'
+        | 'reject-5'
+        | 'reject-ignore'
+        | 'segv'
+        | 'segv-early'
+        | 'clean',
     allowExitCodes?: number[],
     allowExitSignals?: NodeJS.Signals[],
     allowUnrepliedShutdown?: boolean,
@@ -650,6 +669,54 @@ function shutdownHarness(
 }
 
 describe('LspHarness.stop', () => {
+    it('sends exit after a shutdown error reply and reports the exit code', async () => {
+        const harness = shutdownHarness('reject');
+        await harness.start();
+        const exit = await harness.stop();
+        expect(exit).toMatchObject({
+            code: 1,
+            signal: null,
+            abnormal: false,
+            reason: 'exited after failed shutdown with code 1',
+        });
+        expect(exit?.tolerated).toBeUndefined();
+        expect(harness.takeLifecycleTimings()).toContainEqual(
+            expect.objectContaining({
+                method: 'lifecycle/shutdown',
+                success: false,
+                error: 'shutdown request failed',
+            }),
+        );
+    });
+
+    it('kills a server that ignores exit after a shutdown error reply once the wait passes', async () => {
+        const harness = shutdownHarness('reject-ignore');
+        await harness.start();
+        const started = Date.now();
+        const exit = await harness.stop();
+        expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+        expect(exit).toMatchObject({ signal: 'SIGTERM', abnormal: false });
+        expect(exit?.reason).toMatch(/killed by lsbench/);
+    });
+
+    it('reports an unexpected exit code after a shutdown error reply as abnormal unless allowed', async () => {
+        const harness = shutdownHarness('reject-5');
+        await harness.start();
+        expect(await harness.stop()).toMatchObject({
+            code: 5,
+            abnormal: true,
+            reason: 'exited after failed shutdown with code 5',
+        });
+        const allowed = shutdownHarness('reject-5', [5]);
+        await allowed.start();
+        expect(await allowed.stop()).toMatchObject({
+            code: 5,
+            abnormal: false,
+            tolerated: true,
+            reason: 'exited after failed shutdown with code 5 (allowed)',
+        });
+    });
+
     it('settles and reports the exit code when the server exits on shutdown without replying', async () => {
         const harness = shutdownHarness('crash');
         await harness.start();

@@ -1146,6 +1146,7 @@ export class LspHarness {
     /** set once the server replies to shutdown, so a following exit is expected */
     private shutdownReplied = false;
     private shutdownSent = false;
+    private shutdownErrored = false;
     /** set once we signal the process, so the resulting exit is not abnormal */
     private killRequested = false;
     /** set while stop() runs, an exit then is part of our own shutdown */
@@ -1270,6 +1271,7 @@ export class LspHarness {
         this._exit = null;
         this.shutdownReplied = false;
         this.shutdownSent = false;
+        this.shutdownErrored = false;
         this.killRequested = false;
         this.stopping = false;
         this.exitError = null;
@@ -1562,7 +1564,16 @@ export class LspHarness {
                     this.shutdownReplied = true;
                     return 'replied' as const;
                 },
-                () => 'failed' as const,
+                (err: unknown) => {
+                    if (
+                        err instanceof rpc.ResponseError &&
+                        err.code !== rpc.ErrorCodes.MessageWriteError &&
+                        err.code !== rpc.ErrorCodes.PendingResponseRejected
+                    ) {
+                        this.shutdownErrored = true;
+                    }
+                    return 'failed' as const;
+                },
             );
             const outcome = await raceTimeout([shutdown, this.exited.then(() => 'exited' as const)], timeoutMs);
             // time shutdown from request to reply, or to however it failed
@@ -1575,7 +1586,7 @@ export class LspHarness {
             const toleratedExit = outcome !== 'timeout' && this.exit?.tolerated === true;
             const shutdownError = toleratedExit ? undefined : shutdownErrors[outcome];
             this.recordLifecycle('lifecycle/shutdown', shutdownStart, shutdownError);
-            if (outcome === 'replied') {
+            if (outcome === 'replied' || outcome === 'failed') {
                 try {
                     await connection.sendNotification('exit');
                 } catch {
@@ -1707,6 +1718,21 @@ export class LspHarness {
         const status = signal ? `signal ${signal}` : `code ${code}`;
         if (this.killRequested) {
             return { code, signal, abnormal: false, reason: `killed by lsbench (${status})` };
+        }
+        if (this.shutdownErrored) {
+            if (signal === null && (code === 0 || code === 1)) {
+                return { code, signal, abnormal: false, reason: `exited after failed shutdown with ${status}` };
+            }
+            if (this.isAllowedExit(code, signal)) {
+                return {
+                    code,
+                    signal,
+                    abnormal: false,
+                    tolerated: true,
+                    reason: `exited after failed shutdown with ${status} (allowed)`,
+                };
+            }
+            return { code, signal, abnormal: true, reason: `exited after failed shutdown with ${status}` };
         }
         if (!this.shutdownReplied) {
             const unrepliedAllowed =

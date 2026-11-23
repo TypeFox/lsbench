@@ -852,8 +852,8 @@ The JSON report (and the printed summary) contains:
                        --allow-unreplied-shutdown tolerates it.
                        Without --restart, a crash during an iteration ends the run and
                        is labeled with that iteration)
-  - tolerated_exits    servers that exited after a replied shutdown with a code allowed by
-                       --allow-exit-code or a signal allowed by --allow-exit-signal,
+  - tolerated_exits    servers that exited after a replied or failed shutdown with a code
+                       allowed by --allow-exit-code or a signal allowed by --allow-exit-signal,
                        or after an unreplied shutdown with --allow-unreplied-shutdown
                        (only when any did, these do not fail the run)
   - silent_waits       diagnostics push waits per method that timed out without any
