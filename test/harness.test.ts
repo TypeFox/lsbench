@@ -332,6 +332,102 @@ conn.onNotification('textDocument/didClose', ({ textDocument }) => {
 conn.listen();
 `;
 
+const failingStartServer = `
+import * as fs from 'node:fs';
+import * as rpc from 'vscode-jsonrpc/node';
+const [pidFile, mode] = process.argv.slice(1);
+fs.writeFileSync(pidFile, String(process.pid));
+if (mode === 'exit') {
+    process.exit(2);
+}
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => {
+    if (mode === 'init-error') {
+        throw new Error('nope');
+    }
+    return { capabilities: {} };
+});
+conn.listen();
+process.stdin.on('end', () => {});
+setInterval(() => {}, 1000);
+`;
+
+function isAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+describe('LspHarness failed start', () => {
+    function failingHarness(mode: string, setup?: (pidFile: string) => SetupScript) {
+        const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-failed-start-')), 'pid');
+        const config = {
+            command: process.execPath,
+            args: ['--input-type=module', '-e', failingStartServer, pidFile, mode],
+        };
+        const harness = new LspHarness(config, process.cwd(), false, setup ? { setup: setup(pidFile) } : {});
+        return { harness, pid: () => Number(fs.readFileSync(pidFile, 'utf-8')) };
+    }
+
+    it('kills the server when initialize fails', async () => {
+        const { harness, pid } = failingHarness('init-error');
+        await expect(harness.start()).rejects.toThrow('Request initialize failed with message: nope');
+        expect(isAlive(pid())).toBe(false);
+        expect(harness.exit).toMatchObject({ abnormal: false, reason: expect.stringMatching(/^killed by lsbench/) });
+        const started = Date.now();
+        expect(await harness.stop()).toBe(harness.exit);
+        expect(Date.now() - started).toBeLessThan(100);
+    });
+
+    async function waitForFile(file: string): Promise<void> {
+        while (!fs.existsSync(file)) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+    }
+
+    const throwingSetups: Array<[string, (pidFile: string) => SetupScript]> = [
+        [
+            'sync',
+            (pidFile) => () => {
+                while (!fs.existsSync(pidFile)) {
+                    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+                }
+                throw new Error('setup boom');
+            },
+        ],
+        [
+            'async',
+            (pidFile) => async () => {
+                await waitForFile(pidFile);
+                throw new Error('setup boom');
+            },
+        ],
+    ];
+    for (const [kind, setup] of throwingSetups) {
+        it(`kills the server when a ${kind} setup throws`, async () => {
+            const { harness, pid } = failingHarness('ok', setup);
+            await expect(harness.start()).rejects.toThrow(/^setup boom$/);
+            expect(isAlive(pid())).toBe(false);
+            expect(harness.exit).toMatchObject({
+                abnormal: false,
+                reason: expect.stringMatching(/^killed by lsbench/),
+            });
+        });
+    }
+
+    it('keeps the real exit of a server that exits before initialize', async () => {
+        const { harness } = failingHarness('exit');
+        await expect(harness.start()).rejects.toThrow();
+        expect(harness.exit).toMatchObject({ code: 2, signal: null, abnormal: true });
+    });
+});
+
 describe('LspHarness publishes read before a reopen', () => {
     for (const traced of [false, true]) {
         it(`credits a close publish received after the reopen to the close${traced ? ' when tracing' : ''}`, async () => {

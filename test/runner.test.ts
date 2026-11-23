@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { BenchOptions, BenchReport } from 'lsbench';
-import { loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
+import { LspHarness, loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 describe('resolveServerConfig', () => {
@@ -1226,5 +1226,140 @@ describe('runBenchmark with --trace', () => {
             dir: 'in',
             msg: { error: { message: expect.stringContaining('no thanks') } },
         });
+    });
+});
+
+const failingStartServer = `
+import * as fs from 'node:fs';
+import * as rpc from 'vscode-jsonrpc/node';
+const [pidFile, failOn] = process.argv.slice(1);
+fs.appendFileSync(pidFile, \`\${process.pid}\\n\`);
+const start = fs.readFileSync(pidFile, 'utf-8').trim().split('\\n').length;
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => {
+    if (start === Number(failOn)) {
+        throw new Error('nope');
+    }
+    return { capabilities: {} };
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+process.stdin.on('end', () => {});
+setInterval(() => {}, 1000);
+`;
+
+describe('runBenchmark kills a server whose start failed', () => {
+    let tmpDir: string;
+    let plainScript: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-failed-start-'));
+        plainScript = path.join(tmpDir, 'plain.mjs');
+        fs.writeFileSync(plainScript, 'export default async function () {}', 'utf-8');
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    function isAlive(pid: number): boolean {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function pids(pidFile: string): number[] {
+        return fs.readFileSync(pidFile, 'utf-8').trim().split('\n').map(Number);
+    }
+
+    function options(name: string, failOn: number, script: string, restart: boolean): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', failingStartServer, path.join(tmpDir, name), String(failOn)],
+            workspace: tmpDir,
+            script,
+            iterations: 1,
+            warmup: 0,
+            output: '',
+            restart,
+            verbose: false,
+            shutdownTimeout: 500,
+        };
+    }
+
+    for (const restart of [false, true]) {
+        const mode = restart ? 'restart' : 'keep alive';
+
+        it(`kills the server when initialize fails (${mode})`, async () => {
+            vi.spyOn(console, 'log').mockImplementation(() => {});
+            const name = `init-${mode}`;
+            await expect(runBenchmark(options(name, 1, plainScript, restart))).rejects.toThrow(
+                'Request initialize failed with message: nope',
+            );
+            const [pid] = pids(path.join(tmpDir, name));
+            expect(isAlive(pid)).toBe(false);
+        });
+
+        it(`kills the server when setup throws (${mode})`, async () => {
+            vi.spyOn(console, 'log').mockImplementation(() => {});
+            const name = `setup-${mode}`;
+            const setupScript = path.join(tmpDir, `${name}.mjs`);
+            fs.writeFileSync(
+                setupScript,
+                `import * as fs from 'node:fs';
+                export async function setup() {
+                    while (!fs.existsSync(${JSON.stringify(path.join(tmpDir, name))})) {
+                        await new Promise((resolve) => setTimeout(resolve, 10));
+                    }
+                    throw new Error('setup boom');
+                }
+                export default async function () {}`,
+                'utf-8',
+            );
+            await expect(runBenchmark(options(name, 0, setupScript, restart))).rejects.toThrow(/^setup boom$/);
+            const [pid] = pids(path.join(tmpDir, name));
+            expect(isAlive(pid)).toBe(false);
+        });
+    }
+
+    it('kills the server when the idle wait throws (keep alive)', async () => {
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        vi.spyOn(LspHarness.prototype, 'waitForIdleAfterStart').mockRejectedValue(new Error('idle boom'));
+        const name = 'idle-keep-alive';
+        await expect(runBenchmark({ ...options(name, 0, plainScript, false), waitIdle: 1000 })).rejects.toThrow(
+            /^idle boom$/,
+        );
+        const [pid] = pids(path.join(tmpDir, name));
+        expect(isAlive(pid)).toBe(false);
+    });
+
+    it('keeps the collected runs and records the failed restart unchanged', async () => {
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const name = 'second-start';
+        const report = await runBenchmark({ ...options(name, 2, plainScript, true), iterations: 2 });
+        expect(report.runs.map((r) => r.iteration)).toEqual([1]);
+        expect(report.abnormal_exits).toEqual([
+            {
+                during: 'iteration 2',
+                code: null,
+                signal: null,
+                reason: 'failed to start: Request initialize failed with message: nope',
+            },
+        ]);
+        const started = pids(path.join(tmpDir, name));
+        expect(started).toHaveLength(2);
+        expect(isAlive(started[1])).toBe(false);
     });
 });

@@ -1440,77 +1440,82 @@ export class LspHarness {
         const scriptRequests = new Map<string, (params: unknown) => unknown>();
         this.routeScriptMessages(connection, scriptNotifications, scriptRequests);
 
-        // time spawn up to the OS reporting the process as started
         try {
-            await Promise.race([spawned, earlyExit]);
-            this.recordLifecycle('lifecycle/spawn', spawnStart);
-        } catch (err: unknown) {
-            this.recordLifecycle('lifecycle/spawn', spawnStart, err);
-            throw err;
-        }
+            // time spawn up to the OS reporting the process as started
+            try {
+                await Promise.race([spawned, earlyExit]);
+                this.recordLifecycle('lifecycle/spawn', spawnStart);
+            } catch (err: unknown) {
+                this.recordLifecycle('lifecycle/spawn', spawnStart, err);
+                throw err;
+            }
 
-        if (this.setup) {
-            const reserve = (kind: string, method: string) => {
-                if (builtIn.has(method)) {
-                    throw new Error(`setup cannot handle the ${kind} ${method}, lsbench handles it itself`);
-                }
+            if (this.setup) {
+                const reserve = (kind: string, method: string) => {
+                    if (builtIn.has(method)) {
+                        throw new Error(`setup cannot handle the ${kind} ${method}, lsbench handles it itself`);
+                    }
+                };
+                const client: ClientHooks = {
+                    onNotification: (method, handler) => {
+                        reserve('notification', method);
+                        scriptNotifications.set(method, handler);
+                    },
+                    onRequest: (method, handler) => {
+                        reserve('request', method);
+                        scriptRequests.set(method, handler);
+                    },
+                    notify: (method, params) => this.sendNotification(method, params),
+                };
+                await Promise.race([Promise.resolve(this.setup(client)), earlyExit]);
+            }
+
+            // Perform LSP initialize
+            const initParams = {
+                processId: process.pid,
+                rootUri: workspaceUri,
+                rootPath: this.workspaceRoot,
+                workspaceFolders,
+                // defaults, then the pull capability when opted in, then the configured capabilities, so those win
+                capabilities: mergeCapabilities(
+                    this.config.advertisePullDiagnostics
+                        ? mergeCapabilities(defaultClientCapabilities(), pullDiagnosticClientCapabilities())
+                        : defaultClientCapabilities(),
+                    this.config.clientCapabilities ?? {},
+                ),
+                initializationOptions: this.config.initializationOptions ?? {},
             };
-            const client: ClientHooks = {
-                onNotification: (method, handler) => {
-                    reserve('notification', method);
-                    scriptNotifications.set(method, handler);
-                },
-                onRequest: (method, handler) => {
-                    reserve('request', method);
-                    scriptRequests.set(method, handler);
-                },
-                notify: (method, params) => this.sendNotification(method, params),
-            };
-            await Promise.race([Promise.resolve(this.setup(client)), earlyExit]);
-        }
 
-        // Perform LSP initialize
-        const initParams = {
-            processId: process.pid,
-            rootUri: workspaceUri,
-            rootPath: this.workspaceRoot,
-            workspaceFolders,
-            // defaults, then the pull capability when opted in, then the configured capabilities, so those win
-            capabilities: mergeCapabilities(
-                this.config.advertisePullDiagnostics
-                    ? mergeCapabilities(defaultClientCapabilities(), pullDiagnosticClientCapabilities())
-                    : defaultClientCapabilities(),
-                this.config.clientCapabilities ?? {},
-            ),
-            initializationOptions: this.config.initializationOptions ?? {},
-        };
+            this.log('Sending initialize...');
+            // race the handshake against an early process exit so a server that dies
+            // (bad command, missing module, crash on startup) surfaces as a rejection
+            // instead of hanging on a response that will never come
+            const initStart = process.hrtime.bigint();
+            let result: InitializeResult;
+            try {
+                result = (await Promise.race([
+                    this.connection.sendRequest('initialize', initParams),
+                    earlyExit,
+                ])) as InitializeResult;
+                this.recordLifecycle('lifecycle/initialize', initStart);
+            } catch (err: unknown) {
+                this.recordLifecycle('lifecycle/initialize', initStart, err);
+                throw err;
+            }
+            this._capabilities = result.capabilities;
 
-        this.log('Sending initialize...');
-        // race the handshake against an early process exit so a server that dies
-        // (bad command, missing module, crash on startup) surfaces as a rejection
-        // instead of hanging on a response that will never come
-        const initStart = process.hrtime.bigint();
-        let result: InitializeResult;
-        try {
-            result = (await Promise.race([
-                this.connection.sendRequest('initialize', initParams),
-                earlyExit,
-            ])) as InitializeResult;
-            this.recordLifecycle('lifecycle/initialize', initStart);
+            // Send initialized notification
+            this.connection.sendNotification('initialized', {});
+            this.log('Server initialized.');
+
+            // push the settings once, for servers that read them from didChangeConfiguration
+            if (this.settings) {
+                this.log(`Sending workspace/didChangeConfiguration: ${JSON.stringify(this.settings)}`);
+                this.connection.sendNotification('workspace/didChangeConfiguration', { settings: this.settings });
+            }
         } catch (err: unknown) {
-            this.recordLifecycle('lifecycle/initialize', initStart, err);
+            await this.abortStart(child);
             throw err;
-        }
-        this._capabilities = result.capabilities;
-
-        // Send initialized notification
-        this.connection.sendNotification('initialized', {});
-        this.log('Server initialized.');
-
-        // push the settings once, for servers that read them from didChangeConfiguration
-        if (this.settings) {
-            this.log(`Sending workspace/didChangeConfiguration: ${JSON.stringify(this.settings)}`);
-            this.connection.sendNotification('workspace/didChangeConfiguration', { settings: this.settings });
         }
     }
 
@@ -1564,22 +1569,47 @@ export class LspHarness {
         connection.dispose();
         this.connection = null;
 
-        if (child && !this._exit) {
-            this.killRequested = true;
-            child.kill('SIGTERM');
-            // force kill a server that ignores SIGTERM, `killed` only reports that a
-            // signal was sent, so check the recorded exit instead
-            if ((await raceTimeout([this.exited], 3000)) === 'timeout') {
-                child.kill('SIGKILL');
-                await this.exited;
-            }
+        if (child) {
+            await this.killChild(child);
         }
         this.process = null;
         await this.output.close();
+        this.clearServerState();
+        return this._exit;
+    }
+
+    private async abortStart(child: cp.ChildProcess): Promise<void> {
+        this.stopping = true;
+        try {
+            await this.killChild(child);
+            this.connection?.dispose();
+            this.connection = null;
+            this.process = null;
+            await this.output.close();
+            this.clearServerState();
+        } catch (err: unknown) {
+            this.log(`Cleanup after a failed start failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+
+    private async killChild(child: cp.ChildProcess): Promise<void> {
+        if (this._exit || child.pid === undefined) {
+            return;
+        }
+        this.killRequested = true;
+        child.kill('SIGTERM');
+        // force kill a server that ignores SIGTERM, `killed` only reports that a
+        // signal was sent, so check the recorded exit instead
+        if ((await raceTimeout([this.exited], 3000)) === 'timeout') {
+            child.kill('SIGKILL');
+            await this.exited;
+        }
+    }
+
+    private clearServerState(): void {
         this.diagnostics.clear();
         this.progress.clear();
         this._registrations.clear();
-        return this._exit;
     }
 
     /**

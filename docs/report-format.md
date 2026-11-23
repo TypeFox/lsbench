@@ -123,6 +123,12 @@ Requests rejected with `ContentModified` (-32801), as servers do while loading o
 
 Without `--restart`, a server that exits during an iteration ends the run. The exit is labeled with that iteration, no further iterations run, and the report keeps the runs completed so far, including the crashed one.
 
+A server whose start fails is stopped before the error is reported, so no process is left behind:
+
+- After an `initialize` error reply or a `setup` export that throws, the server gets `SIGTERM`, then `SIGKILL` after 3 seconds. No `shutdown` is sent. `LspHarness.start()` does this itself before rejecting, and `harness.exit` reads `killed by lsbench (...)` unless the server already exited on its own.
+- After a failing `--wait-idle`, the server is stopped as usual, with `shutdown` and `exit`.
+- Under `--restart`, a failed start after collected runs is listed as `failed to start: <error>`, with `code` and `signal` only when the server exited on its own.
+
 `tolerated_exits` has the same shape, only when any exit was tolerated, and doesn't make lsbench exit non zero:
 
 | Option | `ServerConfig` | Tolerates | Example |

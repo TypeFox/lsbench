@@ -215,8 +215,13 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // Start server if we're keeping it alive across iterations
         if (!opts.restart) {
             harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
-            await harness.start();
-            await waitIdleAfterStart(harness, opts.waitIdle);
+            try {
+                await harness.start();
+                await waitIdleAfterStart(harness, opts.waitIdle);
+            } catch (err: unknown) {
+                await stopQuietly(harness, opts.shutdownTimeout);
+                throw err;
+            }
             lifecycle = harness.takeLifecycleTimings();
             logCapabilities(harness);
             ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
@@ -253,11 +258,12 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                 } catch (err: unknown) {
                     // without collected runs there is nothing to keep, so fail as before
                     if (runs.length === 0) {
+                        await stopQuietly(harness, opts.shutdownTimeout);
                         throw err;
                     }
                     const msg = err instanceof Error ? err.message : String(err);
                     console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
-                    const exit = harness.exit;
+                    const exit = harness.exit?.abnormal ? harness.exit : null;
                     recordAbnormal({
                         during,
                         code: exit?.code ?? null,
@@ -390,6 +396,12 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         // also on errors, which is when a trace helps most
         await trace?.close();
     }
+}
+
+async function stopQuietly(harness: LspHarness, timeoutMs: number | undefined): Promise<void> {
+    try {
+        await harness.stop(timeoutMs);
+    } catch {}
 }
 
 /** With --wait-idle, wait for a freshly started server to become idle, recorded as lifecycle/idle */
