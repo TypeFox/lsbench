@@ -74,3 +74,4 @@ For full control, drive `LspHarness` programmatically with a `ServerConfig`. It 
 - `resolveServerConfig(command, options?)` builds one from a `--server` style command string. `options` (`ServerConfigOptions`) takes the matching `BenchOptions` fields, such as `serverArgs` and `allowExitCodes`, so a `BenchOptions` object can be passed as is.
 - `defaultClientCapabilities()` and `mergeCapabilities()` build on the defaults.
 - `expandSettings()` shows how settings are expanded.
+- A failed write to the server's input rejects only lsbench's own calls, such as `start()`. It never leaves an unhandled rejection that would end the host process.

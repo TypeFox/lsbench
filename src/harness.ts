@@ -1147,6 +1147,7 @@ export class LspHarness {
     private stopping = false;
     /** set once the server exited outside stop(), requests and notifications then fail with it */
     private exitError: Error | null = null;
+    private writeFailed: Promise<Error> = new Promise(() => {});
     /** rejecters of the requests sent through sendRequest still awaiting a reply */
     private pendingRequests = new Set<(err: Error) => void>();
     /** lifecycle timings (spawn, initialize, shutdown) not yet taken by the runner */
@@ -1323,6 +1324,33 @@ export class LspHarness {
             }
         });
 
+        let onWriteFailure: (err: Error) => void = () => {};
+        const writeFailed = new Promise<Error>((resolve) => {
+            onWriteFailure = resolve;
+        });
+        this.writeFailed = writeFailed;
+        let writeError: Error | null = null;
+        const failWrites = (err: unknown) => {
+            if (writeError) {
+                return;
+            }
+            const error = new Error(`cannot write to server: ${errorMessage(err)}`);
+            writeError = error;
+            this.log(error.message);
+            onWriteFailure(error);
+            void raceTimeout([this.exited], 200).then(() => {
+                if (this.writeFailed !== writeFailed || this.exitError || this._exit) {
+                    return;
+                }
+                this.exitError = error;
+                const pending = [...this.pendingRequests];
+                this.pendingRequests.clear();
+                for (const reject of pending) {
+                    reject(error);
+                }
+            });
+        };
+
         // Create JSON-RPC connection over stdio
         const input = this.process.stdout!;
         const output = this.process.stdin!;
@@ -1335,7 +1363,7 @@ export class LspHarness {
                     diagnostics.noteRead(msg.params as PublishDiagnosticsParams);
                 }
             }),
-            trace ? trace.writer(output) : new rpc.StreamMessageWriter(output),
+            new SettledMessageWriter(trace ? trace.writer(output) : new rpc.StreamMessageWriter(output), failWrites),
         );
 
         this.connection.listen();
@@ -1501,6 +1529,7 @@ export class LspHarness {
                 result = (await Promise.race([
                     this.connection.sendRequest('initialize', initParams),
                     earlyExit,
+                    writeFailed.then((err) => Promise.reject(err)),
                 ])) as InitializeResult;
                 if (typeof result !== 'object' || result === null) {
                     throw new Error(`invalid initialize result: ${JSON.stringify(result)}`);
@@ -1513,13 +1542,19 @@ export class LspHarness {
             this._capabilities = result.capabilities;
 
             // Send initialized notification
-            this.connection.sendNotification('initialized', {});
+            this.connection.sendNotification('initialized', {}).catch((err: unknown) => {
+                this.log(`Failed to send initialized: ${errorMessage(err)}`);
+            });
             this.log('Server initialized.');
 
             // push the settings once, for servers that read them from didChangeConfiguration
             if (this.settings) {
                 this.log(`Sending workspace/didChangeConfiguration: ${JSON.stringify(this.settings)}`);
-                this.connection.sendNotification('workspace/didChangeConfiguration', { settings: this.settings });
+                this.connection
+                    .sendNotification('workspace/didChangeConfiguration', { settings: this.settings })
+                    .catch((err: unknown) => {
+                        this.log(`Failed to send workspace/didChangeConfiguration: ${errorMessage(err)}`);
+                    });
             }
         } catch (err: unknown) {
             const failure = await this.preferExitError(err, earlyExit);
@@ -1572,7 +1607,10 @@ export class LspHarness {
                     return 'failed' as const;
                 },
             );
-            const outcome = await raceTimeout([shutdown, this.exited.then(() => 'exited' as const)], timeoutMs);
+            const outcome = await raceTimeout(
+                [shutdown, this.writeFailed.then(() => 'failed' as const), this.exited.then(() => 'exited' as const)],
+                timeoutMs,
+            );
             // time shutdown from request to reply, or to however it failed
             const shutdownErrors = {
                 replied: undefined,
@@ -2453,6 +2491,37 @@ function endStream(stream: fs.WriteStream | null): Promise<void> {
 
 /** Direction of a traced message: `out` from lsbench to the server, `in` from the server */
 export type WireDirection = 'out' | 'in';
+
+class SettledMessageWriter implements rpc.MessageWriter {
+    constructor(
+        private readonly inner: rpc.MessageWriter,
+        private readonly onFailure: (err: unknown) => void,
+    ) {}
+
+    get onError(): rpc.Event<[Error, rpc.Message | undefined, number | undefined]> {
+        return this.inner.onError;
+    }
+
+    get onClose(): rpc.Event<void> {
+        return this.inner.onClose;
+    }
+
+    async write(msg: rpc.Message): Promise<void> {
+        try {
+            await this.inner.write(msg);
+        } catch (err: unknown) {
+            this.onFailure(err);
+        }
+    }
+
+    end(): void {
+        this.inner.end();
+    }
+
+    dispose(): void {
+        this.inner.dispose();
+    }
+}
 
 class ObservedMessageReader extends rpc.StreamMessageReader {
     private readonly onRead: (msg: rpc.Message) => void;

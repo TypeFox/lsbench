@@ -504,6 +504,45 @@ describe('LspHarness start of a server exiting with stderr output', () => {
         expect(Date.now() - started).toBeLessThan(1000);
         expect(err.message).toBe('Server exited before initialize (code=1 signal=null).\nServer stderr:\nbefore\n');
     });
+
+    for (const traced of [false, true]) {
+        it(`rejects only the start when the initialize write fails${traced ? ' when tracing' : ''}`, async () => {
+            const rejections: unknown[] = [];
+            const onRejection = (reason: unknown) => rejections.push(reason);
+            process.on('unhandledRejection', onRejection);
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-write-'));
+            try {
+                for (let i = 0; i < 5; i++) {
+                    const trace = traced ? new WireTrace(path.join(dir, `trace-${i}.jsonl`)) : undefined;
+                    const harness = new LspHarness(
+                        { command: 'sh', args: ['-c', 'echo boom >&2; exit 1'] },
+                        process.cwd(),
+                        false,
+                        { trace },
+                    );
+                    const err = await startError(harness);
+                    await trace?.close();
+                    expect(err.message).toBe(
+                        'Server exited before initialize (code=1 signal=null).\nServer stderr:\nboom\n',
+                    );
+                }
+                await new Promise((resolve) => setTimeout(resolve, 300));
+                expect(rejections).toEqual([]);
+            } finally {
+                process.off('unhandledRejection', onRejection);
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        });
+    }
+
+    it('fails the start promptly when a live server closes its input', async () => {
+        const harness = shellHarness('exec 0<&-; sleep 5');
+        const started = Date.now();
+        const err = await startError(harness);
+        expect(Date.now() - started).toBeLessThan(2000);
+        expect(err.message).toMatch(/^cannot write to server: /);
+        expect(harness.exit).toMatchObject({ reason: expect.stringMatching(/^killed by lsbench/) });
+    });
 });
 
 describe('LspHarness publishes read before a reopen', () => {

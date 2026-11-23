@@ -102,6 +102,7 @@ When a server crashes, the tail of its stderr is included in the error message e
 - The tail holds the last 4000 characters.
 - For a server that exits before `initialize` completes, lsbench waits up to 200 ms after the exit for stderr to close, so a stack trace written just before the exit is complete.
 - A grandchild that keeps stderr open does not delay the error past that wait.
+- A server that closes its input but keeps running fails at the first write, with an error such as `cannot write to server: write EPIPE`. During start, the start fails at once. Later, pending requests fail after 200 ms unless the server exits first, and new requests and notifications fail with the same error.
 
 With `--settings-file`, the expanded settings are logged as `Sending workspace/didChangeConfiguration: {...}` each time they're sent.
 
