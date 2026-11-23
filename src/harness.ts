@@ -12,6 +12,7 @@ import type {
     ServerConfig,
     SetupScript,
 } from './types.js';
+import { errorMessage, round } from './util.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
 interface InitializeResult {
@@ -307,13 +308,16 @@ export class DiagnosticsTracker {
         if (typeof params?.uri !== 'string') {
             return;
         }
-        const doc = this.documents.get(this.key(params.uri));
-        this.reads.set(params, {
+        this.reads.set(params, this.readState(this.documents.get(this.key(params.uri))));
+    }
+
+    private readState(doc: TrackedDocument | undefined): ReadState {
+        return {
             generation: doc?.generation ?? 0,
             open: doc?.open ?? false,
             closedAt: doc?.closedAt,
             syncs: this.syncs,
-        });
+        };
     }
 
     /** Record a publish and hand it to the listeners of its URI, unless it is held as a candidate */
@@ -321,12 +325,7 @@ export class DiagnosticsTracker {
         const receivedAt = process.hrtime.bigint();
         const key = this.key(params.uri);
         const doc = this.documents.get(key);
-        const read = this.reads.get(params) ?? {
-            generation: doc?.generation ?? 0,
-            open: doc?.open ?? false,
-            closedAt: doc?.closedAt,
-            syncs: this.syncs,
-        };
+        const read = this.reads.get(params) ?? this.readState(doc);
         this.reads.delete(params);
         let generation = read.generation;
         let tentative = false;
@@ -601,21 +600,6 @@ export class DiagnosticsTracker {
     /** The current sequence number, a publish received after now has a larger seq */
     currentSeq(): number {
         return this.seq;
-    }
-
-    /**
-     * Resolve with the first publish for uri that `accept` takes, checking the cached latest
-     * publish first so a wait registered after the notification still sees it. Resolves
-     * undefined exactly when the timeout timer fires, so callers never infer a timeout from
-     * elapsed time (timers can fire slightly early)
-     */
-    async waitFor(
-        uri: string,
-        accept: (publish: DiagnosticsPublish) => boolean,
-        timeoutMs: number,
-    ): Promise<DiagnosticsPublish | undefined> {
-        const result = await this.waitForPublishes(uri, accept, { timeoutMs });
-        return result.timedOut ? undefined : result.publish;
     }
 
     /**
@@ -1621,7 +1605,7 @@ export class LspHarness {
             await this.output.close();
             this.clearServerState();
         } catch (err: unknown) {
-            this.log(`Cleanup after a failed start failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.log(`Cleanup after a failed start failed: ${errorMessage(err)}`);
         }
     }
 
@@ -1702,13 +1686,13 @@ export class LspHarness {
         const ms = Number(process.hrtime.bigint() - startNs) / 1_000_000;
         const timing: RequestTiming = {
             method,
-            duration_ms: Math.round(ms * 1000) / 1000,
+            duration_ms: round(ms),
             success: error === undefined,
             // lifecycle steps have no meaningful payload (shutdown even replies null by spec)
             result: error === undefined ? 'ok' : 'error',
         };
         if (error !== undefined) {
-            timing.error = (error instanceof Error ? error.message : String(error)).split('\n')[0];
+            timing.error = errorMessage(error).split('\n')[0];
         }
         this.lifecycleTimings.push(timing);
     }
@@ -1872,19 +1856,12 @@ export class LspHarness {
         const result = await this.progress.waitForIdle(options);
         this.lifecycleTimings.push({
             method: 'lifecycle/idle',
-            duration_ms: Math.round(result.ms * 1000) / 1000,
+            duration_ms: round(result.ms),
             success: !result.timedOut,
             result: result.timedOut ? 'timeout' : 'ok',
         });
         this.log(`Server ${result.timedOut ? 'not idle' : 'idle'} after ${result.ms.toFixed(1)}ms`);
         return result;
-    }
-
-    /** Wait for the next diagnostics publication for a URI, falling back to the cached ones on timeout */
-    async onDiagnostics(uri: string, timeoutMs: number): Promise<Diagnostic[]> {
-        const after = this.diagnostics.currentSeq();
-        const publish = await this.diagnostics.waitFor(uri, (p) => p.seq > after, timeoutMs);
-        return publish?.diagnostics ?? this.getDiagnostics(uri);
     }
 
     /** Send a typed LSP request */
@@ -1946,8 +1923,7 @@ export class LspHarness {
                 logUnhandled('notification', method);
                 return;
             }
-            const failed = (err: unknown) =>
-                this.log(`setup handler for ${method} failed: ${err instanceof Error ? err.message : String(err)}`);
+            const failed = (err: unknown) => this.log(`setup handler for ${method} failed: ${errorMessage(err)}`);
             try {
                 Promise.resolve(handler(params)).catch(failed);
             } catch (err: unknown) {
@@ -1971,7 +1947,7 @@ export class LspHarness {
         }
         // a write to a server that just closed its input rejects, which is not ours to surface
         this.conn.sendNotification(method, params).catch((err: unknown) => {
-            this.log(`Failed to send ${method}: ${err instanceof Error ? err.message : String(err)}`);
+            this.log(`Failed to send ${method}: ${errorMessage(err)}`);
         });
         this.diagnostics.noteNotification(method, params);
     }
@@ -2433,10 +2409,7 @@ export class ServerOutput {
         this.flush();
         const stream = this.stream;
         this.stream = null;
-        if (!stream) {
-            return Promise.resolve();
-        }
-        return new Promise((resolve) => stream.end(() => resolve()));
+        return endStream(stream);
     }
 
     private write(text: string): void {
@@ -2452,6 +2425,13 @@ export class ServerOutput {
             this.toConsole(out);
         }
     }
+}
+
+function endStream(stream: fs.WriteStream | null): Promise<void> {
+    if (!stream) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => stream.end(() => resolve()));
 }
 
 /** Direction of a traced message: `out` from lsbench to the server, `in` from the server */
@@ -2511,11 +2491,6 @@ export class WireTrace {
         this.write({ t: this.now(), iteration, warmup });
     }
 
-    /** Wrap a reader so each message it delivers is traced as `in` first */
-    reader(input: NodeJS.ReadableStream): rpc.MessageReader {
-        return new ObservedMessageReader(input, (msg) => this.message('in', msg));
-    }
-
     /** Wrap a writer so each message is traced as `out` before it is written */
     writer(output: NodeJS.WritableStream): rpc.MessageWriter {
         const traceOut = (msg: rpc.Message) => this.message('out', msg);
@@ -2531,10 +2506,7 @@ export class WireTrace {
     close(): Promise<void> {
         const stream = this.stream;
         this.stream = null;
-        if (!stream) {
-            return Promise.resolve();
-        }
-        return new Promise((resolve) => stream.end(() => resolve()));
+        return endStream(stream);
     }
 
     /** Milliseconds since the origin, rounded to microseconds like the report */

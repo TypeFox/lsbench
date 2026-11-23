@@ -32,6 +32,7 @@ import type {
     UntilRejectedWaits,
     WaitForIdleResult,
 } from './types.js';
+import { errorMessage, round } from './util.js';
 
 /** JSON-RPC error code a server sends when a document change invalidated the result */
 const CONTENT_MODIFIED = -32801;
@@ -90,6 +91,49 @@ export const SILENT_WAIT_STREAK = 3;
 
 export type ShortenedKind = 'silent' | 'reopen' | 'until rejected';
 
+interface StreakEntry {
+    waits: number;
+    streak: number;
+    longest: number;
+    shortened: number;
+}
+
+function countStreak(
+    stats: Map<string, Map<string, StreakEntry>>,
+    method: string,
+    uri: string,
+    counts: boolean,
+): Map<string, StreakEntry> {
+    let documents = stats.get(method);
+    if (!documents) {
+        documents = new Map();
+        stats.set(method, documents);
+    }
+    let entry = documents.get(uri);
+    if (!entry) {
+        entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
+        documents.set(uri, entry);
+    }
+    if (!counts) {
+        entry.streak = 0;
+        return documents;
+    }
+    entry.waits++;
+    entry.streak++;
+    entry.longest = Math.max(entry.longest, entry.streak);
+    return documents;
+}
+
+function totals(documents: Map<string, StreakEntry>): { waits: number; longest_streak: number; shortened: number } {
+    const total = { waits: 0, longest_streak: 0, shortened: 0 };
+    for (const entry of documents.values()) {
+        total.waits += entry.waits;
+        total.longest_streak = Math.max(total.longest_streak, entry.longest);
+        total.shortened += entry.shortened;
+    }
+    return total;
+}
+
 function pooled(documents: Map<string, { streak: number }>): number {
     let sum = 0;
     for (const entry of documents.values()) {
@@ -106,15 +150,9 @@ function pooled(documents: Map<string, { streak: number }>): number {
  * publishes failing `until`, ends the streak of its method
  */
 export class SilenceTracker {
-    private stats = new Map<
-        string,
-        Map<string, { waits: number; streak: number; longest: number; shortened: number }>
-    >();
+    private stats = new Map<string, Map<string, StreakEntry>>();
     private rejected = new Map<string, { waits: number; streak: number; shortened: number }>();
-    private reopens = new Map<
-        string,
-        Map<string, { waits: number; streak: number; longest: number; shortened: number }>
-    >();
+    private reopens = new Map<string, Map<string, StreakEntry>>();
     private qualified = new Set<string>();
     private rejectedQualified = new Set<string>();
     private fallbacks = new Set<string>();
@@ -133,24 +171,8 @@ export class SilenceTracker {
 
     /** Record a push wait, returning true once per method when its streak reaches SILENT_WAIT_STREAK */
     record(method: string, uri: string, silent: boolean): boolean {
-        let documents = this.stats.get(method);
-        if (!documents) {
-            documents = new Map();
-            this.stats.set(method, documents);
-        }
-        let entry = documents.get(uri);
-        if (!entry) {
-            entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
-            documents.set(uri, entry);
-        }
-        if (!silent) {
-            entry.streak = 0;
-            return false;
-        }
-        entry.waits++;
-        entry.streak++;
-        entry.longest = Math.max(entry.longest, entry.streak);
-        if (this.qualified.has(method) || pooled(documents) < SILENT_WAIT_STREAK) {
+        const documents = countStreak(this.stats, method, uri, silent);
+        if (!silent || this.qualified.has(method) || pooled(documents) < SILENT_WAIT_STREAK) {
             return false;
         }
         this.qualified.add(method);
@@ -161,13 +183,8 @@ export class SilenceTracker {
     silentWaits(): Record<string, SilentWaits> | undefined {
         let result: Record<string, SilentWaits> | undefined;
         for (const [method, documents] of this.stats) {
-            const total = { waits: 0, longest_streak: 0, shortened: 0 };
-            for (const entry of documents.values()) {
-                total.waits += entry.waits;
-                total.longest_streak = Math.max(total.longest_streak, entry.longest);
-                total.shortened += entry.shortened;
-            }
             if (this.qualified.has(method)) {
+                const total = totals(documents);
                 result ??= {};
                 result[method] = {
                     waits: total.waits,
@@ -213,34 +230,13 @@ export class SilenceTracker {
     }
 
     recordReopen(method: string, uri: string, reopenOnly: boolean): void {
-        let documents = this.reopens.get(method);
-        if (!documents) {
-            documents = new Map();
-            this.reopens.set(method, documents);
-        }
-        let entry = documents.get(uri);
-        if (!entry) {
-            entry = { waits: 0, streak: 0, longest: 0, shortened: 0 };
-            documents.set(uri, entry);
-        }
-        if (!reopenOnly) {
-            entry.streak = 0;
-            return;
-        }
-        entry.waits++;
-        entry.streak++;
-        entry.longest = Math.max(entry.longest, entry.streak);
+        countStreak(this.reopens, method, uri, reopenOnly);
     }
 
     reopenWaits(): Record<string, ReopenWaits> | undefined {
         let result: Record<string, ReopenWaits> | undefined;
         for (const [method, documents] of this.reopens) {
-            const total = { waits: 0, longest_streak: 0, shortened: 0 };
-            for (const entry of documents.values()) {
-                total.waits += entry.waits;
-                total.longest_streak = Math.max(total.longest_streak, entry.longest);
-                total.shortened += entry.shortened;
-            }
+            const total = totals(documents);
             if (total.shortened > 0) {
                 result ??= {};
                 result[method] = total;
@@ -457,50 +453,38 @@ export class BenchContextImpl implements BenchContext {
     // ── Timed LSP requests ──────────────────────────────────────────────
 
     async hover(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/hover', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/hover', this.positionParams(relativePath, line, character));
     }
 
     async completion(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/completion', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/completion', this.positionParams(relativePath, line, character));
     }
 
     async definition(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/definition', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/definition', this.positionParams(relativePath, line, character));
     }
 
     async references(relativePath: string, line: number, character: number): Promise<unknown | null> {
         return this.timedRequest('textDocument/references', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
+            ...this.positionParams(relativePath, line, character),
             context: { includeDeclaration: true },
         });
     }
 
     async documentSymbol(relativePath: string): Promise<unknown | null> {
-        return this.timedRequest('textDocument/documentSymbol', {
-            textDocument: { uri: this.getUri(relativePath) },
-        });
+        return this.timedRequest('textDocument/documentSymbol', this.textDocumentParams(relativePath));
     }
 
     async formatting(relativePath: string): Promise<unknown | null> {
         return this.timedRequest('textDocument/formatting', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             options: FORMATTING_OPTIONS,
         });
     }
 
     async rangeFormatting(relativePath: string, range: Range): Promise<unknown | null> {
         return this.timedRequest('textDocument/rangeFormatting', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             range: toLspRange(range),
             options: FORMATTING_OPTIONS,
         });
@@ -508,8 +492,7 @@ export class BenchContextImpl implements BenchContext {
 
     async onTypeFormatting(relativePath: string, line: number, character: number, ch: string): Promise<unknown | null> {
         return this.timedRequest('textDocument/onTypeFormatting', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
+            ...this.positionParams(relativePath, line, character),
             ch,
             options: FORMATTING_OPTIONS,
         });
@@ -517,8 +500,7 @@ export class BenchContextImpl implements BenchContext {
 
     async rename(relativePath: string, line: number, character: number, newName: string): Promise<unknown | null> {
         return this.timedRequest('textDocument/rename', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
+            ...this.positionParams(relativePath, line, character),
             newName,
         });
     }
@@ -551,95 +533,69 @@ export class BenchContextImpl implements BenchContext {
     }
 
     async signatureHelp(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/signatureHelp', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/signatureHelp', this.positionParams(relativePath, line, character));
     }
 
     async typeDefinition(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/typeDefinition', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/typeDefinition', this.positionParams(relativePath, line, character));
     }
 
     async implementation(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/implementation', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/implementation', this.positionParams(relativePath, line, character));
     }
 
     async declaration(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/declaration', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/declaration', this.positionParams(relativePath, line, character));
     }
 
     async documentHighlight(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/documentHighlight', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/documentHighlight', this.positionParams(relativePath, line, character));
     }
 
     async prepareRename(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/prepareRename', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest('textDocument/prepareRename', this.positionParams(relativePath, line, character));
     }
 
     async foldingRange(relativePath: string): Promise<unknown | null> {
-        return this.timedRequest('textDocument/foldingRange', {
-            textDocument: { uri: this.getUri(relativePath) },
-        });
+        return this.timedRequest('textDocument/foldingRange', this.textDocumentParams(relativePath));
     }
 
     async selectionRange(relativePath: string, positions: Position[]): Promise<unknown | null> {
         return this.timedRequest('textDocument/selectionRange', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             positions: positions.map((p) => ({ line: p.line, character: p.character })),
         });
     }
 
     async documentLink(relativePath: string): Promise<unknown | null> {
-        return this.timedRequest('textDocument/documentLink', {
-            textDocument: { uri: this.getUri(relativePath) },
-        });
+        return this.timedRequest('textDocument/documentLink', this.textDocumentParams(relativePath));
     }
 
     async codeLens(relativePath: string): Promise<unknown | null> {
-        return this.timedRequest('textDocument/codeLens', {
-            textDocument: { uri: this.getUri(relativePath) },
-        });
+        return this.timedRequest('textDocument/codeLens', this.textDocumentParams(relativePath));
     }
 
     async inlayHint(relativePath: string, range: Range): Promise<unknown | null> {
         return this.timedRequest('textDocument/inlayHint', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             range: toLspRange(range),
         });
     }
 
     async semanticTokensFull(relativePath: string): Promise<unknown | null> {
-        return this.timedRequest('textDocument/semanticTokens/full', {
-            textDocument: { uri: this.getUri(relativePath) },
-        });
+        return this.timedRequest('textDocument/semanticTokens/full', this.textDocumentParams(relativePath));
     }
 
     async semanticTokensRange(relativePath: string, range: Range): Promise<unknown | null> {
         return this.timedRequest('textDocument/semanticTokens/range', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             range: toLspRange(range),
         });
     }
 
     async semanticTokensDelta(relativePath: string, previousResultId: string): Promise<unknown | null> {
         return this.timedRequest('textDocument/semanticTokens/full/delta', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             previousResultId,
         });
     }
@@ -649,10 +605,10 @@ export class BenchContextImpl implements BenchContext {
     }
 
     async prepareCallHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/prepareCallHierarchy', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest(
+            'textDocument/prepareCallHierarchy',
+            this.positionParams(relativePath, line, character),
+        );
     }
 
     async callHierarchyIncomingCalls(item: unknown): Promise<unknown | null> {
@@ -664,10 +620,10 @@ export class BenchContextImpl implements BenchContext {
     }
 
     async prepareTypeHierarchy(relativePath: string, line: number, character: number): Promise<unknown | null> {
-        return this.timedRequest('textDocument/prepareTypeHierarchy', {
-            textDocument: { uri: this.getUri(relativePath) },
-            position: { line, character },
-        });
+        return this.timedRequest(
+            'textDocument/prepareTypeHierarchy',
+            this.positionParams(relativePath, line, character),
+        );
     }
 
     async typeHierarchySupertypes(item: unknown): Promise<unknown | null> {
@@ -680,7 +636,7 @@ export class BenchContextImpl implements BenchContext {
 
     async documentDiagnostic(relativePath: string, previousResultId?: string): Promise<unknown | null> {
         return this.timedRequest('textDocument/diagnostic', {
-            textDocument: { uri: this.getUri(relativePath) },
+            ...this.textDocumentParams(relativePath),
             ...(previousResultId !== undefined ? { previousResultId } : {}),
         });
     }
@@ -1029,7 +985,7 @@ export class BenchContextImpl implements BenchContext {
             const heldFrom = publish.receivedAt > calledAt ? publish.receivedAt : calledAt;
             const heldNs = publish.acceptedAt - heldFrom;
             if (heldNs > 0n) {
-                closeWindowMs = Math.round(Number(heldNs) / 1000) / 1000; // 3 decimal places
+                closeWindowMs = Math.round(Number(heldNs) / 1000) / 1000;
             }
         }
 
@@ -1045,7 +1001,7 @@ export class BenchContextImpl implements BenchContext {
 
         const timing: RequestTiming = {
             method,
-            duration_ms: Math.round(ms * 1000) / 1000, // 3 decimal places
+            duration_ms: round(ms),
             success: !timedOut,
             result: timedOut ? 'timeout' : classifyResult(diagnostics),
             diagnostics: diagnostics.length,
@@ -1349,10 +1305,10 @@ export class BenchContextImpl implements BenchContext {
         }
         const method = pullTimingMethod(this.harness.documentState(uri));
         const ms = Math.max(0, Number(endedAt - timedFrom) / 1_000_000); // nanoseconds → milliseconds
-        const graceMs = auto && auto.graceMs > 0 ? Math.round(auto.graceMs * 1000) / 1000 : undefined;
+        const graceMs = auto && auto.graceMs > 0 ? round(auto.graceMs) : undefined;
         const timing: RequestTiming = {
             method,
-            duration_ms: Math.round(ms * 1000) / 1000, // 3 decimal places
+            duration_ms: round(ms),
             success: outcome === 'ok',
             result: outcome === 'ok' ? classifyResult(result) : outcome,
             diagnostics: result.length,
@@ -1456,7 +1412,7 @@ export class BenchContextImpl implements BenchContext {
         const graceMs = graceSpentNs > 0n ? Math.round(Number(graceSpentNs) / 1000) / 1000 : undefined;
         const timing: RequestTiming = {
             method,
-            duration_ms: Math.round(ms * 1000) / 1000, // 3 decimal places
+            duration_ms: round(ms),
             success: false,
             result: 'timeout',
             diagnostics: 0,
@@ -1529,7 +1485,7 @@ export class BenchContextImpl implements BenchContext {
         });
         const timing: RequestTiming = {
             method: 'server/idle',
-            duration_ms: Math.round(result.ms * 1000) / 1000, // 3 decimal places
+            duration_ms: round(result.ms),
             success: !result.timedOut,
             result: result.timedOut ? 'timeout' : 'ok',
         };
@@ -1633,6 +1589,18 @@ export class BenchContextImpl implements BenchContext {
         return pathToUri(path.resolve(this.workspaceRoot, relativePath));
     }
 
+    private textDocumentParams(relativePath: string): { textDocument: { uri: string } } {
+        return { textDocument: { uri: this.getUri(relativePath) } };
+    }
+
+    private positionParams(
+        relativePath: string,
+        line: number,
+        character: number,
+    ): { textDocument: { uri: string }; position: { line: number; character: number } } {
+        return { ...this.textDocumentParams(relativePath), position: { line, character } };
+    }
+
     /**
      * Send a request and record its timing and result. A ContentModified rejection is retried
      * after a short backoff, and only the final attempt is timed, since the earlier ones and
@@ -1683,7 +1651,7 @@ export class BenchContextImpl implements BenchContext {
             const timing: RequestTiming = {
                 method,
                 label,
-                duration_ms: Math.round(duration_ms * 1000) / 1000, // 3 decimal places
+                duration_ms: round(duration_ms),
                 success: failure === undefined,
                 result: failure ? 'error' : classifyResult(result),
                 error: failure?.message,
@@ -1709,7 +1677,7 @@ export class BenchContextImpl implements BenchContext {
         const timing: RequestTiming = {
             method,
             label,
-            duration_ms: Math.round(duration_ms * 1000) / 1000,
+            duration_ms: round(duration_ms),
             success: false,
             result: 'timeout',
             error: failure.message,
@@ -1784,7 +1752,7 @@ export function isCurrentPublish(publish: DiagnosticsPublish, doc: DocumentSyncS
 
 /** Turn a rejection into a RequestError, keeping the JSON-RPC code of a ResponseError */
 function toRequestError(method: string, err: unknown): RequestError {
-    const failure: RequestError = { method, message: err instanceof Error ? err.message : String(err) };
+    const failure: RequestError = { method, message: errorMessage(err) };
     if (typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'number') {
         failure.code = err.code;
     }

@@ -1,4 +1,5 @@
 import type { AbnormalExit, BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
+import { round } from './util.js';
 
 export const PLAINTEXT_FALLBACK_NOTE =
     'Some documents were opened as plaintext, and the server may not serve that language id';
@@ -15,12 +16,6 @@ function percentile(sortedArr: number[], p: number): number {
     }
     const idx = Math.ceil((p / 100) * sortedArr.length) - 1;
     return sortedArr[Math.max(0, idx)];
-}
-
-/** Round to N decimal places */
-function round(value: number, decimals = 3): number {
-    const f = 10 ** decimals;
-    return Math.round(value * f) / f;
 }
 
 /**

@@ -15,6 +15,7 @@ import type {
     ServerConfig,
     SetupScript,
 } from './types.js';
+import { errorMessage, round } from './util.js';
 
 export type ServerConfigOptions = Pick<
     BenchOptions,
@@ -90,7 +91,19 @@ export function actionScriptExtensionError(scriptPath: string): string {
  * parameter properties.
  */
 export async function loadActionScript(scriptPath: string): Promise<ActionScript> {
+    return actionOf(await importActionScript(scriptPath), scriptPath);
+}
+
+export async function loadSetupScript(scriptPath: string): Promise<SetupScript | undefined> {
+    return setupOf(await importActionScript(scriptPath), scriptPath);
+}
+
+async function loadScript(scriptPath: string): Promise<{ action: ActionScript; setup?: SetupScript }> {
     const mod = await importActionScript(scriptPath);
+    return { action: actionOf(mod, scriptPath), setup: setupOf(mod, scriptPath) };
+}
+
+function actionOf(mod: Record<string, unknown>, scriptPath: string): ActionScript {
     const fn = mod.default as ActionScript;
 
     if (typeof fn !== 'function') {
@@ -100,8 +113,7 @@ export async function loadActionScript(scriptPath: string): Promise<ActionScript
     return fn;
 }
 
-export async function loadSetupScript(scriptPath: string): Promise<SetupScript | undefined> {
-    const mod = await importActionScript(scriptPath);
+function setupOf(mod: Record<string, unknown>, scriptPath: string): SetupScript | undefined {
     const setup: unknown = mod.setup;
     if (setup === undefined) {
         return undefined;
@@ -126,8 +138,7 @@ async function importActionScript(scriptPath: string): Promise<Record<string, un
 export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     const workspaceRoot = path.resolve(opts.workspace);
     const serverConfig = resolveServerConfig(opts.server, opts);
-    const actionFn = await loadActionScript(opts.script);
-    const setup = await loadSetupScript(opts.script);
+    const { action: actionFn, setup } = await loadScript(opts.script);
 
     const totalIterations = opts.warmup + opts.iterations;
     const runs: IterationResult[] = [];
@@ -186,7 +197,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                     recordAbnormal({ during, code: exit.code, signal: exit.signal, reason: exit.reason });
                 }
             } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = errorMessage(err);
                 recordAbnormal({ during, code: null, signal: null, reason: `teardown failed: ${msg}` });
             }
         };
@@ -272,7 +283,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                         await stopQuietly(harness, opts.shutdownTimeout);
                         throw err;
                     }
-                    const msg = err instanceof Error ? err.message : String(err);
+                    const msg = errorMessage(err);
                     console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
                     const exit = harness.exit?.abnormal ? harness.exit : null;
                     recordAbnormal({
@@ -290,7 +301,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             try {
                 await actionFn(ctx!);
             } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = errorMessage(err);
                 console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
                 if (opts.verbose && err instanceof Error) {
                     console.error(err.stack);
@@ -309,7 +320,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                 run = {
                     iteration: i - opts.warmup + 1,
                     requests: [...startTimings, ...timings],
-                    total_ms: Math.round(iterMs * 1000) / 1000,
+                    total_ms: round(iterMs),
                 };
                 runs.push(run);
             }

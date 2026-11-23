@@ -5,6 +5,7 @@
 ### Breaking changes
 
 - `resolveServerConfig(server, options?)` takes an options object instead of 8 positional parameters after the command. `ServerConfigOptions` picks `serverArgs`, `initializationOptions`, `clientCapabilities`, `settings`, `allowExitCodes`, `allowExitSignals`, `allowUnrepliedShutdown` and `advertisePullDiagnostics` from `BenchOptions`, so a `BenchOptions` object can be passed as is. The second argument used to be the extra args array, which now throws a `TypeError`. Write `resolveServerConfig(cmd, { serverArgs: args })` instead. `ServerConfigOptions` is exported.
+- `LspHarness.onDiagnostics()`, `DiagnosticsTracker.waitFor()` and `WireTrace.reader()` are removed. Nothing in lsbench used them. Use `DiagnosticsTracker.waitForPublishes(uri, accept, { timeoutMs })` in place of `waitFor()`; its result has `timedOut` and the resolving `publish`.
 
 ### New features
 

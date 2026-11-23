@@ -13,6 +13,7 @@ import { DEFAULT_REQUEST_TIMEOUT_MS } from './context.js';
 import { getPrimer } from './primer.js';
 import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
 import type { BenchOptions, BenchReport } from './types.js';
+import { errorMessage } from './util.js';
 import { CLI_VERSION } from './version.js';
 
 /** idle wait timeout of --wait-idle without a value */
@@ -214,7 +215,7 @@ export function createProgram(): Command {
                 try {
                     fs.appendFileSync(opts.serverLog, '');
                 } catch (err: unknown) {
-                    const msg = err instanceof Error ? err.message : String(err);
+                    const msg = errorMessage(err);
                     console.error(`Error: Cannot write server log ${opts.serverLog}: ${msg}`);
                     process.exit(1);
                 }
@@ -225,7 +226,7 @@ export function createProgram(): Command {
                 try {
                     fs.writeFileSync(opts.trace, '');
                 } catch (err: unknown) {
-                    const msg = err instanceof Error ? err.message : String(err);
+                    const msg = errorMessage(err);
                     console.error(`Error: Cannot write trace ${opts.trace}: ${msg}`);
                     process.exit(1);
                 }
@@ -284,7 +285,7 @@ export function createProgram(): Command {
             try {
                 fs.writeFileSync(output, `${JSON.stringify(createBaseline(report), null, 2)}\n`);
             } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = errorMessage(err);
                 console.error(`Error: Cannot write baseline ${output}: ${msg}`);
                 process.exit(1);
             }
@@ -397,20 +398,20 @@ function parseIntStrict(value: string): number {
 }
 
 /** Read and parse a JSON file named by a CLI flag, exiting with an error if it is missing or invalid */
-function readJsonFile(file: string | undefined, what: string): unknown {
+function readJsonFile(file: string | undefined, what: string, exitCode = 1): unknown {
     if (!file) {
         return undefined;
     }
     if (!fs.existsSync(file)) {
         console.error(`Error: ${what} file not found: ${file}`);
-        process.exit(1);
+        process.exit(exitCode);
     }
     try {
         return JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         console.error(`Error: Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
-        process.exit(1);
+        process.exit(exitCode);
     }
 }
 
@@ -426,18 +427,7 @@ function readJsonObjectFile(file: string | undefined, what: string): Record<stri
 
 /** Reads a report or baseline, exiting with exitCode if it is missing, invalid or lacks checked fields */
 function readCheckedRun(file: string, what: string, exitCode: number): CheckedRun {
-    if (!fs.existsSync(file)) {
-        console.error(`Error: ${what} file not found: ${file}`);
-        process.exit(exitCode);
-    }
-    let value: unknown;
-    try {
-        value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`Error: Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
-        process.exit(exitCode);
-    }
+    const value = readJsonFile(file, what, exitCode);
     const error = validateCheckedRun(value);
     if (error) {
         console.error(`Error: ${what} file ${file} is not an lsbench report or baseline: ${error}`);

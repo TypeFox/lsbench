@@ -1,4 +1,5 @@
 import type { BenchReport, MethodStats } from './types.js';
+import { round } from './util.js';
 
 /** Version of the baseline file format, bumped on incompatible changes */
 export const BASELINE_FORMAT = 1;
@@ -243,8 +244,4 @@ export function formatCheckResult(result: CheckResult): string {
 
 function formatValue(value: unknown): string {
     return typeof value === 'number' ? String(round(value)) : String(value);
-}
-
-function round(value: number): number {
-    return Math.round(value * 1000) / 1000;
 }

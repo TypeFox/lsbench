@@ -1746,6 +1746,16 @@ describe('LspHarness settings', () => {
     });
 });
 
+async function firstPublish(
+    tracker: DiagnosticsTracker,
+    uri: string,
+    accept: (publish: DiagnosticsPublish) => boolean,
+    timeoutMs: number,
+): Promise<DiagnosticsPublish | undefined> {
+    const result = await tracker.waitForPublishes(uri, accept, { timeoutMs });
+    return result.timedOut ? undefined : result.publish;
+}
+
 describe('DiagnosticsTracker', () => {
     const uri = 'file:///w/a.ts';
     const open = (version = 1) => ({ textDocument: { uri, languageId: 'typescript', version, text: '' } });
@@ -1823,7 +1833,7 @@ describe('DiagnosticsTracker', () => {
         it('matches a percent-encoded publish to the document opened unencoded, on any platform', async () => {
             const tracker = new DiagnosticsTracker(undefined, undefined, undefined, 'linux');
             tracker.noteNotification('textDocument/didOpen', openNote);
-            const wait = tracker.waitFor(opened, () => true, 5000);
+            const wait = firstPublish(tracker, opened, () => true, 5000);
             const publish = tracker.receive({ uri: 'file:///Users/Me/My%20Project/a.ts', diagnostics: message });
             expect(publish.generation).toBe(1);
             expect(await wait).toBe(publish);
@@ -1842,7 +1852,7 @@ describe('DiagnosticsTracker', () => {
             tracker.noteNotification('textDocument/didOpen', {
                 textDocument: { uri, languageId: 'typescript', version: 1, text: '' },
             });
-            const wait = tracker.waitFor(uri, () => true, 5000);
+            const wait = firstPublish(tracker, uri, () => true, 5000);
             const publish = tracker.receive({ uri: published, diagnostics: message });
             expect(publish.generation).toBe(1);
             expect(await wait).toBe(publish);
@@ -1857,7 +1867,7 @@ describe('DiagnosticsTracker', () => {
                 platform,
             );
             tracker.noteNotification('textDocument/didOpen', openNote);
-            const wait = tracker.waitFor(opened, () => true, 5000);
+            const wait = firstPublish(tracker, opened, () => true, 5000);
             const publish = tracker.receive({ uri: 'file:///users/me/my%20project/a.ts', diagnostics: message });
             expect(statuses).toEqual(['current']);
             expect(publish.generation).toBe(1);
@@ -1940,7 +1950,7 @@ describe('DiagnosticsTracker', () => {
             const logs: string[] = [];
             const tracker = reopened(1000, logs);
             const stale = tracker.receive({ uri, diagnostics: [] });
-            const wait = tracker.waitFor(uri, current(tracker), 5000);
+            const wait = firstPublish(tracker, uri, current(tracker), 5000);
             expect(tracker.latestPublish(uri)?.seq).not.toBe(stale.seq);
             const fresh = tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
             expect((await wait)?.diagnostics.map((d) => d.message)).toEqual(['fresh']);
@@ -1955,7 +1965,7 @@ describe('DiagnosticsTracker', () => {
             const logs: string[] = [];
             const tracker = reopened(40, logs);
             const candidate = tracker.receive({ uri, diagnostics: [] });
-            const wait = tracker.waitFor(uri, current(tracker), 5000);
+            const wait = firstPublish(tracker, uri, current(tracker), 5000);
             const accepted = await wait;
             expect(accepted).toBe(candidate);
             expect(process.hrtime.bigint() - candidate.receivedAt).toBeGreaterThan(20_000_000n);
@@ -2039,7 +2049,7 @@ describe('DiagnosticsTracker', () => {
             expect(statuses.at(-1)).toBe('close candidate');
             expect(tracker.latestPublish(uri)).not.toBe(late);
             // not superseded: accepted with its receipt time, without unlearning publishes on close
-            expect(await tracker.waitFor(uri, current(tracker), 5000)).toBe(late);
+            expect(await firstPublish(tracker, uri, current(tracker), 5000)).toBe(late);
             expect(late.acceptedAt).toBeDefined();
             expect(tracker.closeBehavior).toBe('publishes');
         });
@@ -2047,7 +2057,7 @@ describe('DiagnosticsTracker', () => {
         it('lets a publish supersede a further empty candidate held after the reopen', async () => {
             const { tracker } = clearedAndReopened(1000, false);
             tracker.receive({ uri, diagnostics: [] });
-            const wait = tracker.waitFor(uri, current(tracker), 5000);
+            const wait = firstPublish(tracker, uri, current(tracker), 5000);
             tracker.receive({ uri, diagnostics: [{ range: {}, message: 'fresh' }] });
             expect((await wait)?.diagnostics.map((d) => d.message)).toEqual(['fresh']);
             tracker.clear();
@@ -2095,7 +2105,7 @@ describe('DiagnosticsTracker', () => {
             it('credits a versioned empty close publish read before the reopen to the close', async () => {
                 const { tracker, statuses } = tracking();
                 tracker.noteNotification('textDocument/didOpen', open());
-                const wait = tracker.waitFor(uri, current(tracker), 5000);
+                const wait = firstPublish(tracker, uri, current(tracker), 5000);
                 tracker.noteNotification('textDocument/didClose', close);
                 await Promise.resolve();
                 const params = { uri, version: 1, diagnostics: [] as [] };
@@ -2106,7 +2116,7 @@ describe('DiagnosticsTracker', () => {
                 expect(late.generation).toBe(1);
                 expect(tracker.closeBehavior).toBe('publishes');
                 expect(tracker.document(uri)).toMatchObject({ closePublishes: 1, closePublishesAfterReopen: 0 });
-                const reopenWait = tracker.waitFor(uri, current(tracker), 5000);
+                const reopenWait = firstPublish(tracker, uri, current(tracker), 5000);
                 const fresh = tracker.receive({ uri, version: 1, diagnostics: [{ range: {}, message: 'F401' }] });
                 expect(statuses.at(-1)).toBe('current');
                 expect(await reopenWait).toBe(fresh);
@@ -2237,7 +2247,7 @@ describe('DiagnosticsTracker', () => {
                     expect(statuses.at(-1)).toBe('current');
                     expect(reopen.generation).toBe(tracker.document(uri)?.generation);
                     expect(tracker.latestPublish(uri)).toBe(reopen);
-                    expect(await tracker.waitFor(uri, current(tracker), 5)).toBe(reopen);
+                    expect(await firstPublish(tracker, uri, current(tracker), 5)).toBe(reopen);
                     expect(reopen.acceptedAt).toBeUndefined();
                     expect(tracker.closeWindowEndsAt(uri)).toBeUndefined();
                     await sleep(40);
@@ -2426,7 +2436,7 @@ describe('DiagnosticsTracker', () => {
                 tracker.receive({ uri, diagnostics: [] });
                 tracker.noteNotification('textDocument/didClose', { textDocument: { uri: other } });
                 tracker.noteNotification('textDocument/didOpen', open());
-                const wait = tracker.waitFor(uri, current(tracker), 5000);
+                const wait = firstPublish(tracker, uri, current(tracker), 5000);
                 const reopen = tracker.receive({ uri, diagnostics: [] });
                 expect(statuses.at(-1)).toBe('current');
                 expect(reopen.generation).toBe(2);
@@ -2483,8 +2493,8 @@ describe('DiagnosticsTracker', () => {
     it('resolves from the cache, and unregisters a wait once it settles', async () => {
         const tracker = new DiagnosticsTracker();
         tracker.receive({ uri, diagnostics: [] });
-        expect(await tracker.waitFor(uri, () => true, 1000)).toBeDefined();
-        expect(await tracker.waitFor(uri, () => false, 5)).toBeUndefined();
+        expect(await firstPublish(tracker, uri, () => true, 1000)).toBeDefined();
+        expect(await firstPublish(tracker, uri, () => false, 5)).toBeUndefined();
         const listeners = (tracker as unknown as { listeners: Map<string, unknown> }).listeners;
         expect(listeners.size).toBe(0);
     });

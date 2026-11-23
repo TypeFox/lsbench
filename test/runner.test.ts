@@ -269,6 +269,24 @@ describe('runBenchmark with a script setup', () => {
             expect(spawns).toHaveLength(restart ? 3 : 1);
         });
     }
+
+    it('rejects a script whose setup export is not a function', async () => {
+        const script = path.join(tmpDir, 'bad-setup.mjs');
+        fs.writeFileSync(script, 'export const setup = 1;\nexport default async function () {}\n', 'utf-8');
+        await expect(
+            runBenchmark({
+                server: process.execPath,
+                serverArgs: ['--input-type=module', '-e', awaitingClientServer],
+                workspace: tmpDir,
+                script,
+                iterations: 1,
+                warmup: 0,
+                output: path.join(tmpDir, 'report-bad-setup.json'),
+                restart: false,
+                verbose: false,
+            }),
+        ).rejects.toThrow(/must export setup as a function/);
+    });
 });
 
 /** a fake server that exits on shutdown without replying */
