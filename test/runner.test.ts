@@ -851,7 +851,12 @@ describe('runBenchmark with allowExitCodes', () => {
         });
     }
 
-    it('records an allowed signal after a replied shutdown as tolerated, not abnormal', async () => {
+    // a SIGSEGV may dump core first (about 1.8s per teardown on Linux CI), and these tests tear down 3 servers
+    const SIGNAL_TEST_TIMEOUT_MS = 15000;
+
+    it('records an allowed signal after a replied shutdown as tolerated, not abnormal', {
+        timeout: SIGNAL_TEST_TIMEOUT_MS,
+    }, async () => {
         const output = path.join(tmpDir, 'report-signal-allowed.json');
         const report = await runBenchmark(options('segv', true, output, undefined, ['SIGSEGV']));
 
@@ -866,7 +871,9 @@ describe('runBenchmark with allowExitCodes', () => {
         );
     });
 
-    it('records a signal after a replied shutdown as abnormal when only codes are allowed', async () => {
+    it('records a signal after a replied shutdown as abnormal when only codes are allowed', {
+        timeout: SIGNAL_TEST_TIMEOUT_MS,
+    }, async () => {
         const report = await runBenchmark(options('segv', true, path.join(tmpDir, 'report-signal.json'), [1]));
         expect(report.tolerated_exits).toBeUndefined();
         expect(report.abnormal_exits?.map((e) => e.signal)).toEqual(['SIGSEGV', 'SIGSEGV', 'SIGSEGV']);
