@@ -1,11 +1,5 @@
 # CHANGELOG
 
-## Unreleased
-
-### Fixes
-
-- A server that crashes with its own signal after lsbench sent `SIGTERM` is classified by that signal. A server that took longer than the 1 second exit wait to die from `SIGSEGV` used to read `killed by lsbench (signal SIGSEGV)`, was listed in neither `abnormal_exits` nor `tolerated_exits`, and lsbench exited 0. It now reads `exited after shutdown with signal SIGSEGV` and is abnormal, or tolerated with `--allow-exit-signal SIGSEGV`. Only an exit by the `SIGTERM` or `SIGKILL` lsbench sent, or a code exit after it, such as `143` from a `SIGTERM` handler, reads `killed by lsbench (...)`.
-
 ## v0.4.0
 
 Changes since 0.3.0. Action scripts can answer custom server messages through `setup`, `codeAction` can send `context.only` and overlapping diagnostics, and new flags tolerate known exits after shutdown. Startup, shutdown, requests and file URIs are hardened, diagnostics waits count and shorten more accurately, and more file extensions open with their proper language id.
@@ -65,6 +59,7 @@ Changes since 0.3.0. Action scripts can answer custom server messages through `s
 - `SilenceTracker.recordReopen` takes the document uri (`recordReopen(method, uri, reopenOnly)`), and `shortens` and `recordShortened` take it for the `reopen` kind.
 - `--shorten-silent-waits` keeps the silent streak per document instead of per method, so a document whose wait resolves no longer resets the streak of other documents. marksman `open-diagnostics`, `navigation` and `workspace` waits for clean documents are now shortened. `silent_waits` keeps its shape: `waits` and `shortened` are summed over documents, `longest_streak` is the longest of any document. The silent wait hint is still logged once per method.
 - `SilenceTracker.record` takes the document uri (`record(method, uri, silent)`), and `shortens` and `recordShortened` take it for the `silent` kind.
+- A server that crashes with its own signal after lsbench sent `SIGTERM` is classified by that signal. A server that took longer than the 1 second exit wait to die from `SIGSEGV` used to read `killed by lsbench (signal SIGSEGV)`, was listed in neither `abnormal_exits` nor `tolerated_exits`, and lsbench exited 0. It now reads `exited after shutdown with signal SIGSEGV` and is abnormal, or tolerated with `--allow-exit-signal SIGSEGV`. Only an exit by the `SIGTERM` or `SIGKILL` lsbench sent, or a code exit after it, such as `143` from a `SIGTERM` handler, reads `killed by lsbench (...)`.
 
 ### Documentation and maintenance
 
