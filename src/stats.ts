@@ -1,5 +1,5 @@
 import type { AbnormalExit, BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
-import { round } from './util.js';
+import { round, serverLabel, transportLabel } from './util.js';
 
 export const PLAINTEXT_FALLBACK_NOTE =
     'Some documents were opened as plaintext, and the server may not serve that language id';
@@ -188,7 +188,7 @@ export function buildReport(
     lifecycle?: RequestTiming[],
 ): BenchReport {
     const report: BenchReport = {
-        server: opts.server,
+        server: serverLabel(opts),
         workspace: opts.workspace,
         script: opts.script,
         iterations: opts.iterations,
@@ -200,6 +200,10 @@ export function buildReport(
         iteration_summary: computeIterationSummary(runs),
         runs,
     };
+    const transport = transportLabel(opts.transport);
+    if (transport) {
+        report.transport = transport;
+    }
     if (lifecycle) {
         report.lifecycle = lifecycle;
     }
@@ -225,6 +229,9 @@ function describeExitCodes(exits: AbnormalExit[]): string {
     if (signals.size > 0) {
         const sorted = [...signals].sort();
         parts.push(`${sorted.length === 1 ? 'signal' : 'signals'} ${sorted.join(', ')}`);
+    }
+    if (parts.length === 0) {
+        parts.push('closed connection');
     }
     return `${parts.join(', ')} after shutdown, allowed`;
 }

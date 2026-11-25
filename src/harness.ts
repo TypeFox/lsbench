@@ -1,7 +1,9 @@
 import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import type { Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as rpc from 'vscode-jsonrpc/node';
 import type {
@@ -10,6 +12,7 @@ import type {
     RequestTiming,
     ServerCapabilities,
     ServerConfig,
+    ServerTransport,
     SetupScript,
 } from './types.js';
 import { errorMessage, round } from './util.js';
@@ -1100,6 +1103,11 @@ export function linkPlaceholders(diagnostics: DiagnosticsTracker, progress: Prog
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
 const KILL_WAIT_MS = 3000;
 const KILL_TIMEOUT_REASON = 'did not exit after SIGKILL';
+export const DEFAULT_CONNECT_TIMEOUT_MS = 10000;
+const CONNECT_RETRY_MS = 100;
+const CLOSE_EXIT_WAIT_MS = 200;
+const SOCKET_CLOSE_WAIT_MS = 500;
+const LISTEN_HOST = '127.0.0.1';
 
 /** How the server process ended */
 export interface ServerExit {
@@ -1127,6 +1135,8 @@ export interface LspHarnessOptions {
  */
 export class LspHarness {
     private process: cp.ChildProcess | null = null;
+    private socket: net.Socket | null = null;
+    private closingSocket = false;
     private connection: rpc.MessageConnection | null = null;
     private diagnostics: DiagnosticsTracker;
     private progress: ProgressTracker;
@@ -1249,20 +1259,12 @@ export class LspHarness {
 
     /** Spawn the language server and perform LSP initialize/initialized handshake */
     async start(): Promise<void> {
-        const { command, args = [], env } = this.config;
+        const { env } = this.config;
+        const transport: ServerTransport = this.config.transport ?? { kind: 'stdio' };
+        if (this.config.command === undefined && transport.kind !== 'connect') {
+            throw new Error('a server command is required unless the transport is connect');
+        }
 
-        this.log(`Spawning: ${command} ${args.join(' ')}`);
-        this.output.open(command, args);
-        this.trace?.spawn(command, args);
-        const spawnStart = process.hrtime.bigint();
-
-        // spawn from the current working directory, not the workspace: the server
-        // command may be a path relative to cwd, while the workspace is communicated
-        // to the server via rootUri/workspaceFolders in the initialize params below
-        this.process = cp.spawn(command, args, {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            env: { ...process.env, ...env },
-        });
         this._exit = null;
         this.shutdownReplied = false;
         this.shutdownSent = false;
@@ -1270,26 +1272,64 @@ export class LspHarness {
         this.sentSignals.clear();
         this.stopping = false;
         this.exitError = null;
-        const child = this.process;
-        const spawned = new Promise<void>((resolve) => child.once('spawn', () => resolve()));
-        this.exited = new Promise((resolve) => {
-            child.once('exit', () => resolve());
-            // a process that failed to spawn never emits exit
-            child.once('error', () => {
-                if (child.pid === undefined) {
-                    resolve();
-                }
-            });
-        });
+        this.socket = null;
+        this.closingSocket = false;
 
-        // capture stderr, and retain the tail so we can report it if the server dies
-        let stderrTail = '';
-        this.process.stderr?.on('data', (chunk: Buffer) => {
-            const text = chunk.toString();
-            stderrTail = (stderrTail + text).slice(-4000);
-            this.output.stderr(text);
+        let listener: SocketListener | null = null;
+        let port: number | undefined;
+        if (transport.kind === 'socket') {
+            listener = await listenForServer(transport.port);
+            port = listener.port;
+        } else if (transport.kind === 'connect') {
+            port = transport.port;
+        }
+        const fillPort = (value: string) => (port === undefined ? value : value.replaceAll('{port}', String(port)));
+        const command = this.config.command === undefined ? undefined : fillPort(this.config.command);
+        const args = (this.config.args ?? []).map(fillPort);
+        const endpoint =
+            transport.kind === 'stdio'
+                ? undefined
+                : `${transport.kind} ${transport.kind === 'connect' ? transport.host : LISTEN_HOST}:${port}`;
+
+        if (command === undefined) {
+            this.log(`Connecting: ${endpoint}`);
+        } else {
+            this.log(`Spawning: ${command} ${args.join(' ')}${endpoint ? ` (${endpoint})` : ''}`);
+        }
+        this.output.open(command ?? String(endpoint), command === undefined ? [] : args);
+        this.trace?.spawn(command, args, endpoint);
+        const spawnStart = process.hrtime.bigint();
+
+        // spawn from the current working directory, not the workspace: the server
+        // command may be a path relative to cwd, while the workspace is communicated
+        // to the server via rootUri/workspaceFolders in the initialize params below
+        const child =
+            command === undefined
+                ? null
+                : cp.spawn(command, args, {
+                      stdio: ['pipe', 'pipe', 'pipe'],
+                      env: { ...process.env, ...env },
+                  });
+        this.process = child;
+        let onSocketClosed: () => void = () => {};
+        const socketClosed = new Promise<void>((resolve) => {
+            onSocketClosed = resolve;
         });
-        this.process.stderr?.on('end', () => this.output.flush());
+        const spawned = child
+            ? new Promise<void>((resolve) => child.once('spawn', () => resolve()))
+            : Promise.resolve();
+        const gone = child
+            ? new Promise<void>((resolve) => {
+                  child.once('exit', () => resolve());
+                  // a process that failed to spawn never emits exit
+                  child.once('error', () => {
+                      if (child.pid === undefined) {
+                          resolve();
+                      }
+                  });
+              })
+            : socketClosed;
+        this.exited = gone;
 
         // reject the initialize handshake if the process dies or fails to spawn,
         // otherwise sendRequest('initialize') hangs forever with no response
@@ -1298,31 +1338,90 @@ export class LspHarness {
             onEarlyExit = reject;
         });
 
-        this.process.on('error', (err) => {
-            if (child.pid === undefined) {
-                this._exit = { code: null, signal: null, abnormal: true, reason: `failed to spawn (${err.message})` };
-            }
-            onEarlyExit(new Error(`Server process failed to spawn: ${err.message}`));
-        });
+        let stderrTail = '';
+        let rpcInput: Readable | null = transport.kind === 'stdio' ? (child?.stdout ?? null) : null;
+        let closedExit: ServerExit | null = null;
 
-        this.process.on('exit', (code, signal) => {
-            this.log(`Server exited: code=${code} signal=${signal}`);
-            if (this._exit?.reason !== KILL_TIMEOUT_REASON) {
-                this._exit = this.describeExit(code, signal);
+        if (child) {
+            // capture stderr, and retain the tail so we can report it if the server dies
+            child.stderr?.on('data', (chunk: Buffer) => {
+                const text = chunk.toString();
+                stderrTail = (stderrTail + text).slice(-4000);
+                this.output.stderr(text);
+            });
+            child.stderr?.on('end', () => this.output.flush());
+            if (transport.kind !== 'stdio') {
+                child.stdout?.on('data', (chunk: Buffer) => this.output.stdout(chunk.toString()));
+                child.stdout?.on('end', () => this.output.flush());
             }
+
+            child.on('error', (err) => {
+                if (child.pid === undefined) {
+                    this._exit = {
+                        code: null,
+                        signal: null,
+                        abnormal: true,
+                        reason: `failed to spawn (${err.message})`,
+                    };
+                }
+                onEarlyExit(new Error(`Server process failed to spawn: ${err.message}`));
+            });
+
+            child.on('exit', (code, signal) => {
+                this.log(`Server exited: code=${code} signal=${signal}`);
+                const described = this.describeExit(code, signal);
+                const keep =
+                    this._exit?.reason === KILL_TIMEOUT_REASON ||
+                    (this._exit !== null && this._exit === closedExit && !described.abnormal);
+                if (!keep) {
+                    this._exit = described;
+                }
+                const reason = this._exit?.reason ?? described.reason;
+                const rejectStart = () =>
+                    onEarlyExit(
+                        new Error(
+                            `Server exited before initialize (code=${code} signal=${signal}).` +
+                                (stderrTail ? `\nServer stderr:\n${stderrTail}` : ''),
+                        ),
+                    );
+                if (this.stopping) {
+                    rejectStart();
+                } else {
+                    this.failPendingRequests([rpcInput, child.stderr], `server ${reason}`, rejectStart);
+                }
+            });
+        }
+
+        const connectionClosed = async () => {
+            this.log('Server connection closed');
+            if (child) {
+                if (this.stopping || hasExited(child)) {
+                    return;
+                }
+                await raceTimeout([gone], CLOSE_EXIT_WAIT_MS);
+                if (this.stopping || hasExited(child)) {
+                    return;
+                }
+            }
+            if (this._exit) {
+                return;
+            }
+            const exit = this.describeClose();
+            closedExit = exit;
+            this._exit = exit;
             const rejectStart = () =>
                 onEarlyExit(
                     new Error(
-                        `Server exited before initialize (code=${code} signal=${signal}).` +
+                        'Server closed the connection before initialize.' +
                             (stderrTail ? `\nServer stderr:\n${stderrTail}` : ''),
                     ),
                 );
             if (this.stopping) {
                 rejectStart();
             } else {
-                this.failPendingRequests(child, `server ${this._exit.reason}`, rejectStart);
+                this.failPendingRequests([], `server ${exit.reason}`, rejectStart);
             }
-        });
+        };
 
         let onWriteFailure: (err: Error) => void = () => {};
         const writeFailed = new Promise<Error>((resolve) => {
@@ -1351,9 +1450,45 @@ export class LspHarness {
             });
         };
 
-        // Create JSON-RPC connection over stdio
-        const input = this.process.stdout!;
-        const output = this.process.stdin!;
+        let input: NodeJS.ReadableStream;
+        let output: NodeJS.WritableStream;
+        if (transport.kind === 'stdio') {
+            input = child!.stdout!;
+            output = child!.stdin!;
+        } else {
+            const timeoutMs = transport.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+            const open = (signal: AbortSignal): Promise<net.Socket> => {
+                if (listener) {
+                    return acceptServer(listener, timeoutMs, signal);
+                }
+                const host = transport.kind === 'connect' ? transport.host : LISTEN_HOST;
+                return connectToServer(host, port ?? 0, timeoutMs, signal);
+            };
+            let socket: net.Socket;
+            try {
+                if (child) {
+                    await this.timeSpawn(spawned, earlyExit, spawnStart);
+                }
+                socket = await this.openSocket(open, earlyExit);
+            } catch (err: unknown) {
+                const failure = await this.preferExitError(err, earlyExit);
+                await this.abortStart(child);
+                throw failure;
+            } finally {
+                listener?.close();
+            }
+            socket.setNoDelay(true);
+            socket.on('error', (err) => this.log(`Server connection error: ${err.message}`));
+            socket.once('close', () => {
+                onSocketClosed();
+                void connectionClosed();
+            });
+            this.socket = socket;
+            rpcInput = socket;
+            input = socket;
+            output = socket;
+        }
+
         const trace = this.trace;
         const diagnostics = this.diagnostics;
         this.connection = rpc.createMessageConnection(
@@ -1474,13 +1609,8 @@ export class LspHarness {
         this.routeScriptMessages(connection, scriptNotifications, scriptRequests);
 
         try {
-            // time spawn up to the OS reporting the process as started
-            try {
-                await Promise.race([spawned, earlyExit]);
-                this.recordLifecycle('lifecycle/spawn', spawnStart);
-            } catch (err: unknown) {
-                this.recordLifecycle('lifecycle/spawn', spawnStart, err);
-                throw err;
+            if (transport.kind === 'stdio') {
+                await this.timeSpawn(spawned, earlyExit, spawnStart);
             }
 
             if (this.setup) {
@@ -1563,6 +1693,38 @@ export class LspHarness {
         }
     }
 
+    private async timeSpawn(spawned: Promise<void>, earlyExit: Promise<never>, spawnStart: bigint): Promise<void> {
+        try {
+            await Promise.race([spawned, earlyExit]);
+            this.recordLifecycle('lifecycle/spawn', spawnStart);
+        } catch (err: unknown) {
+            this.recordLifecycle('lifecycle/spawn', spawnStart, err);
+            throw err;
+        }
+    }
+
+    private async openSocket(
+        open: (signal: AbortSignal) => Promise<net.Socket>,
+        earlyExit: Promise<never>,
+    ): Promise<net.Socket> {
+        const connectStart = process.hrtime.bigint();
+        const abort = new AbortController();
+        const opening = open(abort.signal);
+        try {
+            const socket = await Promise.race([opening, earlyExit]);
+            this.recordLifecycle('lifecycle/connect', connectStart);
+            return socket;
+        } catch (err: unknown) {
+            this.recordLifecycle('lifecycle/connect', connectStart, err);
+            abort.abort();
+            void opening.then(
+                (socket) => socket.destroy(),
+                () => {},
+            );
+            throw err;
+        }
+    }
+
     private async preferExitError(err: unknown, earlyExit: Promise<never>): Promise<unknown> {
         if (err instanceof rpc.ResponseError && err.code !== rpc.ErrorCodes.MessageWriteError) {
             return err;
@@ -1640,18 +1802,42 @@ export class LspHarness {
         if (child) {
             await this.killChild(child);
         }
+        if (this.socket) {
+            await this.closeSocket(this.socket);
+        }
+        this.socket = null;
         this.process = null;
         await this.output.close();
         this.clearServerState();
         return this._exit;
     }
 
-    private async abortStart(child: cp.ChildProcess): Promise<void> {
+    private async closeSocket(socket: net.Socket): Promise<void> {
+        if (socket.destroyed) {
+            return;
+        }
+        this.closingSocket = true;
+        const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+        socket.end();
+        if ((await raceTimeout([closed], SOCKET_CLOSE_WAIT_MS)) === 'timeout') {
+            socket.destroy();
+            await closed;
+        }
+    }
+
+    private async abortStart(child: cp.ChildProcess | null): Promise<void> {
         this.stopping = true;
         try {
-            await this.killChild(child);
+            if (child) {
+                await this.killChild(child);
+            }
             this.connection?.dispose();
             this.connection = null;
+            if (this.socket) {
+                this.closingSocket = true;
+                this.socket.destroy();
+                this.socket = null;
+            }
             this.process = null;
             await this.output.close();
             this.clearServerState();
@@ -1661,7 +1847,7 @@ export class LspHarness {
     }
 
     private async killChild(child: cp.ChildProcess): Promise<void> {
-        if (this._exit || child.pid === undefined) {
+        if (child.pid === undefined || hasExited(child) || this._exit?.reason === KILL_TIMEOUT_REASON) {
             return;
         }
         this.sentSignals.add('SIGTERM');
@@ -1671,9 +1857,11 @@ export class LspHarness {
         if ((await raceTimeout([this.exited], 3000)) === 'timeout') {
             this.sentSignals.add('SIGKILL');
             child.kill('SIGKILL');
-            if ((await raceTimeout([this.exited], KILL_WAIT_MS)) === 'timeout' && !this._exit) {
+            if ((await raceTimeout([this.exited], KILL_WAIT_MS)) === 'timeout' && !hasExited(child)) {
                 this.log(`Server pid ${child.pid} did not exit within ${KILL_WAIT_MS}ms of SIGKILL, leaving it`);
-                this._exit = { code: null, signal: null, abnormal: true, reason: KILL_TIMEOUT_REASON };
+                if (!this._exit?.abnormal) {
+                    this._exit = { code: null, signal: null, abnormal: true, reason: KILL_TIMEOUT_REASON };
+                }
             }
         }
     }
@@ -1689,7 +1877,7 @@ export class LspHarness {
      * requests awaiting a reply once the server's output is drained, since vscode-jsonrpc
      * rejects them only on dispose. A reply written just before the exit still arrives
      */
-    private failPendingRequests(child: cp.ChildProcess, message: string, beforeFail?: () => void): void {
+    private failPendingRequests(streams: Array<Readable | null>, message: string, beforeFail?: () => void): void {
         const error = new Error(message);
         this.exitError = error;
         const connection = this.connection;
@@ -1708,7 +1896,7 @@ export class LspHarness {
                     stream.off('close', done);
                 });
             });
-        const drained = Promise.all([drain(child.stdout), drain(child.stderr)]).then(() => undefined);
+        const drained = Promise.all(streams.map(drain)).then(() => undefined);
         // a grandchild may keep stdout open, so do not wait on it for long
         void raceTimeout([drained], 200).then(() => {
             for (const cleanup of cleanups) {
@@ -1747,6 +1935,28 @@ export class LspHarness {
             timing.error = errorMessage(error).split('\n')[0];
         }
         this.lifecycleTimings.push(timing);
+    }
+
+    private describeClose(): ServerExit {
+        const closed = { code: null, signal: null };
+        if (this.closingSocket) {
+            return { ...closed, abnormal: false, reason: 'disconnected by lsbench' };
+        }
+        if (this.shutdownReplied) {
+            return { ...closed, abnormal: false, reason: 'closed the connection after shutdown' };
+        }
+        if (this.shutdownErrored) {
+            return { ...closed, abnormal: false, reason: 'closed the connection after failed shutdown' };
+        }
+        if (this.shutdownSent && this.config.allowUnrepliedShutdown) {
+            return {
+                ...closed,
+                abnormal: false,
+                tolerated: true,
+                reason: 'closed the connection after unreplied shutdown (allowed)',
+            };
+        }
+        return { ...closed, abnormal: true, reason: 'closed the connection unexpectedly' };
     }
 
     /** Classify a process exit, signals we sent and a clean (or allowed) exit after shutdown are normal */
@@ -2413,6 +2623,7 @@ function formatServerLogHeader(command: string, args: string[], date = new Date(
 export class ServerOutput {
     private stream: fs.WriteStream | null = null;
     private partial = '';
+    private stdoutPartial = '';
 
     constructor(
         private file: string | undefined,
@@ -2439,12 +2650,11 @@ export class ServerOutput {
 
     /** A raw stderr chunk, possibly ending mid line */
     stderr(chunk: string): void {
-        const text = this.partial + chunk;
-        const end = text.lastIndexOf('\n');
-        this.partial = text.slice(end + 1);
-        if (end >= 0) {
-            this.write(text.slice(0, end));
-        }
+        this.partial = this.writeComplete(this.partial + chunk);
+    }
+
+    stdout(chunk: string): void {
+        this.stdoutPartial = this.writeComplete(this.stdoutPartial + chunk);
     }
 
     /** A complete message, which may span lines */
@@ -2454,9 +2664,10 @@ export class ServerOutput {
 
     /** Write out a held partial stderr line */
     flush(): void {
-        if (this.partial) {
-            const text = this.partial;
-            this.partial = '';
+        const text = [this.partial, this.stdoutPartial].filter(Boolean).join('\n');
+        this.partial = '';
+        this.stdoutPartial = '';
+        if (text) {
             this.write(text);
         }
     }
@@ -2467,6 +2678,14 @@ export class ServerOutput {
         const stream = this.stream;
         this.stream = null;
         return endStream(stream);
+    }
+
+    private writeComplete(text: string): string {
+        const end = text.lastIndexOf('\n');
+        if (end >= 0) {
+            this.write(text.slice(0, end));
+        }
+        return text.slice(end + 1);
     }
 
     private write(text: string): void {
@@ -2570,8 +2789,15 @@ export class WireTrace {
     }
 
     /** A server process about to be spawned */
-    spawn(command: string, args: string[]): void {
-        this.write({ t: this.now(), spawn: true, iso: new Date().toISOString(), command, args });
+    spawn(command: string | undefined, args: string[], transport?: string): void {
+        this.write({
+            t: this.now(),
+            spawn: true,
+            iso: new Date().toISOString(),
+            command,
+            args: command === undefined ? undefined : args,
+            transport,
+        });
     }
 
     /** The start of an iteration, numbered from 1 among the warmups or the timed iterations */
@@ -2618,4 +2844,125 @@ async function raceTimeout<T>(promises: Array<Promise<T>>, timeoutMs: number): P
     } finally {
         clearTimeout(timer);
     }
+}
+
+function hasExited(child: cp.ChildProcess): boolean {
+    return child.exitCode !== null || child.signalCode !== null;
+}
+
+interface SocketListener {
+    port: number;
+    accepted: Promise<net.Socket>;
+    close(): void;
+}
+
+async function listenForServer(port: number): Promise<SocketListener> {
+    const server = net.createServer();
+    let open = true;
+    let onAccept: (socket: net.Socket) => void = () => {};
+    const accepted = new Promise<net.Socket>((resolve) => {
+        onAccept = resolve;
+    });
+    server.on('connection', (socket) => {
+        if (open) {
+            open = false;
+            onAccept(socket);
+        } else {
+            socket.destroy();
+        }
+    });
+    try {
+        await new Promise<void>((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(port, LISTEN_HOST, () => {
+                server.off('error', reject);
+                resolve();
+            });
+        });
+    } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException).code ?? errorMessage(err);
+        throw new Error(`cannot listen on ${LISTEN_HOST}:${port} (${code})`);
+    }
+    return {
+        port: (server.address() as net.AddressInfo).port,
+        accepted,
+        close: () => {
+            open = false;
+            server.close();
+        },
+    };
+}
+
+function acceptServer(listener: SocketListener, timeoutMs: number, signal: AbortSignal): Promise<net.Socket> {
+    return new Promise((resolve, reject) => {
+        const done = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+            done();
+            reject(new Error('aborted'));
+        };
+        const timer = setTimeout(() => {
+            done();
+            reject(new Error(`the server did not connect to ${LISTEN_HOST}:${listener.port} within ${timeoutMs}ms`));
+        }, timeoutMs);
+        signal.addEventListener('abort', onAbort, { once: true });
+        void listener.accepted.then((socket) => {
+            done();
+            resolve(socket);
+        });
+    });
+}
+
+async function connectToServer(
+    host: string,
+    port: number,
+    timeoutMs: number,
+    signal: AbortSignal,
+): Promise<net.Socket> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = 'ETIMEDOUT';
+    while (!signal.aborted) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+            break;
+        }
+        try {
+            return await connectOnce(host, port, remaining, signal);
+        } catch (err: unknown) {
+            lastError = (err as NodeJS.ErrnoException).code ?? errorMessage(err);
+        }
+        const wait = Math.min(CONNECT_RETRY_MS, deadline - Date.now());
+        if (wait > 0) {
+            await delay(wait, undefined, { signal });
+        }
+    }
+    throw new Error(`cannot connect to ${host}:${port} within ${timeoutMs}ms (${lastError})`);
+}
+
+function connectOnce(host: string, port: number, timeoutMs: number, signal: AbortSignal): Promise<net.Socket> {
+    return new Promise((resolve, reject) => {
+        const socket = net.connect({ host, port });
+        const done = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+            socket.off('connect', onConnect);
+            socket.off('error', fail);
+        };
+        const fail = (err: Error) => {
+            done();
+            socket.destroy();
+            reject(err);
+        };
+        const onAbort = () => fail(new Error('aborted'));
+        const onConnect = () => {
+            done();
+            resolve(socket);
+        };
+        const timer = setTimeout(() => fail(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })), timeoutMs);
+        signal.addEventListener('abort', onAbort, { once: true });
+        socket.once('connect', onConnect);
+        socket.once('error', fail);
+    });
 }

@@ -2,9 +2,14 @@ import type { Diagnostic } from './harness.js';
 
 // ── Server Configuration ────────────────────────────────────────────────────
 
+export type ServerTransport =
+    | { kind: 'stdio' }
+    | { kind: 'connect'; host: string; port: number; timeoutMs?: number }
+    | { kind: 'socket'; port: number; timeoutMs?: number };
+
 export interface ServerConfig {
     /** Command to spawn the language server */
-    command: string;
+    command?: string;
     /** Arguments to pass to the server command */
     args?: string[];
     /** Environment variables for the server process */
@@ -33,13 +38,15 @@ export interface ServerConfig {
     allowExitCodes?: number[];
     allowExitSignals?: NodeJS.Signals[];
     allowUnrepliedShutdown?: boolean;
+    transport?: ServerTransport;
 }
 
 // ── CLI Options ─────────────────────────────────────────────────────────────
 
 export interface BenchOptions {
     /** Command to spawn the language server, e.g. "typescript-language-server --stdio" */
-    server: string;
+    server?: string;
+    transport?: ServerTransport;
     /** Path to the workspace root to benchmark against */
     workspace: string;
     /** Path to the action driver script (.ts, .js or .mjs) */
@@ -222,6 +229,7 @@ export interface MethodStats {
 
 export interface BenchReport {
     server: string;
+    transport?: string;
     workspace: string;
     script: string;
     iterations: number;

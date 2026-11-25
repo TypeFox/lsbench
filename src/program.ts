@@ -10,9 +10,10 @@ import {
     validateCheckedRun,
 } from './check.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from './context.js';
+import { DEFAULT_CONNECT_TIMEOUT_MS } from './harness.js';
 import { getPrimer } from './primer.js';
 import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
-import type { BenchOptions, BenchReport } from './types.js';
+import type { BenchOptions, BenchReport, ServerTransport } from './types.js';
 import { errorMessage } from './util.js';
 import { CLI_VERSION } from './version.js';
 
@@ -34,7 +35,9 @@ export function createProgram(): Command {
                 '    --iterations 50\n\n' +
                 '  lsbench "typescript-language-server --stdio" \\\n' +
                 '    -w ./workspace -s ./actions.ts -n 100 -o results.json \\\n' +
-                '    --init-options-file ./init-options.json',
+                '    --init-options-file ./init-options.json\n\n' +
+                '  lsbench "node ./server.js --socket={port}" --socket 0 -w ./workspace -s ./actions.ts\n\n' +
+                '  lsbench --connect 6005 -w ./workspace -s ./actions.ts',
         )
         .version(CLI_VERSION);
 
@@ -44,7 +47,10 @@ export function createProgram(): Command {
         .command('run', { isDefault: true })
         .description('Run a benchmark against a language server (default command).')
         .allowExcessArguments(true)
-        .argument('<server>', 'Server command, e.g. "typescript-language-server --stdio"')
+        .argument(
+            '[server]',
+            'Server command, e.g. "typescript-language-server --stdio". Optional with --connect, {port} is replaced by the socket port',
+        )
         .requiredOption('-w, --workspace <path>', 'Path to the workspace directory to benchmark against')
         .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts, .mts, .js or .mjs)')
         .option('-n, --iterations <number>', 'Number of timed iterations', '10')
@@ -107,8 +113,21 @@ export function createProgram(): Command {
             '--trace <file>',
             'Write every LSP message in both directions to this file as JSON lines, with timestamps and iteration markers (adds overhead to timings)',
         )
+        .option(
+            '--connect <[host:]port>',
+            'Connect to a server listening on a TCP port (host defaults to 127.0.0.1) instead of using stdio. The server command, if given, is spawned first',
+        )
+        .option(
+            '--socket <port>',
+            'Listen on a TCP port, 0 for a free one, and wait for the spawned server to connect, e.g. "server --socket={port}"',
+        )
+        .option(
+            '--connect-timeout <ms>',
+            'Milliseconds to wait for the socket connection with --connect or --socket',
+            String(DEFAULT_CONNECT_TIMEOUT_MS),
+        )
         .option('-v, --verbose', 'Enable verbose logging', false)
-        .action(async (server: string, rawOpts: Record<string, unknown>, command: Command) => {
+        .action(async (server: string | undefined, rawOpts: Record<string, unknown>, command: Command) => {
             // Extra arguments after `--` are passed through to the language server command
             const serverArgs = command.args.slice(1);
             // load initializationOptions, client capabilities and settings from JSON files if provided
@@ -119,8 +138,11 @@ export function createProgram(): Command {
             );
             const settings = readJsonObjectFile(rawOpts.settingsFile as string | undefined, 'Settings');
 
+            const transport = parseTransport(rawOpts, server);
+
             const opts: BenchOptions = {
                 server,
+                transport,
                 workspace: rawOpts.workspace as string,
                 script: rawOpts.script as string,
                 iterations: parseIntStrict(rawOpts.iterations as string),
@@ -154,6 +176,12 @@ export function createProgram(): Command {
             };
 
             // Validate inputs
+            if (server === undefined && (opts.allowExitCodes || opts.allowExitSignals)) {
+                console.error(
+                    'Error: --allow-exit-code and --allow-exit-signal need a server command, a server reached with --connect alone has no exit to classify',
+                );
+                process.exit(1);
+            }
             if (!fs.existsSync(opts.workspace)) {
                 console.error(`Error: Workspace directory not found: ${opts.workspace}`);
                 process.exit(1);
@@ -239,7 +267,11 @@ export function createProgram(): Command {
                 // still exit non zero when the server crashed, so callers notice
                 if (report.abnormal_exits) {
                     for (const exit of report.abnormal_exits) {
-                        const status = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.code}`;
+                        const status = exit.signal
+                            ? `signal ${exit.signal}`
+                            : exit.code === null
+                              ? 'connection closed'
+                              : `exit code ${exit.code}`;
                         console.error(
                             `Error: server exited abnormally during ${exit.during} (${status}): ${exit.reason}`,
                         );
@@ -381,6 +413,52 @@ function collectExitSignal(value: string, previous: string[]): string[] {
 
 function isSignalName(name: string): boolean {
     return Object.hasOwn(os.constants.signals, name);
+}
+
+function parseTransport(rawOpts: Record<string, unknown>, server: string | undefined): ServerTransport {
+    const connect = rawOpts.connect as string | undefined;
+    const socket = rawOpts.socket as string | undefined;
+    const timeoutMs = parseIntStrict(rawOpts.connectTimeout as string);
+    if (connect !== undefined && socket !== undefined) {
+        return usageError('--connect and --socket cannot be combined');
+    }
+    if (server === undefined && connect === undefined) {
+        return usageError('a server command is required unless --connect is given');
+    }
+    if (Number.isNaN(timeoutMs) || timeoutMs < 1) {
+        return usageError('--connect-timeout must be a positive integer');
+    }
+    if (connect !== undefined) {
+        const endpoint = parseEndpoint(connect);
+        if (!endpoint) {
+            return usageError('--connect must be a port or host:port, with a port from 1 to 65535');
+        }
+        return { kind: 'connect', ...endpoint, timeoutMs };
+    }
+    if (socket !== undefined) {
+        const port = parseIntStrict(socket);
+        if (Number.isNaN(port) || port > 65535) {
+            return usageError('--socket must be a port from 0 to 65535');
+        }
+        return { kind: 'socket', port, timeoutMs };
+    }
+    return { kind: 'stdio' };
+}
+
+function parseEndpoint(value: string): { host: string; port: number } | undefined {
+    const separator = value.lastIndexOf(':');
+    const rawHost = separator < 0 ? '127.0.0.1' : value.slice(0, separator);
+    const host = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost;
+    const port = parseIntStrict(value.slice(separator + 1));
+    if (!host || Number.isNaN(port) || port < 1 || port > 65535) {
+        return undefined;
+    }
+    return { host, port };
+}
+
+function usageError(message: string): never {
+    console.error(`Error: ${message}`);
+    process.exit(1);
 }
 
 function parseOptionalMs(value: string | boolean | undefined, bare: number): number | undefined {

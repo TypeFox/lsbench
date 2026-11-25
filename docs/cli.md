@@ -1,10 +1,11 @@
 # CLI
 
 ```
-Usage: lsbench [run] [options] <server>
+Usage: lsbench [run] [options] [server]
 
 Arguments:
-  server                      Server command, e.g. "typescript-language-server --stdio"
+  server                      Server command, e.g. "typescript-language-server --stdio". Required unless
+                              --connect is given, {port} is replaced by the socket port
 
 Options:
   -w, --workspace <path>      Workspace directory (required)
@@ -36,6 +37,10 @@ Options:
                               $/logTrace to file instead of the console, even without -v
   --trace <file>              Write every LSP message in both directions to file as JSON lines,
                               with server starts and iteration markers (off by default)
+  --connect <[host:]port>     Connect to a server listening on a TCP port (host: 127.0.0.1), spawning
+                              the server command first when one is given
+  --socket <port>             Listen on a TCP port, 0 for a free one, for the spawned server to connect
+  --connect-timeout <ms>      Wait for the socket connection (default: 10000)
   -v, --verbose               Verbose logging
   -V, --version               Show version
   -h, --help                  Show help
@@ -54,6 +59,7 @@ Where to read more:
 | Options | Page |
 | --- | --- |
 | `--init-options-file`, `--client-capabilities-file`, `--settings-file`, arguments after `--` | [server configuration](server-configuration.md) |
+| `--connect`, `--socket`, `--connect-timeout` | [transports](transports.md) |
 | `--advertise-pull` | [pull diagnostics](diagnostics.md#advertising-pull-support) |
 | `--restart`, `--warmup`, `--wait-idle` | [warmup and readiness](readiness.md) |
 | `--shorten-silent-waits` | [shortening known timeouts](diagnostics-timings.md#shortening-known-timeouts) |
@@ -117,7 +123,7 @@ With `--settings-file`, the expanded settings are logged as `Sending workspace/d
 
 - `dir` is `out` for messages lsbench sends and `in` for messages it receives.
 - `t` is milliseconds since the run started, on the same `process.hrtime` clock as the report timings.
-- Each server start adds `{"t":...,"spawn":true,"iso":"2026-11-17T10:15:02.123Z","command":"...","args":[...]}`.
+- Each server start adds `{"t":...,"spawn":true,"iso":"2026-11-17T10:15:02.123Z","command":"...","args":[...]}`. With `--connect` or `--socket` it also has `"transport":"connect 127.0.0.1:6005"` or `"transport":"socket 127.0.0.1:41011"`, and without a server command only `transport`.
 - Each iteration starts with `{"t":...,"iteration":3,"warmup":false}`, numbered like the progress lines (warmups count from 1 with `"warmup":true`).
 
 With `--restart`, the iteration marker comes before the server is spawned, so its spawn and initialize belong to the iteration. Without it, the server starts before the first marker, and documents are reset at the end of each iteration. Report timings are durations, so line a trace up with them through the iteration markers.

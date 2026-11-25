@@ -15,7 +15,7 @@ import type {
     ServerConfig,
     SetupScript,
 } from './types.js';
-import { errorMessage, round } from './util.js';
+import { errorMessage, round, serverLabel, transportLabel } from './util.js';
 
 export type ServerConfigOptions = Pick<
     BenchOptions,
@@ -27,6 +27,7 @@ export type ServerConfigOptions = Pick<
     | 'allowExitSignals'
     | 'allowUnrepliedShutdown'
     | 'advertisePullDiagnostics'
+    | 'transport'
 >;
 
 /**
@@ -34,7 +35,7 @@ export type ServerConfigOptions = Pick<
  * The argument is always a plain command like "typescript-language-server --stdio";
  * structured options (initializationOptions, clientCapabilities, settings) are supplied separately via CLI flags.
  */
-export function resolveServerConfig(serverArg: string, options: ServerConfigOptions = {}): ServerConfig {
+export function resolveServerConfig(serverArg: string | undefined, options: ServerConfigOptions = {}): ServerConfig {
     if (Array.isArray(options)) {
         throw new TypeError(
             'resolveServerConfig() takes an options object, such as { serverArgs }, as its second argument.',
@@ -49,12 +50,19 @@ export function resolveServerConfig(serverArg: string, options: ServerConfigOpti
         allowExitSignals,
         allowUnrepliedShutdown,
         advertisePullDiagnostics,
+        transport,
     } = options;
-    const parts = serverArg.split(/\s+/).filter(Boolean);
+    const parts = (serverArg ?? '').split(/\s+/).filter(Boolean);
     const command = parts[0];
+    if (command === undefined && transport?.kind !== 'connect') {
+        throw new Error('A server command is required unless the transport is connect.');
+    }
     const args = [...parts.slice(1), ...(serverArgs ?? [])];
 
     const config: ServerConfig = { command, args, initializationOptions, clientCapabilities, settings };
+    if (transport && transport.kind !== 'stdio') {
+        config.transport = transport;
+    }
     if (allowExitCodes && allowExitCodes.length > 0) {
         config.allowExitCodes = allowExitCodes;
     }
@@ -143,7 +151,11 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     const totalIterations = opts.warmup + opts.iterations;
     const runs: IterationResult[] = [];
 
-    console.log(`\n  Server:     ${opts.server}`);
+    console.log(`\n  Server:     ${serverLabel(opts)}`);
+    const transport = transportLabel(opts.transport);
+    if (transport) {
+        console.log(`  Transport:  ${transport}`);
+    }
     console.log(`  Workspace:  ${workspaceRoot}`);
     console.log(`  Script:     ${opts.script}`);
     console.log(`  Iterations: ${opts.iterations} (+ ${opts.warmup} warmup)`);

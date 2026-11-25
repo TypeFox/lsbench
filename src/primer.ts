@@ -328,10 +328,12 @@ experimental/serverStatus (verbose mode logs progress titles).
 
 ## CLI reference
 
-    Usage: lsbench [run] [options] <server>
+    Usage: lsbench [run] [options] [server]
 
     Arguments:
-      server                       Server command, e.g. "typescript-language-server --stdio"
+      server                       Server command, e.g. "typescript-language-server --stdio".
+                                   Required unless --connect is given. With --connect or
+                                   --socket, {port} in it is replaced by the socket port
 
     Options:
       -w, --workspace <path>       Workspace directory to benchmark against         (required)
@@ -386,6 +388,16 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    lines {"t","dir":"out"|"in","msg"}, with server
                                    starts and iteration markers. t is ms since the
                                    run start. Off by default, adds overhead to timings
+          --connect <[host:]port>  Speak LSP over TCP to a server listening on port
+                                   (host 127.0.0.1 by default). A given server command
+                                   is spawned first; without one lsbench owns no
+                                   process: a closed connection ends the server, and
+                                   --allow-exit-code/--allow-exit-signal are rejected
+          --socket <port>          Listen on port (0 picks a free one) and wait for the
+                                   spawned server to connect, e.g. with
+                                   "node server.js --socket={port}"
+          --connect-timeout <ms>   Wait this long for the socket connection, a refused
+                                   connect is retried every 100ms                   (default: 10000)
       -v, --verbose                Verbose logging: requests, publishes, progress   (default: false)
       -V, --version                Print version
       -h, --help                   Print help
@@ -438,6 +450,8 @@ The JSON report (and the printed summary) contains:
 
 Server lifecycle timings appear in summary like methods:
   - lifecycle/spawn       spawning the process until the OS reports it started
+  - lifecycle/connect     --connect/--socket only: after spawn (or from the first
+                          attempt without a command) until the socket connected
   - lifecycle/initialize  initialize request until its response (includes server startup)
   - lifecycle/idle        --wait-idle only: initialized until the server became idle
                           (quiet period not included), timeout when it never did

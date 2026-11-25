@@ -91,6 +91,7 @@ export type {
     RequestTiming,
     ServerCapabilities,
     ServerConfig,
+    ServerTransport,
     SetupScript,
     ReopenWaits,
     SilentWaits,

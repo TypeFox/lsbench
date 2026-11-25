@@ -69,7 +69,7 @@ Without a settings file, every item gets `{}` and no `didChangeConfiguration` is
 
 ## From Code
 
-For full control, drive `LspHarness` programmatically with a `ServerConfig`. It takes `command`, `args`, `env`, `initializationOptions`, `clientCapabilities`, `settings`, `allowExitCodes`, `allowExitSignals` and `allowUnrepliedShutdown`.
+For full control, drive `LspHarness` programmatically with a `ServerConfig`. It takes `command`, `args`, `env`, `initializationOptions`, `clientCapabilities`, `settings`, `allowExitCodes`, `allowExitSignals`, `allowUnrepliedShutdown` and `transport`.
 
 - `resolveServerConfig(command, options?)` builds one from a `--server` style command string. `options` (`ServerConfigOptions`) takes the matching `BenchOptions` fields, such as `serverArgs` and `allowExitCodes`, so a `BenchOptions` object can be passed as is.
 - `defaultClientCapabilities()` and `mergeCapabilities()` build on the defaults.

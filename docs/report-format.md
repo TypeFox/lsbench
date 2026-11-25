@@ -41,6 +41,7 @@
 
 | Field | Content |
 | --- | --- |
+| `transport` | with `--connect` or `--socket` only, e.g. `connect 127.0.0.1:6005` or `socket 0`, see [transports](transports.md) |
 | `summary` | per method aggregate stats, see [summary](#summary) |
 | `iteration_summary` | per iteration total time stats. Without timed iterations, such as when a keep alive server exits during a warmup, its fields are `null`, printed as `n/a` |
 | `runs` | the full per iteration, per request breakdown |
@@ -98,6 +99,7 @@ Server lifecycle timings are recorded like methods:
 | Method | Measures | Results |
 | --- | --- | --- |
 | `lifecycle/spawn` | spawning the process until the OS reports it started | `ok`, `error` |
+| `lifecycle/connect` | with `--connect` or `--socket` only, the spawn (or the first attempt without a server command) until the [socket](transports.md) connected | `ok`, `error` |
 | `lifecycle/initialize` | the `initialize` request until its response, including the server's own startup | `ok`, `error` |
 | `lifecycle/idle` | with `--wait-idle` only, `initialized` until the server became [idle](readiness.md), without the quiet period | `ok`, `timeout` |
 | `lifecycle/shutdown` | the `shutdown` request until its reply. Fails when the server exits first or doesn't reply within `--shutdown-timeout` | `ok`, `error` |
@@ -160,6 +162,8 @@ A server that answers `shutdown` with an error reply is still sent `exit`, then 
 | none, the server ignores `exit` | `killed by lsbench (signal SIGTERM)` | neither |
 
 Code 1 is what the LSP spec asks of a server that gets `exit` without a successful `shutdown`.
+
+Over `--connect` and `--socket`, a closed connection also ends the server, with `code` and `signal` `null`. See [transports](transports.md#servers-without-a-command) for its reasons.
 
 An exit reads `killed by lsbench (...)` and is not abnormal only when it comes from lsbench:
 

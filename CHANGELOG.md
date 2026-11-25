@@ -4,6 +4,7 @@
 
 ### New features
 
+- The server can be reached over TCP. `--connect <[host:]port>` connects to a server listening on a port, so servers without stdio, such as Godot's GDScript server, can be benchmarked. The server command becomes optional; when given, lsbench spawns it first and retries the connection until `--connect-timeout` (default 10000 ms). `--socket <port>` listens on `127.0.0.1` for the spawned server to connect, as `vscode-languageserver` servers do with `--socket=<port>`. `{port}` in the server command is replaced by the port, and `--socket 0` picks a free one. Socket runs record `lifecycle/connect`, and the report gets a `transport` field. A server that closes the connection before `shutdown` is listed in `abnormal_exits` as `closed the connection unexpectedly`. Without a server command, lsbench sends no signals and rejects `--allow-exit-code` and `--allow-exit-signal`. `ServerConfig.transport` and `ServerTransport` are exported, and `ServerConfig.command` and `BenchOptions.server` are optional. See [transports](docs/transports.md).
 - Action scripts can be `.mts` files. `--script ./actions.mts` loads like a `.ts` script, with the same erasable TypeScript rules, and is always ESM, so a TypeScript action script works in a CommonJS package. `.cts` is still rejected.
 
 ## v0.4.0
