@@ -71,7 +71,7 @@ export function resolveServerConfig(serverArg: string, options: ServerConfigOpti
 }
 
 /** File extensions accepted for action scripts */
-const ACTION_SCRIPT_EXTENSIONS = ['.ts', '.js', '.mjs'] as const;
+const ACTION_SCRIPT_EXTENSIONS = ['.ts', '.mts', '.js', '.mjs'] as const;
 
 /** Whether a path has an extension accepted for action scripts (`.ts`, `.js` or `.mjs`) */
 export function isActionScriptPath(scriptPath: string): boolean {
@@ -80,7 +80,7 @@ export function isActionScriptPath(scriptPath: string): boolean {
 
 /** The error message for a script path with an unaccepted extension */
 export function actionScriptExtensionError(scriptPath: string): string {
-    return `Action script ${scriptPath} must be a TypeScript (.ts) or JavaScript (.js, .mjs) file.`;
+    return `Action script ${scriptPath} must be a TypeScript (.ts, .mts) or JavaScript (.js, .mjs) file.`;
 }
 
 /**

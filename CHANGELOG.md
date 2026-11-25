@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## Unreleased
+
+### New features
+
+- Action scripts can be `.mts` files. `--script ./actions.mts` loads like a `.ts` script, with the same erasable TypeScript rules, and is always ESM, so a TypeScript action script works in a CommonJS package. `.cts` is still rejected.
+
 ## v0.4.0
 
 Changes since 0.3.0. Action scripts can answer custom server messages through `setup`, `codeAction` can send `context.only` and overlapping diagnostics, and new flags tolerate known exits after shutdown. Startup, shutdown, requests and file URIs are hardened, diagnostics waits count and shorten more accurately, and more file extensions open with their proper language id.

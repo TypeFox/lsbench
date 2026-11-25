@@ -1,6 +1,6 @@
 # Writing an Action Script
 
-An action script is a `.ts`, `.js` or `.mjs` ES module that default-exports an async function receiving a `BenchContext`. lsbench runs it once per iteration and times each request it sends.
+An action script is a `.ts`, `.mts`, `.js` or `.mjs` ES module that default-exports an async function receiving a `BenchContext`. lsbench runs it once per iteration and times each request it sends.
 
 ```typescript
 import { BenchContext } from "lsbench";
@@ -24,6 +24,7 @@ export default async function (ctx: BenchContext) {
 - **TypeScript** is loaded by Node's built-in type stripping (Node >= 24), so it must be erasable: no `enum`, `namespace`, or parameter properties.
 - **`.js`** is ESM unless the nearest `package.json` says otherwise.
 - **`.mjs`** is always ESM.
+- **`.mts`** is always ESM, like `.mjs`, and follows the same erasable TypeScript rules.
 
 ## Examples
 

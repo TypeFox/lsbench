@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import type { BenchOptions, BenchReport, ServerConfigOptions } from 'lsbench';
 import { LspHarness, loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { isActionScriptPath } from '../src/runner.js';
 
 beforeEach(() => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
@@ -135,10 +136,37 @@ describe('loadActionScript', () => {
         return file;
     }
 
-    it.each(['actions.cjs', 'actions.mts', 'actions.json', 'actions'])('rejects %s', async (name) => {
+    it.each(['actions.cjs', 'actions.cts', 'actions.json', 'actions'])('rejects %s', async (name) => {
         await expect(loadActionScript(name)).rejects.toThrow(
-            /must be a TypeScript \(\.ts\) or JavaScript \(\.js, \.mjs\) file/,
+            /must be a TypeScript \(\.ts, \.mts\) or JavaScript \(\.js, \.mjs\) file/,
         );
+    });
+
+    it.each(['actions.ts', 'actions.mts', 'actions.js', 'actions.mjs'])('accepts the path %s', (name) => {
+        expect(isActionScriptPath(name)).toBe(true);
+    });
+
+    it.each(['actions.cts', 'actions.cjs', 'actions.json', 'actions'])('refuses the path %s', (name) => {
+        expect(isActionScriptPath(name)).toBe(false);
+    });
+
+    it('loads a TypeScript action from .mts in a CommonJS package', async () => {
+        const dir = path.join(tmpDir, 'cjs-package');
+        fs.mkdirSync(dir);
+        fs.writeFileSync(path.join(dir, 'package.json'), '{}', 'utf-8');
+        const file = path.join(dir, 'valid-actions.mts');
+        fs.writeFileSync(
+            file,
+            `export default async function (ctx: { called?: boolean }): Promise<void> {
+                ctx.called = true;
+            }`,
+            'utf-8',
+        );
+
+        const fn = await loadActionScript(file);
+        const ctx = {} as { called?: boolean };
+        await expect(fn(ctx as never)).resolves.toBeUndefined();
+        expect(ctx.called).toBe(true);
     });
 
     it.each(['valid-actions.mjs', 'valid-actions.js'])('loads a JavaScript action from %s', async (name) => {

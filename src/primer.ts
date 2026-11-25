@@ -42,11 +42,11 @@ idle (with --wait-idle) and shutdown are also reported as lifecycle/* methods
 
 ## Writing an action script
 
-An action script is a \`.ts\`, \`.js\` or \`.mjs\` ES module that default-exports an
-async function taking a BenchContext. TypeScript is loaded natively by Node (>= 24)
-via type stripping, so it must be "erasable" TypeScript: no \`enum\`, \`namespace\`,
-or parameter properties. A \`.js\` script is ESM unless the nearest package.json says
-otherwise, and \`.mjs\` always is.
+An action script is a \`.ts\`, \`.mts\`, \`.js\` or \`.mjs\` ES module that
+default-exports an async function taking a BenchContext. TypeScript is loaded
+natively by Node (>= 24) via type stripping, so it must be "erasable" TypeScript:
+no \`enum\`, \`namespace\`, or parameter properties. A \`.js\` script is ESM
+unless the nearest package.json says otherwise, and \`.mjs\` and \`.mts\` always are.
 
     import type { BenchContext } from 'lsbench';
 
@@ -335,7 +335,7 @@ experimental/serverStatus (verbose mode logs progress titles).
 
     Options:
       -w, --workspace <path>       Workspace directory to benchmark against         (required)
-      -s, --script <path>          Action driver script (.ts, .js or .mjs)          (required)
+      -s, --script <path>          Action driver script (.ts, .mts, .js or .mjs)    (required)
       -n, --iterations <number>    Number of timed iterations                       (default: 10)
           --warmup <number>        Warmup iterations, not recorded                  (default: 2)
       -o, --output <path>          Write the JSON report to this file

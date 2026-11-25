@@ -8,7 +8,7 @@ Arguments:
 
 Options:
   -w, --workspace <path>      Workspace directory (required)
-  -s, --script <path>         Action driver script, .ts, .js or .mjs (required)
+  -s, --script <path>         Action driver script, .ts, .mts, .js or .mjs (required)
   -n, --iterations <number>   Timed iterations (default: 10)
   --warmup <number>           Warmup iterations, not recorded (default: 2)
   -o, --output <path>         JSON report output file

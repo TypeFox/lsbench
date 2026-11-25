@@ -46,7 +46,7 @@ export function createProgram(): Command {
         .allowExcessArguments(true)
         .argument('<server>', 'Server command, e.g. "typescript-language-server --stdio"')
         .requiredOption('-w, --workspace <path>', 'Path to the workspace directory to benchmark against')
-        .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts, .js or .mjs)')
+        .requiredOption('-s, --script <path>', 'Path to the action driver script (.ts, .mts, .js or .mjs)')
         .option('-n, --iterations <number>', 'Number of timed iterations', '10')
         .option('--warmup <number>', 'Number of warmup iterations (not recorded)', '2')
         .option('-o, --output <path>', 'Output file for JSON report', '')
