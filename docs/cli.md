@@ -42,6 +42,7 @@ Options:
   --socket <port>             Listen on a TCP port, 0 for a free one, for the spawned server to connect
   --connect-timeout <ms>      Wait for the socket connection (default: 10000)
   -v, --verbose               Verbose logging
+  -q, --quiet                 Print only errors and the requested output, for CI
   -V, --version               Show version
   -h, --help                  Show help
 
@@ -68,6 +69,24 @@ Where to read more:
 | `--request-timeout` | [request timeouts](report-format.md#request-timeouts) |
 | `--no-skip-unsupported` | [unsupported requests](client-behavior.md#unsupported-requests) |
 | `baseline`, `check` | [regression checks](regression-checks.md) |
+
+## Quiet Output
+
+`-q, --quiet` keeps a CI log down to what matters. The exit code alone tells success from failure.
+
+| Output | With `-q` |
+| --- | --- |
+| Run header, progress lines, results table and hint notes | dropped |
+| `Report written to` and `Baseline written to` | dropped |
+| Warnings, such as abnormal exits, silent waits or plaintext fallbacks | dropped. Abnormal exits, silent waits and plaintext fallbacks stay in the report |
+| Errors failing the run, such as `Error: server exited abnormally ...` | on stderr |
+| Action script errors, as `Error: iteration N failed: <message>` | on stderr |
+| The report file (`-o`) and baseline file | written |
+| The `check` verdict, text or `--json` | on stdout |
+
+- `run`, `baseline` and `check` accept `-q`.
+- `-q` and `-v` can't be combined, and the run exits 1 with `Error: --quiet and --verbose cannot be combined`.
+- From code, pass `quiet: true` in `BenchOptions` to `runBenchmark()`. It throws when `verbose` is set too.
 
 ## Verbose Output
 

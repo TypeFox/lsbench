@@ -399,17 +399,21 @@ experimental/serverStatus (verbose mode logs progress titles).
           --connect-timeout <ms>   Wait this long for the socket connection, a refused
                                    connect is retried every 100ms                   (default: 10000)
       -v, --verbose                Verbose logging: requests, publishes, progress   (default: false)
+      -q, --quiet                  Print only errors on stderr, the report file and
+                                   the check verdict, for CI. Warnings stay in the
+                                   report. Rejected with -v                         (default: false)
       -V, --version                Print version
       -h, --help                   Print help
 
     prime                          Print this primer
-    baseline <report> -o <file>    Write a baseline: run settings and summaries
+    baseline <report> -o <file>    Write a baseline: run settings and summaries,
+                                   -q to print nothing on success
     check <report> -b <file>       Check a report against a baseline, exit 0 pass,
                                    1 regressions, 2 usage errors. Options:
                                    --rate-tolerance <n> (default 0.1),
                                    --median-ratio <n> (default 2),
                                    --slack-ms <n> (default 5),
-                                   --min-count <n> (default 3), --json
+                                   --min-count <n> (default 3), --json, -q
 
 Anything after \`--\` is passed through as extra args to the server command.
 

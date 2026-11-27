@@ -638,6 +638,18 @@ describe('runBenchmark with a server silent on clean files', () => {
         expect(errors.filter((l) => l.includes('`.runnerfallback` has no registered language id'))).toHaveLength(1);
     });
 
+    it('prints no summary notes or warnings in quiet mode, but records them in the report', async () => {
+        const errors: string[] = [];
+        vi.spyOn(console, 'error').mockImplementation((line?: unknown) => {
+            errors.push(String(line));
+        });
+        const { report, lines } = await run(false, true, plaintextScript, { quiet: true });
+        expect(report.plaintext_fallbacks).toEqual(['.runnerfallback']);
+        expect(report.silent_waits).toEqual({ 'diagnostics/open': { waits: 3, longest_streak: 3 } });
+        expect(lines).toEqual([]);
+        expect(errors).toEqual([]);
+    });
+
     it('records no silent waits for a server that publishes', async () => {
         const { report, lines } = await run(true, false);
         expect(report.summary['diagnostics/open']).toMatchObject({ count: 1, timeout_rate: 0 });
@@ -1012,6 +1024,98 @@ describe('runBenchmark progress lines', () => {
         expect(out).toMatch(/^ {2}Running iteration 1\/2\.\.\. \d+ms$/m);
         expect(out).toMatch(/^ {2}Running iteration 2\/2\.\.\. \d+ms$/m);
         expect(out).not.toMatch(/Iteration \d/);
+    });
+});
+
+describe('runBenchmark in quiet mode', () => {
+    let tmpDir: string;
+    let script: string;
+    let throwing: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-quiet-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+        throwing = path.join(tmpDir, 'throwing.ts');
+        fs.writeFileSync(
+            throwing,
+            `export default async function (): Promise<void> {
+                throw new Error('boom');
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    async function capture(
+        actions: string,
+        extra: Partial<BenchOptions> = {},
+    ): Promise<{ report: BenchReport; stdout: string; stderr: string }> {
+        const stdout: string[] = [];
+        const stderr: string[] = [];
+        vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+            stdout.push(String(chunk));
+            return true;
+        });
+        vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+            stdout.push(`${args.map(String).join(' ')}\n`);
+        });
+        vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+            stderr.push(`${args.map(String).join(' ')}\n`);
+        });
+        const report = await runBenchmark({
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', cleanServer],
+            workspace: tmpDir,
+            script: actions,
+            iterations: 2,
+            warmup: 1,
+            output: '',
+            restart: false,
+            verbose: false,
+            quiet: true,
+            ...extra,
+        });
+        return { report, stdout: stdout.join(''), stderr: stderr.join('') };
+    }
+
+    it('prints nothing for a passing run and still writes the report', async () => {
+        const output = path.join(tmpDir, 'report.json');
+        const { report, stdout, stderr } = await capture(script, { output });
+        expect(stdout).toBe('');
+        expect(stderr).toBe('');
+        expect(report.runs).toHaveLength(2);
+        expect(JSON.parse(fs.readFileSync(output, 'utf-8')).runs).toHaveLength(2);
+    });
+
+    it('prints iteration errors on stderr only', async () => {
+        const { stdout, stderr } = await capture(throwing);
+        expect(stdout).toBe('');
+        expect(stderr.split('\n').filter(Boolean)).toEqual([
+            'Error: warmup 1 failed: boom',
+            'Error: iteration 1 failed: boom',
+            'Error: iteration 2 failed: boom',
+        ]);
+    });
+
+    it('prints iteration errors on stderr without quiet', async () => {
+        const { stdout, stderr } = await capture(throwing, { quiet: false });
+        expect(stdout).toMatch(/Running iteration 1\/2\.\.\. \d+ms/);
+        expect(stdout).not.toContain('boom');
+        expect(stderr).toContain(' ERROR: boom');
+    });
+
+    it('rejects quiet together with verbose', async () => {
+        await expect(capture(script, { verbose: true })).rejects.toThrow('quiet and verbose cannot be combined.');
     });
 });
 

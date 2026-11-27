@@ -228,6 +228,7 @@ export class DiagnosticsTracker {
     private caseHinted = new Set<string>();
     private closeClearHinted = false;
     private malformedPublishWarned = false;
+    warn: (msg: string) => void = (msg) => console.error(msg);
     /** whether the server currently reports it is loading, an empty publish then is a placeholder */
     private loading: () => boolean = () => false;
 
@@ -334,7 +335,7 @@ export class DiagnosticsTracker {
         if (!Array.isArray(params.diagnostics)) {
             if (!this.malformedPublishWarned) {
                 this.malformedPublishWarned = true;
-                console.error(
+                this.warn(
                     `[lsbench] Warning: publishDiagnostics for ${params.uri} has no diagnostics array, taken as empty`,
                 );
             }
@@ -1128,6 +1129,7 @@ export interface LspHarnessOptions {
     /** record every message exchanged with the server to this trace, shared across restarts */
     trace?: WireTrace;
     setup?: SetupScript;
+    quiet?: boolean;
 }
 
 /**
@@ -1193,6 +1195,9 @@ export class LspHarness {
             },
         );
         this.progress = new ProgressTracker((msg) => this.log(msg));
+        if (options.quiet) {
+            this.diagnostics.warn = () => {};
+        }
         linkPlaceholders(this.diagnostics, this.progress);
     }
 

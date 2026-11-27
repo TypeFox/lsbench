@@ -361,6 +361,20 @@ describe('BenchContextImpl', () => {
                 expect(silence.plaintextFallbacks()).toEqual(['.fallbackx', '.fallbacky']);
             });
 
+            it('records the fallback without a warning in quiet mode', async () => {
+                fs.writeFileSync(path.join(tmpDir, 'a.fallbackq'), '\n', 'utf-8');
+                const silence = new SilenceTracker();
+                const lines = await errorLines(async () => {
+                    const quiet = new BenchContextImpl(harness as unknown as LspHarness, tmpDir, false, {
+                        silence,
+                        quiet: true,
+                    });
+                    await quiet.openDocument('a.fallbackq');
+                });
+                expect(warnings(lines)).toEqual([]);
+                expect(silence.plaintextFallbacks()).toEqual(['.fallbackq']);
+            });
+
             it('names files without an extension', async () => {
                 fs.writeFileSync(path.join(tmpDir, 'Fallbackfile'), '\n', 'utf-8');
                 const silence = new SilenceTracker();

@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
 import { BenchContextImpl, DEFAULT_REQUEST_TIMEOUT_MS, SilenceTracker } from './context.js';
 import { type DiagnosticsDelivery, LspHarness, WireTrace } from './harness.js';
+import { createLogger, type Logger, logLevelOf } from './log.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
     AbnormalExit,
@@ -144,6 +145,8 @@ async function importActionScript(scriptPath: string): Promise<Record<string, un
  * Main benchmark runner.
  */
 export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
+    const logger = createLogger(logLevelOf(opts));
+    const quiet = logger.level === 'quiet';
     const workspaceRoot = path.resolve(opts.workspace);
     const serverConfig = resolveServerConfig(opts.server, opts);
     const { action: actionFn, setup } = await loadScript(opts.script);
@@ -151,41 +154,41 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     const totalIterations = opts.warmup + opts.iterations;
     const runs: IterationResult[] = [];
 
-    console.log(`\n  Server:     ${serverLabel(opts)}`);
+    logger.info(`\n  Server:     ${serverLabel(opts)}`);
     const transport = transportLabel(opts.transport);
     if (transport) {
-        console.log(`  Transport:  ${transport}`);
+        logger.info(`  Transport:  ${transport}`);
     }
-    console.log(`  Workspace:  ${workspaceRoot}`);
-    console.log(`  Script:     ${opts.script}`);
-    console.log(`  Iterations: ${opts.iterations} (+ ${opts.warmup} warmup)`);
-    console.log(`  Restart:    ${opts.restart ? 'each iteration' : 'keep alive'}`);
+    logger.info(`  Workspace:  ${workspaceRoot}`);
+    logger.info(`  Script:     ${opts.script}`);
+    logger.info(`  Iterations: ${opts.iterations} (+ ${opts.warmup} warmup)`);
+    logger.info(`  Restart:    ${opts.restart ? 'each iteration' : 'keep alive'}`);
     if (opts.waitIdle !== undefined) {
-        console.log(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
+        logger.info(`  Wait idle:  up to ${opts.waitIdle}ms after initialized`);
     }
     if (opts.requestTimeout !== undefined && opts.requestTimeout !== DEFAULT_REQUEST_TIMEOUT_MS) {
-        console.log(`  Timeout:    requests unanswered after ${opts.requestTimeout}ms`);
+        logger.info(`  Timeout:    requests unanswered after ${opts.requestTimeout}ms`);
     }
     if (opts.shortenSilentWaits !== undefined) {
-        console.log(`  Shorten:    diagnostics waits known to time out to ${opts.shortenSilentWaits}ms`);
+        logger.info(`  Shorten:    diagnostics waits known to time out to ${opts.shortenSilentWaits}ms`);
     }
     if (serverConfig.allowExitCodes || serverConfig.allowExitSignals) {
         const allowed = [...(serverConfig.allowExitCodes ?? []), ...(serverConfig.allowExitSignals ?? [])];
-        console.log(`  Allow exit: ${allowed.join(', ')} after shutdown`);
+        logger.info(`  Allow exit: ${allowed.join(', ')} after shutdown`);
     }
     if (serverConfig.allowUnrepliedShutdown) {
-        console.log('  Allow exit: without shutdown reply');
+        logger.info('  Allow exit: without shutdown reply');
     }
     if (serverConfig.advertisePullDiagnostics) {
-        console.log('  Pull diag:  textDocument.diagnostic advertised');
+        logger.info('  Pull diag:  textDocument.diagnostic advertised');
     }
     if (opts.serverLog) {
-        console.log(`  Server log: ${path.resolve(opts.serverLog)}`);
+        logger.info(`  Server log: ${path.resolve(opts.serverLog)}`);
     }
     if (opts.trace) {
-        console.log(`  Trace:      ${path.resolve(opts.trace)}`);
+        logger.info(`  Trace:      ${path.resolve(opts.trace)}`);
     }
-    console.log();
+    logger.info();
 
     const benchStart = process.hrtime.bigint();
     // the trace shares the run's clock, its t is milliseconds since benchStart
@@ -195,7 +198,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         const abnormalExits: AbnormalExit[] = [];
         const recordAbnormal = (exit: AbnormalExit) => {
             abnormalExits.push(exit);
-            console.error(`  Warning: server ${exit.reason} during ${exit.during}`);
+            logger.warn(`  Warning: server ${exit.reason} during ${exit.during}`);
         };
         // exits with an allowed code after a replied shutdown, kept apart so they do not fail the run
         const toleratedExits: AbnormalExit[] = [];
@@ -221,7 +224,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         let harness: LspHarness | null = null;
         let ctx: BenchContextImpl | null = null;
         // keep alive spawn, initialize, idle and final shutdown timings, which belong to no iteration
-        const harnessOptions = { serverLog: opts.serverLog, trace, setup };
+        const harnessOptions = { serverLog: opts.serverLog, trace, setup, quiet };
         // one silence tracker for the run, so silent waits add up across warmups and restarts
         const silence = new SilenceTracker();
         const ctxOptions = {
@@ -229,6 +232,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             requestTimeoutMs: opts.requestTimeout,
             skipUnsupported: opts.skipUnsupported,
             silence,
+            quiet,
             ...(opts.shortenSilentWaits !== undefined ? { shortenSilentWaitsMs: opts.shortenSilentWaits } : {}),
         };
         let lifecycle: RequestTiming[] | undefined;
@@ -251,7 +255,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
             try {
                 await harness.start();
-                await waitIdleAfterStart(harness, opts.waitIdle);
+                await waitIdleAfterStart(harness, opts.waitIdle, logger);
             } catch (err: unknown) {
                 await stopQuietly(harness, opts.shutdownTimeout);
                 throw err;
@@ -268,7 +272,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
             // verbose ctx and server lines follow, so end the progress line there and print the
             // time on its own line below them, otherwise append the time to the progress line
-            process.stdout.write(`  Running iteration ${iterNum}...${opts.verbose ? '\n' : ''}`);
+            logger.progress(`  Running iteration ${iterNum}...${opts.verbose ? '\n' : ''}`);
             // mark the iteration before a restart spawns its server, so cold starts fall inside it
             trace?.iteration(isWarmup ? i + 1 : i - opts.warmup + 1, isWarmup);
 
@@ -286,7 +290,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                 ctx = new BenchContextImpl(harness, workspaceRoot, opts.verbose, ctxOptions);
                 try {
                     await harness.start();
-                    await waitIdleAfterStart(harness, opts.waitIdle);
+                    await waitIdleAfterStart(harness, opts.waitIdle, logger);
                     startTimings = harness.takeLifecycleTimings();
                     logCapabilities(harness);
                 } catch (err: unknown) {
@@ -296,7 +300,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                         throw err;
                     }
                     const msg = errorMessage(err);
-                    console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
+                    logger.error(iterationError(logger, during, msg));
                     const exit = harness.exit?.abnormal ? harness.exit : null;
                     recordAbnormal({
                         during,
@@ -314,7 +318,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                 await actionFn(ctx!);
             } catch (err: unknown) {
                 const msg = errorMessage(err);
-                console.log(`${opts.verbose ? '  ' : ' '}ERROR: ${msg}`);
+                logger.error(iterationError(logger, during, msg));
                 if (opts.verbose && err instanceof Error) {
                     console.error(err.stack);
                 }
@@ -337,7 +341,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             }
 
             const iterTime = `${iterMs.toFixed(0)}ms${isWarmup ? ' (warmup)' : ''}`;
-            console.log(opts.verbose ? `  Iteration ${iterNum}: ${iterTime}` : ` ${iterTime}`);
+            logger.info(opts.verbose ? `  Iteration ${iterNum}: ${iterTime}` : ` ${iterTime}`);
 
             // Reset document state between iterations (if not restarting)
             if (!opts.restart) {
@@ -348,7 +352,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             // ends the run: label the exit with the iteration, keep the runs collected so far and
             // skip iterations that would only fail against the dead server
             if (!opts.restart && harness?.exit) {
-                console.error(`  Server exited during ${during}, stopping the run`);
+                logger.warn(`  Server exited during ${during}, stopping the run`);
                 await teardown(harness, during);
                 lifecycle?.push(...harness.takeLifecycleTimings());
                 harness = null;
@@ -418,10 +422,12 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             }
         }
 
-        printSummary(report);
+        if (!quiet) {
+            printSummary(report);
+        }
 
         if (opts.output) {
-            console.log(`  Report written to: ${path.resolve(opts.output)}\n`);
+            logger.info(`  Report written to: ${path.resolve(opts.output)}\n`);
         }
 
         return report;
@@ -431,6 +437,13 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
     }
 }
 
+function iterationError(logger: Logger, during: string, msg: string): string {
+    if (logger.level === 'quiet') {
+        return `Error: ${during} failed: ${msg}`;
+    }
+    return `${logger.level === 'verbose' ? '  ' : ' '}ERROR: ${msg}`;
+}
+
 async function stopQuietly(harness: LspHarness, timeoutMs: number | undefined): Promise<void> {
     try {
         await harness.stop(timeoutMs);
@@ -438,13 +451,13 @@ async function stopQuietly(harness: LspHarness, timeoutMs: number | undefined): 
 }
 
 /** With --wait-idle, wait for a freshly started server to become idle, recorded as lifecycle/idle */
-async function waitIdleAfterStart(harness: LspHarness, timeoutMs: number | undefined): Promise<void> {
+async function waitIdleAfterStart(harness: LspHarness, timeoutMs: number | undefined, logger: Logger): Promise<void> {
     if (timeoutMs === undefined) {
         return;
     }
     const result = await harness.waitForIdleAfterStart({ timeoutMs });
     if (result.timedOut) {
-        console.error(`  Warning: server not idle after ${timeoutMs}ms`);
+        logger.warn(`  Warning: server not idle after ${timeoutMs}ms`);
     }
 }
 

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## Unreleased
+
+### New features
+
+- `-q, --quiet` on `run`, `baseline` and `check` keeps CI logs short. A run prints nothing on success: no header, progress, results table, hint notes or warnings, which stay in the report. Errors that fail the run and action script errors still reach stderr, and the report file, baseline file and `check` verdict (text or `--json`) are still written. The exit code alone tells success from failure. `-q` with `-v` is rejected. From code, `BenchOptions.quiet`, `LspHarnessOptions.quiet` and `BenchContextOptions.quiet` do the same, and `runBenchmark()` throws when `quiet` and `verbose` are both set. See [quiet output](docs/cli.md#quiet-output).
+
+### Changes
+
+- Action script errors are printed on stderr instead of stdout, so redirecting stdout no longer hides them. Without `-q` they still read ` ERROR: <message>` after the progress line.
+
 ## v0.5.0
 
 Changes since 0.4.0. lsbench can reach language servers over TCP, by connecting to a listening server or by listening for a spawned one, and action scripts can be `.mts` files.

@@ -107,7 +107,7 @@ Built in mappings beyond the common languages:
 
 When `openDocument` falls back to `plaintext` for an unmapped extension:
 
-- it warns once per extension, also without `--verbose`
+- it warns once per extension, also without `--verbose`, but not with [`--quiet`](cli.md#quiet-output)
 - the report lists the extension in `plaintext_fallbacks`, and the printed summary notes it
 - the silent wait and `until` hints add that the server may not serve that language ID, since many servers (terraform-ls among them) reject or ignore documents of a language they don't know
 

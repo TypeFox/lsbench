@@ -75,6 +75,7 @@ export interface BenchOptions {
     allowUnrepliedShutdown?: boolean;
     /** Verbose logging */
     verbose: boolean;
+    quiet?: boolean;
     /**
      * Append server stderr, window/logMessage, window/showMessage and $/logTrace to this file,
      * with a header line per server start, instead of forwarding them in verbose mode

@@ -127,7 +127,11 @@ export function createProgram(): Command {
             String(DEFAULT_CONNECT_TIMEOUT_MS),
         )
         .option('-v, --verbose', 'Enable verbose logging', false)
+        .option('-q, --quiet', 'Print only errors and the requested output, for CI', false)
         .action(async (server: string | undefined, rawOpts: Record<string, unknown>, command: Command) => {
+            if (rawOpts.quiet && rawOpts.verbose) {
+                usageError('--quiet and --verbose cannot be combined');
+            }
             // Extra arguments after `--` are passed through to the language server command
             const serverArgs = command.args.slice(1);
             // load initializationOptions, client capabilities and settings from JSON files if provided
@@ -150,6 +154,7 @@ export function createProgram(): Command {
                 output: rawOpts.output as string,
                 restart: rawOpts.restart as boolean,
                 verbose: rawOpts.verbose as boolean,
+                quiet: rawOpts.quiet as boolean,
                 serverLog: rawOpts.serverLog as string | undefined,
                 trace: rawOpts.trace as string | undefined,
                 shutdownTimeout: parseIntStrict(rawOpts.shutdownTimeout as string),
@@ -300,6 +305,7 @@ export function createProgram(): Command {
         .description('Write a baseline from a report: run settings and summaries, without the per iteration runs.')
         .argument('<report>', 'JSON report written by lsbench')
         .requiredOption('-o, --output <path>', 'Output file for the baseline')
+        .option('-q, --quiet', 'Print only errors and the requested output, for CI', false)
         .addHelpText(
             'after',
             '\nThe baseline keeps iterations, warmup, restart_between_iterations, summary and\n' +
@@ -321,7 +327,9 @@ export function createProgram(): Command {
                 console.error(`Error: Cannot write baseline ${output}: ${msg}`);
                 process.exit(1);
             }
-            console.log(`Baseline written to ${output}`);
+            if (!rawOpts.quiet) {
+                console.log(`Baseline written to ${output}`);
+            }
         });
 
     program
@@ -350,6 +358,7 @@ export function createProgram(): Command {
             String(DEFAULT_CHECK_OPTIONS.minCount),
         )
         .option('--json', 'Print a machine readable verdict', false)
+        .option('-q, --quiet', 'Print only errors and the requested output, for CI', false)
         .addHelpText(
             'after',
             '\nRules, each failing the check:\n' +

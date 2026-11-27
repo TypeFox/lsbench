@@ -1932,6 +1932,19 @@ describe('DiagnosticsTracker', () => {
         }
     });
 
+    it('does not warn about a publish without a diagnostics array in a quiet harness', () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const harness = new LspHarness({ command: 'unused', args: [] }, '/w', false, { quiet: true });
+            const tracker = (harness as unknown as { diagnostics: DiagnosticsTracker }).diagnostics;
+            const malformed = { uri } as unknown as Parameters<DiagnosticsTracker['receive']>[0];
+            expect(tracker.receive(malformed)).toMatchObject({ uri, diagnostics: [] });
+            expect(error).not.toHaveBeenCalled();
+        } finally {
+            error.mockRestore();
+        }
+    });
+
     it('bumps the generation on each didOpen and stamps publishes with it', () => {
         const tracker = new DiagnosticsTracker();
         tracker.noteNotification('textDocument/didOpen', open());

@@ -42,6 +42,7 @@ Usage: lsbench baseline [options] <report>
 
 Options:
   -o, --output <path>     Output file for the baseline (required)
+  -q, --quiet             Print only errors and the requested output, for CI
 
 Usage: lsbench check [options] <report>
 
@@ -52,6 +53,7 @@ Options:
   --slack-ms <n>          Milliseconds added on both sides of the median bounds (default: 5)
   --min-count <n>         Skip the median rule for methods with a count below this in the baseline or report (default: 3)
   --json                  Print a machine readable verdict
+  -q, --quiet             Print only errors and the requested output, for CI
 ```
 
 ## Output

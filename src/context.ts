@@ -286,6 +286,7 @@ export interface BenchContextOptions {
     silence?: SilenceTracker;
     shortenSilentWaitsMs?: number;
     requestTimeoutMs?: number;
+    quiet?: boolean;
 }
 
 /**
@@ -305,6 +306,7 @@ export class BenchContextImpl implements BenchContext {
     private silence: SilenceTracker;
     private shortenSilentWaitsMs: number | undefined;
     private requestTimeoutMs: number;
+    private quiet: boolean;
     private _lastError: RequestError | undefined;
     /** the latest pulled diagnostics per URI, for previousResultId and unchanged reports */
     private pulled = new Map<string, PulledDiagnostics>();
@@ -319,6 +321,7 @@ export class BenchContextImpl implements BenchContext {
         this.silence = options.silence ?? new SilenceTracker();
         this.shortenSilentWaitsMs = options.shortenSilentWaitsMs;
         this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+        this.quiet = options.quiet ?? false;
     }
 
     get lastError(): RequestError | undefined {
@@ -373,7 +376,7 @@ export class BenchContextImpl implements BenchContext {
         const resolved = options?.languageId === undefined ? resolveLanguageId(absPath) : undefined;
         const languageId = options?.languageId ?? resolved?.languageId ?? 'plaintext';
         const fallback = resolved?.fallback === true;
-        if (fallback && resolved && this.silence.recordPlaintextFallback(resolved.extension)) {
+        if (fallback && resolved && this.silence.recordPlaintextFallback(resolved.extension) && !this.quiet) {
             const ext = resolved.extension === '' ? 'a file without an extension' : `\`${resolved.extension}\``;
             console.error(
                 `[lsbench:ctx] Warning: ${ext} has no registered language id, so ${relativePath} opened as plaintext ` +
