@@ -33,7 +33,7 @@ npm install lsbench
 
 ## How It Works
 
-lsbench spawns a language server, performs the LSP `initialize` handshake, then runs your action script: a TypeScript or JavaScript module that drives LSP requests against a workspace. Each request is timed. The script runs for N iterations, producing a JSON report with per method statistics and per run breakdowns.
+lsbench spawns a language server, or connects to one over TCP, performs the LSP `initialize` handshake, then runs your action script: a TypeScript or JavaScript module that drives LSP requests against a workspace. Each request is timed. The script runs for N iterations, producing a JSON report with per method statistics and per run breakdowns.
 
 ```typescript
 import { BenchContext } from "lsbench";
@@ -58,7 +58,7 @@ The full documentation is in [`docs/`](docs/index.md):
 
 - [Writing an action script](docs/action-scripts.md) and the [BenchContext API](docs/api.md)
 - [Waiting for diagnostics](docs/diagnostics.md) and [warmup and readiness](docs/readiness.md)
-- [CLI options](docs/cli.md) and [server configuration](docs/server-configuration.md)
+- [CLI options](docs/cli.md), [server configuration](docs/server-configuration.md) and [transports](docs/transports.md)
 - [Report format](docs/report-format.md), [comparing diagnostics timings](docs/diagnostics-timings.md) and [regression checks](docs/regression-checks.md)
 - [Development](docs/development.md)
 
