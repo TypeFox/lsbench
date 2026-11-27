@@ -1,8 +1,8 @@
 # lsbench.tape — VHS demo of lsbench benchmarking a real Langium (minilogo) server
 #
-# Render:   cd demo && vhs lsbench.tape
-# Requires: vhs (brew install vhs), lsbench on PATH, and a built minilogo
-#           server at ../.integration/langium-minilogo (./out present).
+# Render:   ./demo/record-demo.sh (builds lsbench and puts it on PATH first)
+# Requires: vhs (brew install vhs) and a built minilogo server at
+#           ../.integration/langium-minilogo (npm run test:integration sets it up).
 #
 # script.ts in this folder is the action driver, kept here for reference.
 # Produces lsbench.gif in this folder.

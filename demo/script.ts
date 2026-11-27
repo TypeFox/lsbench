@@ -1,4 +1,7 @@
-import type { BenchContext } from 'lsbench';
+import { addRegisteredLanguage, type BenchContext } from 'lsbench';
+
+// .logo has no built in language id, so map it to minilogo instead of plaintext
+addRegisteredLanguage('minilogo', '.logo');
 
 // Drives the minilogo language server through an editor session over
 // gallery.logo (~1.5k LoC): a MiniLogo program with parameterized
