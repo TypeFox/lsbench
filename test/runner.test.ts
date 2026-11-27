@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { BenchOptions, BenchReport, ServerConfigOptions } from 'lsbench';
+import type { BenchOptions, BenchProgressEvent, BenchReport, ServerConfigOptions } from 'lsbench';
 import { LspHarness, loadActionScript, loadSetupScript, resolveServerConfig, runBenchmark } from 'lsbench';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isActionScriptPath } from '../src/runner.js';
@@ -796,6 +796,70 @@ describe('runBenchmark lifecycle timings', () => {
             'lifecycle/idle',
             'lifecycle/shutdown',
         ]);
+    });
+});
+
+describe('runBenchmark onProgress', () => {
+    let tmpDir: string;
+    let script: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-progress-'));
+        script = path.join(tmpDir, 'actions.ts');
+        fs.writeFileSync(
+            script,
+            `export default async function (ctx: any): Promise<void> {
+                await ctx.request('textDocument/hover', {});
+            }`,
+            'utf-8',
+        );
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function options(restart: boolean, onProgress: BenchOptions['onProgress']): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', cleanServer],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output: '',
+            restart,
+            verbose: false,
+            quiet: true,
+            onProgress,
+        };
+    }
+
+    const warmup = { kind: 'iteration', warmup: true, index: 1, total: 1 };
+    const first = { kind: 'iteration', warmup: false, index: 1, total: 2 };
+    const second = { kind: 'iteration', warmup: false, index: 2, total: 2 };
+    const start = { kind: 'server-start' };
+
+    it('reports one server start, then each iteration, in keep alive mode', async () => {
+        const events: BenchProgressEvent[] = [];
+        await runBenchmark(options(false, (event) => events.push(event)));
+        expect(events).toEqual([start, warmup, first, second]);
+    });
+
+    it('reports a server start before each iteration with restart', async () => {
+        const events: BenchProgressEvent[] = [];
+        await runBenchmark(options(true, (event) => events.push(event)));
+        expect(events).toEqual([start, warmup, start, first, start, second]);
+    });
+
+    it('ignores a throwing hook', async () => {
+        const report = await runBenchmark(
+            options(false, () => {
+                throw new Error('hook failed');
+            }),
+        );
+        expect(report.runs).toHaveLength(2);
+        expect(report.script_errors).toBeUndefined();
     });
 });
 

@@ -15,7 +15,7 @@ Start with the [README](../README.md) for installation and a quick start.
 
 | Page | Covers |
 | --- | --- |
-| [CLI](cli.md) | options, quiet and verbose output, wire trace, `prime` |
+| [CLI](cli.md) | options, quiet and verbose output, run status, wire trace, `prime` |
 | [Server configuration](server-configuration.md) | server arguments, initialization options, client capabilities, settings |
 | [Transports](transports.md) | stdio, `--connect` and `--socket`, servers lsbench does not spawn |
 | [Client behavior](client-behavior.md) | unsupported requests, change and save sync, answers to server requests |

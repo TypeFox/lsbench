@@ -43,6 +43,7 @@ Options:
   --connect-timeout <ms>      Wait for the socket connection (default: 10000)
   -v, --verbose               Verbose logging: LSP messages, publishes, progress, server output
   -q, --quiet                 Print only errors and the requested output, for CI
+  --status, --no-status       Report run status to the terminal with OSC 7501 (default: when stderr is a terminal)
   -V, --version               Show version
   -h, --help                  Show help
 
@@ -87,6 +88,26 @@ Where to read more:
 - `run`, `baseline` and `check` accept `-q`.
 - `-q` and `-v` can't be combined, and the run exits 1 with `Error: --quiet and --verbose cannot be combined`.
 - From code, pass `quiet: true` in `BenchOptions` to `runBenchmark()`. It throws when `verbose` is set too.
+
+## Run Status
+
+`run` reports its status to the terminal with [OSC 7501](https://www.superlogical.com/rex/docs/build/program-status). Terminals and multiplexers that support it show progress in a tab or sidebar, and notify when the run ends. Others ignore it.
+
+| Moment | State | Progress | Message |
+| --- | --- | --- | --- |
+| Server start, first or with `--restart` | `working` | unchanged | `Starting <server>` |
+| Warmup `i` of `W` | `working` | none | `Warmup i/W` |
+| Iteration `n` of `N` | `working` | `100 * (n - 1) / N` | `Iteration n/N` |
+| Run finished | `done` | none | `Median <ms>ms over N iterations` |
+| Run failed or aborted | `error` | none | first line of the error |
+
+- The title is the workspace directory name, and the app is `lsbench`.
+- `done` and `error` stay in the terminal after lsbench exits, `working` is dropped.
+- Reports go to stderr, never stdout, so redirected or piped stdout stays clean.
+- On by default only when stderr is a terminal. `--status` forces it on, `--no-status` off. Without either flag, `LSBENCH_STATUS=1` or `LSBENCH_STATUS=0` does the same.
+- `-q` doesn't turn it off, since the sequence is invisible.
+- Usage errors before the run starts, `baseline` and `check` report nothing.
+- From code, `runBenchmark()` reports nothing. Pass `onProgress` in `BenchOptions` to receive `BenchProgressEvent`s: `{ kind: 'server-start' }` before each server start, and `{ kind: 'iteration', warmup, index, total }` before each warmup and iteration, outside the timed section. Errors thrown by `onProgress` are ignored.
 
 ## Verbose Output
 

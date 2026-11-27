@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import { Command } from 'commander';
 import {
     type CheckedRun,
@@ -14,8 +15,9 @@ import { DEFAULT_CONNECT_TIMEOUT_MS } from './harness.js';
 import { errorLabel } from './log.js';
 import { getPrimer } from './primer.js';
 import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
+import { createRunStatus, createStatusReporter, statusEnabled } from './status.js';
 import type { BenchOptions, BenchReport, ServerTransport } from './types.js';
-import { errorMessage } from './util.js';
+import { errorMessage, serverLabel } from './util.js';
 import { CLI_VERSION } from './version.js';
 
 /** idle wait timeout of --wait-idle without a value */
@@ -133,6 +135,11 @@ export function createProgram(): Command {
             false,
         )
         .option('-q, --quiet', 'Print only errors and the requested output, for CI', false)
+        .option(
+            '--status',
+            'Report run status to the terminal with OSC 7501 on stderr, by default only when stderr is a terminal',
+        )
+        .option('--no-status', 'Never report run status with OSC 7501')
         .action(async (server: string | undefined, rawOpts: Record<string, unknown>, command: Command) => {
             if (rawOpts.quiet && rawOpts.verbose) {
                 usageError('--quiet and --verbose cannot be combined');
@@ -270,31 +277,43 @@ export function createProgram(): Command {
                 }
             }
 
+            const status = createRunStatus(createStatusReporter(statusEnabled(rawOpts.status as boolean | undefined)), {
+                server: serverLabel(opts),
+                title: path.basename(path.resolve(opts.workspace)),
+            });
+            opts.onProgress = status.onProgress;
+
             try {
                 // the runner writes the report itself, before the final server teardown
                 const report = await runBenchmark(opts);
 
                 // still exit non zero when the server crashed, so callers notice
-                let failed = false;
+                const failures: string[] = [];
                 if (report.abnormal_exits) {
                     for (const exit of report.abnormal_exits) {
-                        const status = exit.signal
+                        const exitStatus = exit.signal
                             ? `signal ${exit.signal}`
                             : exit.code === null
                               ? 'connection closed'
                               : `exit code ${exit.code}`;
-                        console.error(
-                            `${errorLabel()} server exited abnormally during ${exit.during} (${status}): ${exit.reason}`,
-                        );
+                        const failure = `server exited abnormally during ${exit.during} (${exitStatus}): ${exit.reason}`;
+                        console.error(`${errorLabel()} ${failure}`);
+                        failures.push(failure);
                     }
-                    failed = true;
                 }
                 if (report.script_errors) {
-                    console.error(`${errorLabel()} ${describeScriptErrors(report)}`);
-                    failed = true;
+                    const failure = describeScriptErrors(report);
+                    console.error(`${errorLabel()} ${failure}`);
+                    failures.push(failure);
                 }
-                process.exit(failed ? 1 : 0);
+                if (failures.length > 0) {
+                    status.error(failures[0]);
+                    process.exit(1);
+                }
+                status.done(describeResult(report));
+                process.exit(0);
             } catch (err: unknown) {
+                status.error(err instanceof Error ? err.message : String(err));
                 console.error(`\n${errorLabel('Fatal error:')}`, err instanceof Error ? err.message : err);
                 if (opts.verbose && err instanceof Error) {
                     console.error(err.stack);
@@ -417,6 +436,12 @@ export function createProgram(): Command {
         });
 
     return program;
+}
+
+function describeResult(report: BenchReport): string {
+    const median = report.iteration_summary.median_ms;
+    const iterations = `${report.iterations} iteration${report.iterations === 1 ? '' : 's'}`;
+    return median === null ? `Finished ${iterations}` : `Median ${median}ms over ${iterations}`;
 }
 
 function describeScriptErrors(report: BenchReport): string {

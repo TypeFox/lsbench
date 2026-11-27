@@ -405,6 +405,10 @@ experimental/serverStatus (verbose mode logs progress titles).
       -q, --quiet                  Print only errors on stderr, the report file and
                                    the check verdict, for CI. Warnings stay in the
                                    report. Rejected with -v                         (default: false)
+          --status, --no-status    Report run status to the terminal with OSC 7501 on
+                                   stderr: working with progress, then done or
+                                   error. On by default only when stderr is a
+                                   terminal, LSBENCH_STATUS=1|0 forces it on or off
       -V, --version                Print version
       -h, --help                   Print help
 

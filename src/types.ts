@@ -99,7 +99,12 @@ export interface BenchOptions {
     waitIdle?: number;
     shortenSilentWaits?: number;
     requestTimeout?: number;
+    onProgress?: (event: BenchProgressEvent) => void;
 }
+
+export type BenchProgressEvent =
+    | { kind: 'server-start' }
+    | { kind: 'iteration'; warmup: boolean; index: number; total: number };
 
 // ── Timing & Results ────────────────────────────────────────────────────────
 

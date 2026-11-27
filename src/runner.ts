@@ -10,6 +10,7 @@ import type {
     AbnormalExit,
     ActionScript,
     BenchOptions,
+    BenchProgressEvent,
     BenchReport,
     IterationResult,
     RequestTiming,
@@ -252,8 +253,17 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             printCapabilitySummary(h, opts.skipUnsupported ?? true);
         };
 
+        const notify = (event: BenchProgressEvent) => {
+            try {
+                opts.onProgress?.(event);
+            } catch {
+                return;
+            }
+        };
+
         // Start server if we're keeping it alive across iterations
         if (!opts.restart) {
+            notify({ kind: 'server-start' });
             harness = new LspHarness(serverConfig, workspaceRoot, opts.verbose, harnessOptions);
             try {
                 await harness.start();
@@ -277,6 +287,15 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             logger.progress(`  Running iteration ${iterNum}...${opts.verbose ? '\n' : ''}`);
             // mark the iteration before a restart spawns its server, so cold starts fall inside it
             trace?.iteration(isWarmup ? i + 1 : i - opts.warmup + 1, isWarmup);
+            if (opts.restart) {
+                notify({ kind: 'server-start' });
+            }
+            notify({
+                kind: 'iteration',
+                warmup: isWarmup,
+                index: isWarmup ? i + 1 : i - opts.warmup + 1,
+                total: isWarmup ? opts.warmup : opts.iterations,
+            });
 
             const iterStart = process.hrtime.bigint();
             // with restart, this iteration's spawn and initialize timings

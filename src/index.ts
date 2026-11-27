@@ -76,6 +76,7 @@ export type {
     ActionScript,
     BenchContext,
     BenchOptions,
+    BenchProgressEvent,
     BenchReport,
     ClientHooks,
     CodeActionOptions,
