@@ -95,7 +95,11 @@ describe('lsbench CLI with --quiet', () => {
     it('prints action script errors on stderr', () => {
         const result = run(cleanServer, throwing, ['-q']);
         expect(result.stdout).toBe('');
-        expect(result.stderr.trim()).toBe('Error: iteration 1 failed: boom');
+        expect(result.stderr.trim().split('\n')).toEqual([
+            'Error: iteration 1 failed: boom',
+            'Error: action script failed in 1 of 1 iterations',
+        ]);
+        expect(result.status).toBe(1);
     });
 
     it('rejects --quiet with --verbose before starting the server', () => {

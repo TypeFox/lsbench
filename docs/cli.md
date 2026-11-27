@@ -79,8 +79,8 @@ Where to read more:
 | Run header, progress lines, results table and hint notes | dropped |
 | `Report written to` and `Baseline written to` | dropped |
 | Warnings, such as abnormal exits, silent waits or plaintext fallbacks | dropped. Abnormal exits, silent waits and plaintext fallbacks stay in the report |
-| Errors failing the run, such as `Error: server exited abnormally ...` | on stderr |
-| Action script errors, as `Error: iteration N failed: <message>` | on stderr |
+| Errors failing the run, such as `Error: server exited abnormally ...` or `Error: action script failed in N of M iterations` | on stderr |
+| Action script errors, as `Error: iteration N failed: <message>` | on stderr, and they fail the run (see [script errors](report-format.md#script-errors)) |
 | The report file (`-o`) and baseline file | written |
 | The `check` verdict, text or `--json` | on stdout |
 

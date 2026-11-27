@@ -304,6 +304,18 @@ describe('buildReport', () => {
         expect(report.iteration_summary.avg_ms).toBe(200);
         expect(report.iteration_summary.min_ms).toBe(100);
         expect(report.iteration_summary.max_ms).toBe(300);
+        expect(report.iteration_summary).not.toHaveProperty('failed');
+    });
+
+    it('counts iterations whose action script threw and keeps them in the totals', () => {
+        const runs = [
+            { ...run(1, [timing({ duration_ms: 100 })]), error: 'boom' },
+            run(2, [timing({ duration_ms: 300 })]),
+        ];
+        const report = buildReport(opts, runs, 400);
+        expect(report.iteration_summary.failed).toBe(1);
+        expect(report.iteration_summary.avg_ms).toBe(200);
+        expect(report.summary['textDocument/hover'].count).toBe(2);
     });
     it('lists lifecycle methods first when they come from runs', () => {
         const runs = [
@@ -410,6 +422,29 @@ describe('printSummary', () => {
         ];
         printSummary(buildReport(opts, runs, 40));
         expect(lines).toContain('    avg=20ms  median=10ms  p95=30ms  min=10ms  max=30ms');
+    });
+
+    it('notes script errors and failed iterations, only when there are some', () => {
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const runs = [
+            { iteration: 1, requests: [timing()], total_ms: 10, error: 'boom' },
+            { iteration: 2, requests: [timing()], total_ms: 30 },
+        ];
+        const report = buildReport(opts, runs, 40);
+        report.script_errors = [
+            { during: 'warmup 1', message: 'boom' },
+            { during: 'iteration 1', message: 'boom' },
+        ];
+        printSummary(report);
+        expect(lines).toContain('  Script errors:   2');
+        expect(lines).toContain('    failed: 1 of 2, their totals included');
+
+        lines.length = 0;
+        printSummary(buildReport(opts, [{ iteration: 1, requests: [timing()], total_ms: 10 }], 10));
+        expect(lines.some((line) => line.includes('Script errors') || line.includes('failed:'))).toBe(false);
     });
 
     it('prints n/a for the latencies of a method where every wait timed out', () => {

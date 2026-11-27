@@ -43,6 +43,8 @@ Paths are relative to the workspace root, and positions are zero based. `ctx.wor
 
 Timed methods record a timing and return the raw LSP result, or `null` on a failure. Since a `null` result looks the same, check `ctx.lastError`. It holds `{ method, message, code? }` when the last timed request failed, is `undefined` otherwise, and is cleared as each timed method starts, including `waitForDiagnostics` and `waitForIdle`. A wait that times out does not set it, but a failed diagnostics pull during the wait does. A request without a reply within [`--request-timeout`](report-format.md#request-timeouts) also returns `null` and sets `ctx.lastError`.
 
+A script that throws fails the run: the error goes to stderr, the report records it, and lsbench exits 1. Catch errors you expect inside the script. See [script errors](report-format.md#script-errors).
+
 ```ts
 const res = await ctx.definition("src/index.ts", 10, 5);
 if (ctx.lastError) {

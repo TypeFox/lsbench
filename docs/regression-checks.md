@@ -27,6 +27,7 @@ The baseline records its format version in `lsbench_baseline`. `check` exits 2 o
 | Rates | `timeout_rate`, `skip_rate`, `empty_rate`, `null_rate` or `failure_rate` differ by more than `--rate-tolerance` |
 | Median | `median_ms` falls outside `[max(0, base / ratio - slack), base * ratio + slack]`, with `--median-ratio` and `--slack-ms` |
 | Null median | a `null` median (every call timed out or was skipped) isn't `null` anymore, or a number became `null` |
+| Failed iterations | the report's `iteration_summary.failed` is above 0, since the action script threw (see [script errors](report-format.md#script-errors)). The baseline's count is shown but doesn't excuse it |
 
 About the median rule:
 

@@ -274,6 +274,7 @@ export function createProgram(): Command {
                 const report = await runBenchmark(opts);
 
                 // still exit non zero when the server crashed, so callers notice
+                let failed = false;
                 if (report.abnormal_exits) {
                     for (const exit of report.abnormal_exits) {
                         const status = exit.signal
@@ -285,9 +286,13 @@ export function createProgram(): Command {
                             `Error: server exited abnormally during ${exit.during} (${status}): ${exit.reason}`,
                         );
                     }
-                    process.exit(1);
+                    failed = true;
                 }
-                process.exit(0);
+                if (report.script_errors) {
+                    console.error(`Error: ${describeScriptErrors(report)}`);
+                    failed = true;
+                }
+                process.exit(failed ? 1 : 0);
             } catch (err: unknown) {
                 console.error('\nFatal error:', err instanceof Error ? err.message : err);
                 if (opts.verbose && err instanceof Error) {
@@ -372,7 +377,8 @@ export function createProgram(): Command {
                 '    more than --rate-tolerance\n' +
                 '  - median_ms is outside [max(0, base / ratio - slack), base * ratio + slack],\n' +
                 '    unless the baseline or report count is below --min-count (1 checks all)\n' +
-                '  - a null median_ms becomes a number or vice versa\n\n' +
+                '  - a null median_ms becomes a number or vice versa\n' +
+                '  - the report has iterations whose action script threw\n\n' +
                 'Examples:\n' +
                 '  lsbench check results.json -b baseline.json\n' +
                 '  lsbench check results.json -b baseline.json --median-ratio 3 --slack-ms 10 --json',
@@ -410,6 +416,21 @@ export function createProgram(): Command {
         });
 
     return program;
+}
+
+function describeScriptErrors(report: BenchReport): string {
+    let warmups = 0;
+    for (const error of report.script_errors ?? []) {
+        if (error.during.startsWith('warmup')) {
+            warmups++;
+        }
+    }
+    const failed = report.iteration_summary.failed ?? 0;
+    const parts = [`${failed} of ${report.iterations} iterations`];
+    if (warmups > 0) {
+        parts.push(`${warmups} of ${report.warmup} warmups`);
+    }
+    return `action script failed in ${parts.join(' and ')}`;
 }
 
 /** Collect repeated --allow-exit-code values, NaN for an invalid one (rejected after parsing) */

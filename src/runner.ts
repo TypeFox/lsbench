@@ -13,6 +13,7 @@ import type {
     BenchReport,
     IterationResult,
     RequestTiming,
+    ScriptError,
     ServerConfig,
     SetupScript,
 } from './types.js';
@@ -202,6 +203,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         };
         // exits with an allowed code after a replied shutdown, kept apart so they do not fail the run
         const toleratedExits: AbnormalExit[] = [];
+        const scriptErrors: ScriptError[] = [];
         const teardown = async (h: LspHarness, during: string) => {
             try {
                 const exit = await h.stop(opts.shutdownTimeout);
@@ -314,10 +316,13 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                 }
             }
 
+            let scriptError: string | undefined;
             try {
                 await actionFn(ctx!);
             } catch (err: unknown) {
                 const msg = errorMessage(err);
+                scriptError = msg;
+                scriptErrors.push({ during, message: msg });
                 logger.error(iterationError(logger, during, msg));
                 if (opts.verbose && err instanceof Error) {
                     console.error(err.stack);
@@ -337,6 +342,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
                     requests: [...startTimings, ...timings],
                     total_ms: round(iterMs),
                 };
+                if (scriptError !== undefined) {
+                    run.error = scriptError;
+                }
                 runs.push(run);
             }
 
@@ -390,6 +398,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             }
         };
         addExits();
+        if (scriptErrors.length > 0) {
+            report.script_errors = scriptErrors;
+        }
         const silentWaits = silence.silentWaits();
         if (silentWaits) {
             report.silent_waits = silentWaits;

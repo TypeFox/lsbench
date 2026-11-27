@@ -426,7 +426,8 @@ The JSON report (and the printed summary) contains:
   - summary            per-method stats: count, avg/median/p95/p99/min/max_ms, stddev_ms,
                        failure_rate, null_rate, empty_rate, timeout_rate, skipped, skip_rate
                        (latencies are null, printed n/a, when every call timed out or was skipped)
-  - iteration_summary  per-iteration total-time stats
+  - iteration_summary  per-iteration total-time stats, failed counts iterations whose
+                       action script threw (only when any did)
   - runs               full per-iteration, per-request breakdown
   - lifecycle          keep alive mode only: spawn, initialize, idle and final shutdown
                        timings of the single server
@@ -436,6 +437,10 @@ The JSON report (and the printed summary) contains:
                        --allow-unreplied-shutdown tolerates it.
                        Without --restart, a crash during an iteration ends the run and
                        is labeled with that iteration)
+  - script_errors      errors the action script threw, as { during, message }, warmups
+                       included (only when any did, lsbench then exits 1 but still writes
+                       the report. The run gets error, iteration_summary gets failed, and
+                       lsbench check fails the report)
   - tolerated_exits    servers that exited after a replied or failed shutdown with a code
                        allowed by --allow-exit-code or a signal allowed by --allow-exit-signal,
                        or after an unreplied shutdown with --allow-unreplied-shutdown

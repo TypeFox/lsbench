@@ -14,6 +14,7 @@
 
 ### Changes
 
+- An action script that throws now fails the run. lsbench exits 1 with `Error: action script failed in N of M iterations`, after writing the report. CI jobs whose scripts throw now and then start failing; catch expected errors inside the script. The report records each error: the run gets `error`, `iteration_summary` gets `failed`, and the new `script_errors` lists them as `{ during, message }`, warmups included. All three are absent when no error was thrown. `lsbench check` fails a report with failed iterations. `runBenchmark()` doesn't throw for script errors, so check `script_errors`. `ScriptError` is exported. See [script errors](docs/report-format.md#script-errors).
 - Action script errors are printed on stderr instead of stdout, so redirecting stdout no longer hides them. Without `-q` they still read ` ERROR: <message>` after the progress line.
 
 ## v0.5.0

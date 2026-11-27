@@ -262,6 +262,34 @@ describe('checkReport', () => {
         });
     });
 
+    describe('failed iterations', () => {
+        it('fails a report with failed iterations', () => {
+            const result = checkReport(run({}, { iteration_summary: { failed: 2 } }), run({}));
+            expect(result.failures).toEqual([
+                {
+                    method: RUN_METHOD,
+                    field: 'failed_iterations',
+                    baseline: 0,
+                    actual: 2,
+                    rule: 'iterations must not fail',
+                },
+            ]);
+        });
+
+        it('fails even when the baseline had failed iterations too', () => {
+            const failing = run({}, { iteration_summary: { failed: 1 } });
+            expect(checkReport(failing, failing).failures).toMatchObject([
+                { field: 'failed_iterations', baseline: 1, actual: 1 },
+            ]);
+        });
+
+        it('passes a report without failed iterations against a baseline with some', () => {
+            expect(
+                checkReport(run({}, { iteration_summary: {} }), run({}, { iteration_summary: { failed: 1 } })).pass,
+            ).toBe(true);
+        });
+    });
+
     it('collects every failure at once', () => {
         const result = checkReport(
             run({ m: stats({ median_ms: 500, timeout_rate: 1 }) }, { warmup: 0 }),
@@ -298,6 +326,9 @@ describe('validateCheckedRun', () => {
         );
         expect(validateCheckedRun(run({ m: { ...stats(), count: '1' } as unknown as MethodStats }))).toBe(
             'summary of m has no numeric count',
+        );
+        expect(validateCheckedRun({ ...run({}), iteration_summary: { failed: '1' } })).toBe(
+            'iteration_summary has a non numeric failed',
         );
     });
 

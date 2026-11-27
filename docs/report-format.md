@@ -43,10 +43,11 @@
 | --- | --- |
 | `transport` | with `--connect` or `--socket` only, e.g. `connect 127.0.0.1:6005` or `socket 0`, see [transports](transports.md) |
 | `summary` | per method aggregate stats, see [summary](#summary) |
-| `iteration_summary` | per iteration total time stats. Without timed iterations, such as when a keep alive server exits during a warmup, its fields are `null`, printed as `n/a` |
+| `iteration_summary` | per iteration total time stats. Without timed iterations, such as when a keep alive server exits during a warmup, its fields are `null`, printed as `n/a`. `failed` counts iterations whose action script threw, see [script errors](#script-errors) |
 | `runs` | the full per iteration, per request breakdown |
 | `lifecycle` | without `--restart` only: spawn, initialize, idle and final shutdown timings of the single server |
 | `abnormal_exits` | servers that crashed or exited unexpectedly, see [server exits](#server-exits) |
+| `script_errors` | errors the action script threw, see [script errors](#script-errors) |
 | `tolerated_exits` | servers whose exit was allowed, see [server exits](#server-exits) |
 | `plaintext_fallbacks` | extensions opened as `plaintext`, see [language IDs](action-scripts.md#language-ids) |
 | `silent_waits`, `until_rejected`, `reopen_waits` | diagnostics waits known to time out, see [comparing diagnostics timings](diagnostics-timings.md) |
@@ -121,6 +122,21 @@ A request the server doesn't answer within `--request-timeout` (default 60000 ms
 - The timing has `result: 'timeout'` and `error: 'no reply within Nms'`, and counts toward `timeout_rate`.
 - The script gets `null`, `ctx.lastError` holds the timeout, and the iteration goes on.
 - The limit applies per attempt, so `ContentModified` [retries](#retries) can take longer in total. A timeout ends the retries.
+
+## Script Errors
+
+An action script that throws fails the run, but the iteration still counts:
+
+- The error message goes to stderr, and the iteration goes on to its reset or teardown.
+- Its run in `runs` gets `error` with the message. Its timings stay in `summary` and `iteration_summary`.
+- `iteration_summary.failed` counts these runs.
+- `script_errors` lists each error as `{ "during": "iteration 2", "message": "boom" }`, warmups included.
+- lsbench exits 1 with `Error: action script failed in N of M iterations`, after writing the report.
+- [`lsbench check`](regression-checks.md#rules) fails a report with failed iterations.
+
+All three fields are absent when the script never threw. `runBenchmark()` doesn't throw for script errors, so check `script_errors` on its result.
+
+To let a script tolerate an expected error, catch it inside the script.
 
 ## Server Exits
 

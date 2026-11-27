@@ -30,7 +30,9 @@ export interface BenchBaseline {
 }
 
 /** The fields shared by a report and a baseline, so either can be checked against a baseline */
-export type CheckedRun = Pick<BenchBaseline, (typeof CHECKED_SETTINGS)[number] | 'summary'>;
+export type CheckedRun = Pick<BenchBaseline, (typeof CHECKED_SETTINGS)[number] | 'summary'> & {
+    iteration_summary?: Pick<BenchReport['iteration_summary'], 'failed'>;
+};
 
 export interface CheckOptions {
     /** largest allowed absolute difference of a rate (default 0.1) */
@@ -94,6 +96,17 @@ export function checkReport(actual: CheckedRun, baseline: CheckedRun, options: C
                 rule: 'setting must match',
             });
         }
+    }
+
+    const failed = actual.iteration_summary?.failed ?? 0;
+    if (failed > 0) {
+        failures.push({
+            method: RUN_METHOD,
+            field: 'failed_iterations',
+            baseline: baseline.iteration_summary?.failed ?? 0,
+            actual: failed,
+            rule: 'iterations must not fail',
+        });
     }
 
     // methods missing from the report, then the shared ones
@@ -188,6 +201,15 @@ export function validateCheckedRun(value: unknown): string | undefined {
     }
     if (typeof run.restart_between_iterations !== 'boolean') {
         return 'missing boolean "restart_between_iterations"';
+    }
+    const iterationSummary = run.iteration_summary as Record<string, unknown> | undefined;
+    if (
+        typeof iterationSummary === 'object' &&
+        iterationSummary !== null &&
+        iterationSummary.failed !== undefined &&
+        typeof iterationSummary.failed !== 'number'
+    ) {
+        return 'iteration_summary has a non numeric failed';
     }
     const summary = run.summary;
     if (typeof summary !== 'object' || summary === null || Array.isArray(summary)) {

@@ -1630,3 +1630,67 @@ describe('runBenchmark in a workspace whose path needs percent-encoding', () => 
         }
     });
 });
+
+describe('runBenchmark with a throwing action script', () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsbench-script-errors-'));
+    });
+
+    afterAll(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    function options(script: string, restart: boolean, output: string): BenchOptions {
+        return {
+            server: process.execPath,
+            serverArgs: ['--input-type=module', '-e', cleanServer],
+            workspace: tmpDir,
+            script,
+            iterations: 2,
+            warmup: 1,
+            output,
+            restart,
+            verbose: false,
+        };
+    }
+
+    for (const restart of [false, true]) {
+        it(`records the error of the second call only (${restart ? 'restart' : 'keep alive'})`, async () => {
+            vi.spyOn(console, 'error').mockImplementation(() => {});
+            const script = path.join(tmpDir, `second-${restart}.ts`);
+            fs.writeFileSync(
+                script,
+                `let calls = 0;
+                export default async function (): Promise<void> {
+                    calls++;
+                    if (calls === 2) {
+                        throw new Error('second call');
+                    }
+                }`,
+                'utf-8',
+            );
+            const output = path.join(tmpDir, `report-${restart}.json`);
+            const report = await runBenchmark(options(script, restart, output));
+
+            expect(report.runs.map((r) => r.error)).toEqual(['second call', undefined]);
+            expect(report.script_errors).toEqual([{ during: 'iteration 1', message: 'second call' }]);
+            expect(report.iteration_summary.failed).toBe(1);
+            const written = JSON.parse(fs.readFileSync(output, 'utf-8'));
+            expect(written.script_errors).toEqual(report.script_errors);
+            expect(written.runs[0].error).toBe('second call');
+        });
+    }
+
+    it('leaves the report shape unchanged when the script does not throw', async () => {
+        const script = path.join(tmpDir, 'passing.ts');
+        fs.writeFileSync(script, 'export default async function (): Promise<void> {}', 'utf-8');
+        const report = await runBenchmark(options(script, false, ''));
+        expect(report.script_errors).toBeUndefined();
+        expect(report.iteration_summary).not.toHaveProperty('failed');
+        for (const run of report.runs) {
+            expect(run).not.toHaveProperty('error');
+        }
+    });
+});

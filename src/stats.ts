@@ -134,13 +134,23 @@ function computeIterationSummary(runs: IterationResult[]): BenchReport['iteratio
         return { avg_ms: null, median_ms: null, p95_ms: null, min_ms: null, max_ms: null };
     }
     const sum = totals.reduce((a, b) => a + b, 0);
-    return {
+    const summary: BenchReport['iteration_summary'] = {
         avg_ms: round(sum / n),
         median_ms: round(percentile(totals, 50)),
         p95_ms: round(percentile(totals, 95)),
         min_ms: round(totals[0]),
         max_ms: round(totals[n - 1]),
     };
+    let failed = 0;
+    for (const run of runs) {
+        if (run.error !== undefined) {
+            failed++;
+        }
+    }
+    if (failed > 0) {
+        summary.failed = failed;
+    }
+    return summary;
 }
 
 /**
@@ -250,6 +260,9 @@ export function printSummary(report: BenchReport): void {
     if (report.abnormal_exits) {
         console.log(`  Abnormal exits:  ${report.abnormal_exits.length}`);
     }
+    if (report.script_errors) {
+        console.log(`  Script errors:   ${report.script_errors.length}`);
+    }
     if (report.tolerated_exits) {
         console.log(
             `  Tolerated exits: ${report.tolerated_exits.length} (${describeExitCodes(report.tolerated_exits)})`,
@@ -264,6 +277,9 @@ export function printSummary(report: BenchReport): void {
     console.log(
         `    avg=${total(is.avg_ms)}  median=${total(is.median_ms)}  p95=${total(is.p95_ms)}  min=${total(is.min_ms)}  max=${total(is.max_ms)}`,
     );
+    if (is.failed) {
+        console.log(`    failed: ${is.failed} of ${report.runs.length}, their totals included`);
+    }
     console.log();
 
     // Per-method table

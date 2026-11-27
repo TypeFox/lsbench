@@ -90,6 +90,7 @@ export type {
     RequestError,
     RequestResult,
     RequestTiming,
+    ScriptError,
     ServerCapabilities,
     ServerConfig,
     ServerTransport,

@@ -173,6 +173,7 @@ export interface IterationResult {
     requests: RequestTiming[];
     /** Total wall-clock time for this iteration in ms */
     total_ms: number;
+    error?: string;
 }
 
 /**
@@ -245,6 +246,7 @@ export interface BenchReport {
         p95_ms: number | null;
         min_ms: number | null;
         max_ms: number | null;
+        failed?: number;
     };
     runs: IterationResult[];
     /**
@@ -254,6 +256,7 @@ export interface BenchReport {
     lifecycle?: RequestTiming[];
     /** Server processes that crashed or exited unexpectedly, absent when none did */
     abnormal_exits?: AbnormalExit[];
+    script_errors?: ScriptError[];
     /**
      * Server processes that exited after a replied shutdown with a code allowed by
      * allowExitCodes (--allow-exit-code), absent when none did. They do not fail the run
@@ -289,6 +292,11 @@ export interface ReopenWaits {
     waits: number;
     longest_streak: number;
     shortened: number;
+}
+
+export interface ScriptError {
+    during: string;
+    message: string;
 }
 
 /** A server exit recorded in abnormal_exits or tolerated_exits */
