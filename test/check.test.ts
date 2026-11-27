@@ -7,7 +7,7 @@ import {
     RUN_METHOD,
     validateCheckedRun,
 } from 'lsbench';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 function stats(overrides: Partial<MethodStats> = {}): MethodStats {
     return {
@@ -375,5 +375,38 @@ describe('formatCheckResult', () => {
     it('counts several regressions in the headline', () => {
         const result = checkReport(run({ a: stats(), b: stats() }), run({}));
         expect(formatCheckResult(result)).toMatch(/^FAIL: 2 regressions against the baseline\n/);
+    });
+
+    describe('with color', () => {
+        afterEach(() => {
+            vi.unstubAllEnvs();
+        });
+
+        it('styles the verdict and header', () => {
+            vi.stubEnv('FORCE_COLOR', '1');
+            expect(formatCheckResult({ pass: true, failures: [] }, { color: true })).toBe(
+                '\x1b[1m\x1b[32mPASS:\x1b[39m\x1b[22m no regressions against the baseline',
+            );
+            const text = formatCheckResult(checkReport(run({ m: stats({ median_ms: 300 }) }), run({ m: stats() })), {
+                color: true,
+            });
+            const lines = text.split('\n');
+            expect(lines[0]).toBe('\x1b[1m\x1b[31mFAIL:\x1b[39m\x1b[22m 1 regression against the baseline');
+            expect(lines[2]).toBe('\x1b[1mmethod  field      baseline  actual  rule\x1b[22m');
+            expect(lines[4]).not.toContain('\x1b[');
+        });
+
+        it('stays plain without the color option', () => {
+            vi.stubEnv('FORCE_COLOR', '1');
+            expect(formatCheckResult({ pass: true, failures: [] })).toBe('PASS: no regressions against the baseline');
+        });
+
+        it('stays plain with NO_COLOR', () => {
+            vi.stubEnv('FORCE_COLOR', undefined);
+            vi.stubEnv('NO_COLOR', '1');
+            expect(formatCheckResult({ pass: true, failures: [] }, { color: true })).toBe(
+                'PASS: no regressions against the baseline',
+            );
+        });
     });
 });

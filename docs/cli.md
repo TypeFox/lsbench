@@ -124,7 +124,17 @@ Each LSP message between lsbench and the server is one line, interleaved in orde
 
 ### Colors
 
-Verbose output is colored when stderr is a terminal. The arrows and words carry the meaning, so piped output loses nothing.
+Output is colored when it goes to a terminal, checked separately for stdout and stderr. Colors are sparse and stay on short labels, and the words carry the meaning, so piped output loses nothing.
+
+| Part | Color |
+| --- | --- |
+| `Error:`, `ERROR:`, `Fatal error:` labels | bold red |
+| `Warning:` labels | yellow |
+| results title, table headers | bold |
+| nonzero `Fail%`, abnormal exits, script errors, failed iterations | red |
+| `check` verdict | `PASS:` bold green, `FAIL:` bold red |
+
+Verbose output adds:
 
 | Part | Color |
 | --- | --- |
@@ -136,7 +146,7 @@ Verbose output is colored when stderr is a terminal. The arrows and words carry 
 | `[lsbench]`, `[lsbench:ctx]`, `[server]` | dim magenta, dim blue, gray |
 
 - `NO_COLOR=1` turns colors off, `FORCE_COLOR=1` turns them on, for example in a CI system that renders ANSI codes.
-- Only the console is colored. `--trace` and `--server-log` files stay plain.
+- Only the console is colored. `--trace` and `--server-log` files, report and baseline files, and `check --json` stay plain.
 
 ### Publishes
 

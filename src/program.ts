@@ -11,6 +11,7 @@ import {
 } from './check.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from './context.js';
 import { DEFAULT_CONNECT_TIMEOUT_MS } from './harness.js';
+import { errorLabel } from './log.js';
 import { getPrimer } from './primer.js';
 import { actionScriptExtensionError, isActionScriptPath, runBenchmark } from './runner.js';
 import type { BenchOptions, BenchReport, ServerTransport } from './types.js';
@@ -187,63 +188,63 @@ export function createProgram(): Command {
             // Validate inputs
             if (server === undefined && (opts.allowExitCodes || opts.allowExitSignals)) {
                 console.error(
-                    'Error: --allow-exit-code and --allow-exit-signal need a server command, a server reached with --connect alone has no exit to classify',
+                    `${errorLabel()} --allow-exit-code and --allow-exit-signal need a server command, a server reached with --connect alone has no exit to classify`,
                 );
                 process.exit(1);
             }
             if (!fs.existsSync(opts.workspace)) {
-                console.error(`Error: Workspace directory not found: ${opts.workspace}`);
+                console.error(`${errorLabel()} Workspace directory not found: ${opts.workspace}`);
                 process.exit(1);
             }
             if (!fs.statSync(opts.workspace).isDirectory()) {
-                console.error(`Error: Workspace path is not a directory: ${opts.workspace}`);
+                console.error(`${errorLabel()} Workspace path is not a directory: ${opts.workspace}`);
                 process.exit(1);
             }
             if (!isActionScriptPath(opts.script)) {
-                console.error(`Error: ${actionScriptExtensionError(opts.script)}`);
+                console.error(`${errorLabel()} ${actionScriptExtensionError(opts.script)}`);
                 process.exit(1);
             }
             if (!fs.existsSync(opts.script)) {
-                console.error(`Error: Action script not found: ${opts.script}`);
+                console.error(`${errorLabel()} Action script not found: ${opts.script}`);
                 process.exit(1);
             }
             if (Number.isNaN(opts.iterations) || opts.iterations < 1) {
-                console.error('Error: --iterations must be a positive integer');
+                console.error(`${errorLabel()} --iterations must be a positive integer`);
                 process.exit(1);
             }
             if (Number.isNaN(opts.warmup) || opts.warmup < 0) {
-                console.error('Error: --warmup must be a non-negative integer');
+                console.error(`${errorLabel()} --warmup must be a non-negative integer`);
                 process.exit(1);
             }
             if (Number.isNaN(opts.shutdownTimeout) || (opts.shutdownTimeout ?? 0) < 1) {
-                console.error('Error: --shutdown-timeout must be a positive integer');
+                console.error(`${errorLabel()} --shutdown-timeout must be a positive integer`);
                 process.exit(1);
             }
             if (opts.allowExitCodes?.some((code) => Number.isNaN(code))) {
-                console.error('Error: --allow-exit-code must be a non-negative integer');
+                console.error(`${errorLabel()} --allow-exit-code must be a non-negative integer`);
                 process.exit(1);
             }
             if (opts.allowExitSignals?.some((signal) => !isSignalName(signal))) {
-                console.error('Error: --allow-exit-signal must be a signal name such as SIGSEGV');
+                console.error(`${errorLabel()} --allow-exit-signal must be a signal name such as SIGSEGV`);
                 process.exit(1);
             }
             if (opts.waitIdle !== undefined && (Number.isNaN(opts.waitIdle) || opts.waitIdle < 1)) {
-                console.error('Error: --wait-idle must be a positive integer');
+                console.error(`${errorLabel()} --wait-idle must be a positive integer`);
                 process.exit(1);
             }
             if (
                 opts.shortenSilentWaits !== undefined &&
                 (Number.isNaN(opts.shortenSilentWaits) || opts.shortenSilentWaits < 1)
             ) {
-                console.error('Error: --shorten-silent-waits must be a positive integer');
+                console.error(`${errorLabel()} --shorten-silent-waits must be a positive integer`);
                 process.exit(1);
             }
             if (Number.isNaN(opts.contentModifiedRetries) || (opts.contentModifiedRetries ?? 0) < 0) {
-                console.error('Error: --content-modified-retries must be a non-negative integer');
+                console.error(`${errorLabel()} --content-modified-retries must be a non-negative integer`);
                 process.exit(1);
             }
             if (Number.isNaN(opts.requestTimeout) || (opts.requestTimeout ?? 0) < 1) {
-                console.error('Error: --request-timeout must be a positive integer');
+                console.error(`${errorLabel()} --request-timeout must be a positive integer`);
                 process.exit(1);
             }
 
@@ -253,7 +254,7 @@ export function createProgram(): Command {
                     fs.appendFileSync(opts.serverLog, '');
                 } catch (err: unknown) {
                     const msg = errorMessage(err);
-                    console.error(`Error: Cannot write server log ${opts.serverLog}: ${msg}`);
+                    console.error(`${errorLabel()} Cannot write server log ${opts.serverLog}: ${msg}`);
                     process.exit(1);
                 }
             }
@@ -264,7 +265,7 @@ export function createProgram(): Command {
                     fs.writeFileSync(opts.trace, '');
                 } catch (err: unknown) {
                     const msg = errorMessage(err);
-                    console.error(`Error: Cannot write trace ${opts.trace}: ${msg}`);
+                    console.error(`${errorLabel()} Cannot write trace ${opts.trace}: ${msg}`);
                     process.exit(1);
                 }
             }
@@ -283,18 +284,18 @@ export function createProgram(): Command {
                               ? 'connection closed'
                               : `exit code ${exit.code}`;
                         console.error(
-                            `Error: server exited abnormally during ${exit.during} (${status}): ${exit.reason}`,
+                            `${errorLabel()} server exited abnormally during ${exit.during} (${status}): ${exit.reason}`,
                         );
                     }
                     failed = true;
                 }
                 if (report.script_errors) {
-                    console.error(`Error: ${describeScriptErrors(report)}`);
+                    console.error(`${errorLabel()} ${describeScriptErrors(report)}`);
                     failed = true;
                 }
                 process.exit(failed ? 1 : 0);
             } catch (err: unknown) {
-                console.error('\nFatal error:', err instanceof Error ? err.message : err);
+                console.error(`\n${errorLabel('Fatal error:')}`, err instanceof Error ? err.message : err);
                 if (opts.verbose && err instanceof Error) {
                     console.error(err.stack);
                 }
@@ -325,7 +326,7 @@ export function createProgram(): Command {
         .action((reportFile: string, rawOpts: Record<string, unknown>) => {
             const report = readCheckedRun(reportFile, 'Report', 1) as BenchReport;
             if (!report.iteration_summary) {
-                console.error(`Error: Report ${reportFile} has no iteration_summary`);
+                console.error(`${errorLabel()} Report ${reportFile} has no iteration_summary`);
                 process.exit(1);
             }
             const output = rawOpts.output as string;
@@ -333,7 +334,7 @@ export function createProgram(): Command {
                 fs.writeFileSync(output, `${JSON.stringify(createBaseline(report), null, 2)}\n`);
             } catch (err: unknown) {
                 const msg = errorMessage(err);
-                console.error(`Error: Cannot write baseline ${output}: ${msg}`);
+                console.error(`${errorLabel()} Cannot write baseline ${output}: ${msg}`);
                 process.exit(1);
             }
             if (!rawOpts.quiet) {
@@ -393,25 +394,25 @@ export function createProgram(): Command {
             const slackMs = Number(rawOpts.slackMs);
             const minCount = Number(rawOpts.minCount);
             if (!Number.isFinite(rateTolerance) || rateTolerance < 0) {
-                console.error('Error: --rate-tolerance must be a non-negative number');
+                console.error(`${errorLabel()} --rate-tolerance must be a non-negative number`);
                 process.exit(2);
             }
             if (!Number.isFinite(medianRatio) || medianRatio < 1) {
-                console.error('Error: --median-ratio must be a number of at least 1');
+                console.error(`${errorLabel()} --median-ratio must be a number of at least 1`);
                 process.exit(2);
             }
             if (!Number.isFinite(slackMs) || slackMs < 0) {
-                console.error('Error: --slack-ms must be a non-negative number');
+                console.error(`${errorLabel()} --slack-ms must be a non-negative number`);
                 process.exit(2);
             }
             if (!Number.isInteger(minCount) || minCount < 1) {
-                console.error('Error: --min-count must be a positive integer');
+                console.error(`${errorLabel()} --min-count must be a positive integer`);
                 process.exit(2);
             }
             const report = readCheckedRun(reportFile, 'Report', 2);
             const baseline = readCheckedRun(rawOpts.baseline as string, 'Baseline', 2);
             const result = checkReport(report, baseline, { rateTolerance, medianRatio, slackMs, minCount });
-            console.log(rawOpts.json ? JSON.stringify(result, null, 2) : formatCheckResult(result));
+            console.log(rawOpts.json ? JSON.stringify(result, null, 2) : formatCheckResult(result, { color: true }));
             process.exit(result.pass ? 0 : 1);
         });
 
@@ -491,7 +492,7 @@ function parseEndpoint(value: string): { host: string; port: number } | undefine
 }
 
 function usageError(message: string): never {
-    console.error(`Error: ${message}`);
+    console.error(`${errorLabel()} ${message}`);
     process.exit(1);
 }
 
@@ -515,14 +516,14 @@ function readJsonFile(file: string | undefined, what: string, exitCode = 1): unk
         return undefined;
     }
     if (!fs.existsSync(file)) {
-        console.error(`Error: ${what} file not found: ${file}`);
+        console.error(`${errorLabel()} ${what} file not found: ${file}`);
         process.exit(exitCode);
     }
     try {
         return JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch (err: unknown) {
         const msg = errorMessage(err);
-        console.error(`Error: Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
+        console.error(`${errorLabel()} Failed to parse ${what.toLowerCase()} file ${file}: ${msg}`);
         process.exit(exitCode);
     }
 }
@@ -531,7 +532,7 @@ function readJsonFile(file: string | undefined, what: string, exitCode = 1): unk
 function readJsonObjectFile(file: string | undefined, what: string): Record<string, unknown> | undefined {
     const value = readJsonFile(file, what);
     if (value !== undefined && (typeof value !== 'object' || value === null || Array.isArray(value))) {
-        console.error(`Error: ${what} file must contain a JSON object`);
+        console.error(`${errorLabel()} ${what} file must contain a JSON object`);
         process.exit(1);
     }
     return value as Record<string, unknown> | undefined;
@@ -542,7 +543,7 @@ function readCheckedRun(file: string, what: string, exitCode: number): CheckedRu
     const value = readJsonFile(file, what, exitCode);
     const error = validateCheckedRun(value);
     if (error) {
-        console.error(`Error: ${what} file ${file} is not an lsbench report or baseline: ${error}`);
+        console.error(`${errorLabel()} ${what} file ${file} is not an lsbench report or baseline: ${error}`);
         process.exit(exitCode);
     }
     return value as CheckedRun;

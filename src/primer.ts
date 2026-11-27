@@ -562,7 +562,8 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
       [lsbench] ← workspace/configuration #0 (server request)
       [lsbench] → workspace/configuration #0 reply
     $/progress, window/logMessage and $/logTrace get no message line. Colors
-    follow the terminal; NO_COLOR=1 turns them off, FORCE_COLOR=1 forces them.
+    (here and in normal output) follow the terminal; NO_COLOR=1 turns them
+    off, FORCE_COLOR=1 forces them.
     Each publish is also logged as
       [lsbench] Publish src/a.ts v=3 n=2 current: <first message, max 100 chars>
     with status current, stale, closed, close candidate or unopened. Server

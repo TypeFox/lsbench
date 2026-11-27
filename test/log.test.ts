@@ -1,6 +1,15 @@
 import * as tty from 'node:tty';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLogger, type LogLevel, logLevelOf, prefix, style } from '../src/log.js';
+import {
+    createLogger,
+    errorLabel,
+    type LogLevel,
+    logLevelOf,
+    prefix,
+    style,
+    styleOut,
+    warningLabel,
+} from '../src/log.js';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -102,5 +111,29 @@ describe('style', () => {
         vi.stubEnv('NO_COLOR', '1');
         expect(style('red', 'error')).toBe('error');
         expect(prefix('lsbench:ctx')).toBe('[lsbench:ctx]');
+    });
+
+    it('styles error and warning labels', () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        expect(errorLabel()).toBe('\x1b[1m\x1b[31mError:\x1b[39m\x1b[22m');
+        expect(errorLabel('ERROR:')).toBe('\x1b[1m\x1b[31mERROR:\x1b[39m\x1b[22m');
+        expect(warningLabel()).toBe('\x1b[33mWarning:\x1b[39m');
+        vi.stubEnv('NO_COLOR', '1');
+        vi.stubEnv('FORCE_COLOR', undefined);
+        expect(errorLabel()).toBe('Error:');
+        expect(warningLabel()).toBe('Warning:');
+    });
+
+    it('checks stdout for stdout text', () => {
+        asTerminal();
+        const stdout = process.stdout as unknown as Record<string, unknown>;
+        const wasTTY = stdout.isTTY;
+        Object.defineProperty(stdout, 'isTTY', { value: false, configurable: true });
+        try {
+            expect(style('red', 'x')).toBe('\x1b[31mx\x1b[39m');
+            expect(styleOut('red', 'x')).toBe('x');
+        } finally {
+            Object.defineProperty(stdout, 'isTTY', { value: wasTTY, configurable: true });
+        }
     });
 });

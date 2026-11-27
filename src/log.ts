@@ -47,8 +47,20 @@ export function createLogger(level: LogLevel): Logger {
 
 export type StyleFormat = Parameters<typeof styleText>[0];
 
-export function style(format: StyleFormat, text: string): string {
-    return styleText(format, text, { stream: process.stderr });
+export function style(format: StyleFormat, text: string, stream: NodeJS.WriteStream = process.stderr): string {
+    return styleText(format, text, { stream });
+}
+
+export function styleOut(format: StyleFormat, text: string): string {
+    return style(format, text, process.stdout);
+}
+
+export function errorLabel(label = 'Error:'): string {
+    return style(['bold', 'red'], label);
+}
+
+export function warningLabel(label = 'Warning:'): string {
+    return style('yellow', label);
 }
 
 const PREFIX_STYLES = {

@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from 'node:util';
 import type { BenchOptions, IterationResult, RequestTiming } from 'lsbench';
 import { buildReport, computeMethodStats, printSummary } from 'lsbench';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -669,5 +670,35 @@ describe('printSummary', () => {
     it('adds the timeout column only when some wait timed out', () => {
         expect(header([timing()])).not.toMatch(/Tmout%/);
         expect(header([timing(), timing({ method: 'diagnostics/open', result: 'timeout' })])).toMatch(/Fail%\s+Tmout%/);
+    });
+
+    it('colors with FORCE_COLOR, keeping the columns aligned', () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+            lines.push(String(line ?? ''));
+        });
+        const requests = [timing(), timing({ method: 'textDocument/definition', success: false, result: 'error' })];
+        printSummary(buildReport(opts, [{ iteration: 1, requests, total_ms: 10 }], 10));
+        vi.unstubAllEnvs();
+        const plain = (line: string) => stripVTControlCharacters(line);
+        expect(lines.some((line) => line.includes('\x1b[1mlsbench results\x1b[22m'))).toBe(true);
+        let header = '';
+        let hover = '';
+        let definition = '';
+        for (const line of lines) {
+            if (line.includes('Method')) {
+                header = line;
+            } else if (line.includes('textDocument/hover')) {
+                hover = line;
+            } else if (line.includes('textDocument/definition')) {
+                definition = line;
+            }
+        }
+        expect(header.startsWith('\x1b[1m')).toBe(true);
+        expect(hover).not.toContain('\x1b[');
+        expect(definition).toContain('\x1b[31m  100.0%\x1b[39m');
+        expect(plain(definition).length).toBe(hover.length);
+        expect(plain(header).length).toBe(hover.length);
     });
 });

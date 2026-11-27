@@ -1,4 +1,5 @@
 import type { AbnormalExit, BenchOptions, BenchReport, IterationResult, MethodStats, RequestTiming } from './types.js';
+import { styleOut } from './log.js';
 import { round, serverLabel, transportLabel } from './util.js';
 
 export const PLAINTEXT_FALLBACK_NOTE =
@@ -249,7 +250,7 @@ function describeExitCodes(exits: AbnormalExit[]): string {
 /** Pretty-print a summary table to the console */
 export function printSummary(report: BenchReport): void {
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
-    console.log('║                     lsbench results                          ║');
+    console.log(`║                     ${styleOut('bold', 'lsbench results')}                          ║`);
     console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
     console.log(`  Server:      ${report.server}`);
@@ -258,10 +259,10 @@ export function printSummary(report: BenchReport): void {
     console.log(`  Total time:  ${(report.total_duration_ms / 1000).toFixed(1)}s`);
     console.log(`  Restart:     ${report.restart_between_iterations ? 'yes' : 'no'}`);
     if (report.abnormal_exits) {
-        console.log(`  Abnormal exits:  ${report.abnormal_exits.length}`);
+        console.log(`  Abnormal exits:  ${failCount(report.abnormal_exits.length)}`);
     }
     if (report.script_errors) {
-        console.log(`  Script errors:   ${report.script_errors.length}`);
+        console.log(`  Script errors:   ${failCount(report.script_errors.length)}`);
     }
     if (report.tolerated_exits) {
         console.log(
@@ -278,7 +279,7 @@ export function printSummary(report: BenchReport): void {
         `    avg=${total(is.avg_ms)}  median=${total(is.median_ms)}  p95=${total(is.p95_ms)}  min=${total(is.min_ms)}  max=${total(is.max_ms)}`,
     );
     if (is.failed) {
-        console.log(`    failed: ${is.failed} of ${report.runs.length}, their totals included`);
+        console.log(`    ${styleOut('red', 'failed:')} ${is.failed} of ${report.runs.length}, their totals included`);
     }
     console.log();
 
@@ -308,6 +309,7 @@ export function printSummary(report: BenchReport): void {
         }
     }
     const percent = (rate: number) => `${(rate * 100).toFixed(1)}%`.padStart(8);
+    const failPercent = (rate: number) => (rate > 0 ? styleOut('red', percent(rate)) : percent(rate));
     // latencies are null when no durations are left
     const ms = (value: number | null) => (value === null ? 'n/a' : `${value}`).padStart(10);
 
@@ -326,7 +328,7 @@ export function printSummary(report: BenchReport): void {
         (showTimeouts ? 'Tmout%'.padStart(8) : '') +
         (showSkipped ? 'Skip%'.padStart(8) : '');
 
-    console.log(header);
+    console.log(styleOut('bold', header));
     console.log(`  ${'─'.repeat(header.length - 2)}`);
 
     for (const method of methods) {
@@ -341,7 +343,7 @@ export function printSummary(report: BenchReport): void {
             ms(s.min_ms) +
             ms(s.max_ms) +
             ms(s.stddev_ms) +
-            percent(s.failure_rate) +
+            failPercent(s.failure_rate) +
             (showResults ? percent(s.null_rate) + percent(s.empty_rate) : '') +
             (showTimeouts ? percent(s.timeout_rate) : '') +
             (showSkipped ? percent(s.skip_rate) : '');
@@ -472,6 +474,10 @@ export function printSummary(report: BenchReport): void {
     }
 
     console.log();
+}
+
+function failCount(count: number): string {
+    return count > 0 ? styleOut('red', String(count)) : String(count);
 }
 
 function printPlaintextNote(report: BenchReport): void {

@@ -1,4 +1,5 @@
 import type { BenchReport, MethodStats } from './types.js';
+import { type StyleFormat, styleOut } from './log.js';
 import { round } from './util.js';
 
 /** Version of the baseline file format, bumped on incompatible changes */
@@ -236,9 +237,10 @@ export function validateCheckedRun(value: unknown): string | undefined {
 }
 
 /** A readable table of the failures, or a pass line */
-export function formatCheckResult(result: CheckResult): string {
+export function formatCheckResult(result: CheckResult, options: { color?: boolean } = {}): string {
+    const paint = (format: StyleFormat, text: string) => (options.color ? styleOut(format, text) : text);
     if (result.pass) {
-        return 'PASS: no regressions against the baseline';
+        return `${paint(['bold', 'green'], 'PASS:')} no regressions against the baseline`;
     }
     const header = ['method', 'field', 'baseline', 'actual', 'rule'];
     const rows = result.failures.map((f) => [
@@ -256,9 +258,9 @@ export function formatCheckResult(result: CheckResult): string {
             .trimEnd();
     const count = result.failures.length;
     return [
-        `FAIL: ${count} ${count === 1 ? 'regression' : 'regressions'} against the baseline`,
+        `${paint(['bold', 'red'], 'FAIL:')} ${count} ${count === 1 ? 'regression' : 'regressions'} against the baseline`,
         '',
-        line(header),
+        paint('bold', line(header)),
         line(widths.map((w) => '-'.repeat(w))),
         ...rows.map(line),
     ].join('\n');

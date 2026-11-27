@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
 import { BenchContextImpl, DEFAULT_REQUEST_TIMEOUT_MS, SilenceTracker } from './context.js';
 import { type DiagnosticsDelivery, LspHarness, WireTrace } from './harness.js';
-import { createLogger, type Logger, logLevelOf, prefix } from './log.js';
+import { createLogger, errorLabel, type Logger, logLevelOf, prefix, warningLabel } from './log.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
     AbnormalExit,
@@ -199,7 +199,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
         const abnormalExits: AbnormalExit[] = [];
         const recordAbnormal = (exit: AbnormalExit) => {
             abnormalExits.push(exit);
-            logger.warn(`  Warning: server ${exit.reason} during ${exit.during}`);
+            logger.warn(`  ${warningLabel()} server ${exit.reason} during ${exit.during}`);
         };
         // exits with an allowed code after a replied shutdown, kept apart so they do not fail the run
         const toleratedExits: AbnormalExit[] = [];
@@ -360,7 +360,7 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
             // ends the run: label the exit with the iteration, keep the runs collected so far and
             // skip iterations that would only fail against the dead server
             if (!opts.restart && harness?.exit) {
-                logger.warn(`  Server exited during ${during}, stopping the run`);
+                logger.warn(`  ${warningLabel()} server exited during ${during}, stopping the run`);
                 await teardown(harness, during);
                 lifecycle?.push(...harness.takeLifecycleTimings());
                 harness = null;
@@ -450,9 +450,9 @@ export async function runBenchmark(opts: BenchOptions): Promise<BenchReport> {
 
 function iterationError(logger: Logger, during: string, msg: string): string {
     if (logger.level === 'quiet') {
-        return `Error: ${during} failed: ${msg}`;
+        return `${errorLabel()} ${during} failed: ${msg}`;
     }
-    return `${logger.level === 'verbose' ? '  ' : ' '}ERROR: ${msg}`;
+    return `${logger.level === 'verbose' ? '  ' : ' '}${errorLabel('ERROR:')} ${msg}`;
 }
 
 async function stopQuietly(harness: LspHarness, timeoutMs: number | undefined): Promise<void> {
@@ -468,7 +468,7 @@ async function waitIdleAfterStart(harness: LspHarness, timeoutMs: number | undef
     }
     const result = await harness.waitForIdleAfterStart({ timeoutMs });
     if (result.timedOut) {
-        logger.warn(`  Warning: server not idle after ${timeoutMs}ms`);
+        logger.warn(`  ${warningLabel()} server not idle after ${timeoutMs}ms`);
     }
 }
 
