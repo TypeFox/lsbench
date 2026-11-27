@@ -15,6 +15,7 @@ import type {
     ServerTransport,
     SetupScript,
 } from './types.js';
+import { prefix, style } from './log.js';
 import { errorMessage, round } from './util.js';
 
 /** Minimal types we need from LSP (avoids cross-package type conflicts) */
@@ -1495,15 +1496,25 @@ export class LspHarness {
         }
 
         const trace = this.trace;
+        const wireLog = this.verbose ? new WireLog(this.workspaceRoot, (line) => this.log(line)) : undefined;
         const diagnostics = this.diagnostics;
         this.connection = rpc.createMessageConnection(
             new ObservedMessageReader(input, (msg) => {
                 trace?.message('in', msg);
+                wireLog?.message('in', msg);
                 if (rpc.Message.isNotification(msg) && msg.method === 'textDocument/publishDiagnostics') {
                     diagnostics.noteRead(msg.params as PublishDiagnosticsParams);
                 }
             }),
-            new SettledMessageWriter(trace ? trace.writer(output) : new rpc.StreamMessageWriter(output), failWrites),
+            new SettledMessageWriter(
+                trace || wireLog
+                    ? new ObservedMessageWriter(output, (msg) => {
+                          trace?.message('out', msg);
+                          wireLog?.message('out', msg);
+                      })
+                    : new rpc.StreamMessageWriter(output),
+                failWrites,
+            ),
         );
 
         this.connection.listen();
@@ -2222,7 +2233,7 @@ export class LspHarness {
 
     private log(msg: string): void {
         if (this.verbose) {
-            console.error(`[lsbench] ${msg}`);
+            console.error(`${prefix('lsbench')} ${msg}`);
         }
     }
 }
@@ -2582,6 +2593,17 @@ export function uriToPath(uri: string): string {
     return uri;
 }
 
+function displayUri(uri: string, workspaceRoot: string): string {
+    const filePath = uriToPath(uri);
+    if (uri.startsWith('file://') && filePath !== uri) {
+        const rel = path.relative(path.resolve(workspaceRoot), filePath);
+        if (rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
+            return rel;
+        }
+    }
+    return uri;
+}
+
 /** Longest first diagnostic message shown in a verbose publish line */
 const PUBLISH_MESSAGE_MAX = 100;
 
@@ -2595,14 +2617,7 @@ export function formatPublishLine(
     status: PublishStatus,
     workspaceRoot: string,
 ): string {
-    let where = publish.uri;
-    const filePath = uriToPath(publish.uri);
-    if (publish.uri.startsWith('file://') && filePath !== publish.uri) {
-        const rel = path.relative(path.resolve(workspaceRoot), filePath);
-        if (rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
-            where = rel;
-        }
-    }
+    const where = displayUri(publish.uri, workspaceRoot);
     let line = `Publish ${where} v=${publish.version ?? '-'} n=${publish.diagnostics.length} ${status}`;
     const first = publish.diagnostics[0];
     if (first) {
@@ -2701,7 +2716,7 @@ export class ServerOutput {
         } else if (this.verbose) {
             let out = '';
             for (const line of lines) {
-                out += `[server] ${line}\n`;
+                out += `${prefix('server')} ${line}\n`;
             }
             this.toConsole(out);
         }
@@ -2765,6 +2780,20 @@ class ObservedMessageReader extends rpc.StreamMessageReader {
     }
 }
 
+class ObservedMessageWriter extends rpc.StreamMessageWriter {
+    private readonly onWrite: (msg: rpc.Message) => void;
+
+    constructor(output: NodeJS.WritableStream, onWrite: (msg: rpc.Message) => void) {
+        super(output);
+        this.onWrite = onWrite;
+    }
+
+    override write(msg: rpc.Message): Promise<void> {
+        this.onWrite(msg);
+        return super.write(msg);
+    }
+}
+
 /**
  * Records every JSON-RPC message exchanged with the server as JSON lines in a file, one trace
  * per run spanning server restarts. Each line carries `t`, the milliseconds since `origin` on
@@ -2810,17 +2839,6 @@ export class WireTrace {
         this.write({ t: this.now(), iteration, warmup });
     }
 
-    /** Wrap a writer so each message is traced as `out` before it is written */
-    writer(output: NodeJS.WritableStream): rpc.MessageWriter {
-        const traceOut = (msg: rpc.Message) => this.message('out', msg);
-        return new (class extends rpc.StreamMessageWriter {
-            override write(msg: rpc.Message): Promise<void> {
-                traceOut(msg);
-                return super.write(msg);
-            }
-        })(output);
-    }
-
     /** End the file stream, resolving once it is written */
     close(): Promise<void> {
         const stream = this.stream;
@@ -2836,6 +2854,160 @@ export class WireTrace {
     private write(line: object): void {
         this.stream?.write(`${JSON.stringify(line)}\n`);
     }
+}
+
+const WIRE_LOG_QUIET_METHODS = new Set(['$/progress', 'window/logMessage', '$/logTrace']);
+
+const WIRE_LOG_SLOW_MS = 1000;
+
+const WIRE_LOG_MESSAGE_MAX = 100;
+
+const REQUEST_CANCELLED = -32800;
+
+const SEVERITY_NAMES = ['error', 'warning', 'info', 'hint'];
+
+interface PendingWireRequest {
+    method: string;
+    start: number;
+}
+
+export class WireLog {
+    private sent = new Map<string | number, PendingWireRequest>();
+    private received = new Map<string | number, PendingWireRequest>();
+
+    constructor(
+        private workspaceRoot: string,
+        private sink: (line: string) => void,
+        private now: () => number = () => performance.now(),
+    ) {}
+
+    message(dir: WireDirection, msg: rpc.Message): void {
+        const arrow = dir === 'out' ? style('cyan', '→') : style('green', '←');
+        const line = this.describe(dir, msg);
+        if (line !== undefined) {
+            this.sink(`${arrow} ${line}`);
+        }
+    }
+
+    private describe(dir: WireDirection, msg: rpc.Message): string | undefined {
+        if (rpc.Message.isRequest(msg)) {
+            const pending = dir === 'out' ? this.sent : this.received;
+            pending.set(msg.id ?? '', { method: msg.method, start: this.now() });
+            const head = `${style('bold', msg.method)} ${style('dim', `#${msg.id}`)}`;
+            return dir === 'out' ? this.withTarget(head, msg.params) : `${head} ${style('dim', '(server request)')}`;
+        }
+        if (rpc.Message.isNotification(msg)) {
+            return this.describeNotification(dir, msg);
+        }
+        if (rpc.Message.isResponse(msg)) {
+            return this.describeResponse(dir, msg);
+        }
+        return undefined;
+    }
+
+    private describeNotification(dir: WireDirection, msg: rpc.NotificationMessage): string | undefined {
+        if (WIRE_LOG_QUIET_METHODS.has(msg.method)) {
+            return undefined;
+        }
+        const params = msg.params as Record<string, unknown> | undefined;
+        if (msg.method === '$/cancelRequest') {
+            const id = params?.id as string | number;
+            const cancelled = (dir === 'out' ? this.sent : this.received).get(id);
+            const what = cancelled ? ` (${cancelled.method})` : '';
+            return `${style(['bold', 'yellow'], msg.method)} ${style('dim', `#${id}`)}${style('yellow', what)}`;
+        }
+        const head = style('bold', msg.method);
+        if (msg.method === 'textDocument/publishDiagnostics' && params) {
+            const where = displayUri(String(params.uri), this.workspaceRoot);
+            return `${head} ${where}: ${countDiagnostics(params.diagnostics)}`;
+        }
+        return this.withTarget(head, params);
+    }
+
+    private describeResponse(dir: WireDirection, msg: rpc.ResponseMessage): string {
+        const pending = dir === 'in' ? this.sent : this.received;
+        const id = msg.id ?? '';
+        const request = pending.get(id);
+        pending.delete(id);
+        let head = `${style('bold', request?.method ?? 'response')} ${style('dim', `#${msg.id}`)}`;
+        if (request && dir === 'in') {
+            const ms = Math.round(this.now() - request.start);
+            head += ` ${style(ms >= WIRE_LOG_SLOW_MS ? ['bold', 'yellow'] : 'dim', `(${ms}ms)`)}`;
+        }
+        if (msg.error) {
+            const cancelled = msg.error.code === REQUEST_CANCELLED;
+            const text = `${cancelled ? 'cancelled' : 'error'} ${msg.error.code} ${oneLine(msg.error.message)}`;
+            return `${head} ${style(cancelled ? 'yellow' : 'red', text)}`;
+        }
+        return `${head} ${dir === 'in' ? summarizeResult(msg.result) : 'reply'}`;
+    }
+
+    private withTarget(head: string, params: unknown): string {
+        const target = describeTarget(params, this.workspaceRoot);
+        return target ? `${head} ${target}` : head;
+    }
+}
+
+function describeTarget(params: unknown, workspaceRoot: string): string | undefined {
+    if (!isPlainObject(params) || !isPlainObject(params.textDocument)) {
+        return undefined;
+    }
+    const uri = params.textDocument.uri;
+    if (typeof uri !== 'string') {
+        return undefined;
+    }
+    let target = displayUri(uri, workspaceRoot);
+    const position = params.position;
+    if (isPlainObject(position)) {
+        target += `:${position.line}:${position.character}`;
+    }
+    return target;
+}
+
+function summarizeResult(result: unknown): string {
+    if (result === null || result === undefined) {
+        return 'null';
+    }
+    if (Array.isArray(result)) {
+        const first: unknown = result[0];
+        const locations = isPlainObject(first) && ('targetUri' in first || ('uri' in first && 'range' in first));
+        return plural(result.length, locations ? 'location' : 'item');
+    }
+    if (isPlainObject(result)) {
+        if (result.kind === 'unchanged') {
+            return 'unchanged';
+        }
+        if (Array.isArray(result.items)) {
+            return plural(result.items.length, result.kind === 'full' ? 'diagnostic' : 'item');
+        }
+    }
+    return 'ok';
+}
+
+function countDiagnostics(diagnostics: unknown): string {
+    if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
+        return 'no diagnostics';
+    }
+    const counts = new Map<string, number>();
+    for (const diagnostic of diagnostics) {
+        const severity = isPlainObject(diagnostic) ? diagnostic.severity : undefined;
+        const name = (typeof severity === 'number' && SEVERITY_NAMES[severity - 1]) || 'diagnostic';
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    const parts: string[] = [];
+    for (const [name, count] of counts) {
+        parts.push(plural(count, name));
+    }
+    return parts.join(', ');
+}
+
+function plural(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+function oneLine(message: string): string {
+    const text = String(message).replace(/\s+/g, ' ').trim();
+    return text.length > WIRE_LOG_MESSAGE_MAX ? `${text.slice(0, WIRE_LOG_MESSAGE_MAX - 3)}...` : text;
 }
 
 /** Resolve with the first promise to settle, or 'timeout' once timeoutMs has passed */

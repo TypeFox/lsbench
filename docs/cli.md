@@ -41,7 +41,7 @@ Options:
                               the server command first when one is given
   --socket <port>             Listen on a TCP port, 0 for a free one, for the spawned server to connect
   --connect-timeout <ms>      Wait for the socket connection (default: 10000)
-  -v, --verbose               Verbose logging
+  -v, --verbose               Verbose logging: LSP messages, publishes, progress, server output
   -q, --quiet                 Print only errors and the requested output, for CI
   -V, --version               Show version
   -h, --help                  Show help
@@ -91,6 +91,52 @@ Where to read more:
 ## Verbose Output
 
 With `-v`, lsbench's own lines start with `[lsbench]`, and request timings with `[lsbench:ctx]`. The `Running iteration N...` progress line ends there, and the iteration time follows the iteration's log lines as `Iteration N: Xms`.
+
+### Messages
+
+Each LSP message between lsbench and the server is one line, interleaved in order with lsbench's other lines:
+
+```text
+[lsbench] → initialize #0
+[lsbench] ← initialize #0 (142ms) ok
+[lsbench] → textDocument/didOpen src/main.ts
+[lsbench] → textDocument/completion #4 src/main.ts:12:8
+[lsbench] ← textDocument/completion #4 (38ms) 57 items
+[lsbench] ← textDocument/publishDiagnostics src/main.ts: 2 errors
+[lsbench] ← workspace/configuration #0 (server request)
+[lsbench] → workspace/configuration #0 reply
+[lsbench] ← textDocument/hover #5 (3ms) error -32603 Internal error
+[lsbench] → $/cancelRequest #6 (textDocument/definition)
+```
+
+| Message | Line |
+| --- | --- |
+| Request | `→` (sent) or `←` (from the server, marked `(server request)`), method, `#id`, the document path and `line:character` when the params name them |
+| Response to lsbench | round trip time and a summary: `null`, `N items`, `N locations`, `N diagnostics`, `unchanged` or `ok` |
+| Reply by lsbench | `reply`, or the error |
+| Error response | `error <code> <message>`, or `cancelled -32800 ...` for a cancelled request |
+| Notification | method and document path. A publish counts its diagnostics by severity |
+
+- Paths are workspace relative, as in publish lines. Positions are the 0 based LSP `line:character`.
+- `$/progress`, `window/logMessage` and `$/logTrace` get no message line. Progress begin and end and the server's log text are logged already.
+- The round trip time is measured at the wire, so it can differ slightly from the request timing in the report.
+- Writing these lines adds overhead to timings, as `--trace` does. Measure without `-v`.
+
+### Colors
+
+Verbose output is colored when stderr is a terminal. The arrows and words carry the meaning, so piped output loses nothing.
+
+| Part | Color |
+| --- | --- |
+| `→` sent / `←` received | cyan / green |
+| method | bold |
+| id, duration | dim, a duration of 1000 ms or more bold yellow |
+| errors | red |
+| cancellations, request timeouts | yellow |
+| `[lsbench]`, `[lsbench:ctx]`, `[server]` | dim magenta, dim blue, gray |
+
+- `NO_COLOR=1` turns colors off, `FORCE_COLOR=1` turns them on, for example in a CI system that renders ANSI codes.
+- Only the console is colored. `--trace` and `--server-log` files stay plain.
 
 ### Publishes
 

@@ -300,7 +300,7 @@ describe('LspHarness setup', () => {
             await harness.stop();
             spy.mockRestore();
         }
-        const unhandled = lines.filter((line) => line.includes('Unhandled'));
+        const unhandled = lines.filter((line) => line.startsWith('[lsbench] Unhandled'));
         expect(unhandled).toEqual([
             "[lsbench] Unhandled request custom/unknown from the server, a script's setup can handle it",
             "[lsbench] Unhandled notification custom/ignored from the server, a script's setup can handle it",

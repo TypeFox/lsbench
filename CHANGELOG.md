@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- `WireTrace.writer()` is removed. Nothing in lsbench used it once the harness observed outgoing messages for verbose mode too. Call `WireTrace.message('out', msg)` from your own writer instead.
+
 ### New features
 
 - `-q, --quiet` on `run`, `baseline` and `check` keeps CI logs short. A run prints nothing on success: no header, progress, results table, hint notes or warnings, which stay in the report. Errors that fail the run and action script errors still reach stderr, and the report file, baseline file and `check` verdict (text or `--json`) are still written. The exit code alone tells success from failure. `-q` with `-v` is rejected. From code, `BenchOptions.quiet`, `LspHarnessOptions.quiet` and `BenchContextOptions.quiet` do the same, and `runBenchmark()` throws when `quiet` and `verbose` are both set. See [quiet output](docs/cli.md#quiet-output).
+- `-v, --verbose` logs each LSP message between lsbench and the server as one line: direction (`→` sent, `←` received), method, id, the workspace relative document and `line:character`. Responses carry the round trip time and a short summary such as `57 items`, `null` or `error -32603 <message>`. Server requests and lsbench's replies, cancellations and notifications both ways are included. `$/progress`, `window/logMessage` and `$/logTrace` get no message line. `WireLog` is exported. See [verbose messages](docs/cli.md#messages).
+- Verbose output is colored when stderr is a terminal: arrows, methods, durations, errors and the `[lsbench]`, `[lsbench:ctx]` and `[server]` prefixes. `NO_COLOR` turns colors off and `FORCE_COLOR` forces them. `--trace` and `--server-log` files stay plain. See [colors](docs/cli.md#colors).
 
 ### Changes
 

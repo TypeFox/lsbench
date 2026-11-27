@@ -1009,7 +1009,7 @@ describe('runBenchmark progress lines', () => {
         for (const iteration of ['warmup 1/1', '1/2', '2/2']) {
             const start = lines.indexOf(`  Running iteration ${iteration}...`);
             expect(start).toBeGreaterThanOrEqual(0);
-            expect(lines[start + 1]).toMatch(/^\[lsbench:ctx\] /);
+            expect(lines[start + 1]).toMatch(/^\[lsbench(:ctx)?\] /);
             const suffix = iteration.startsWith('warmup') ? ' \\(warmup\\)' : '';
             const time = lines.findIndex((line) =>
                 new RegExp(`^  Iteration ${iteration}: \\d+ms${suffix}$`).test(line),

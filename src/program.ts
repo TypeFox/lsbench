@@ -126,7 +126,11 @@ export function createProgram(): Command {
             'Milliseconds to wait for the socket connection with --connect or --socket',
             String(DEFAULT_CONNECT_TIMEOUT_MS),
         )
-        .option('-v, --verbose', 'Enable verbose logging', false)
+        .option(
+            '-v, --verbose',
+            'Verbose logging: each LSP message both ways with its round trip time, publishes, progress and server output, colored on a terminal (adds overhead to timings)',
+            false,
+        )
         .option('-q, --quiet', 'Print only errors and the requested output, for CI', false)
         .action(async (server: string | undefined, rawOpts: Record<string, unknown>, command: Command) => {
             if (rawOpts.quiet && rawOpts.verbose) {

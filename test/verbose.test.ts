@@ -1,8 +1,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import type { PublishStatus } from 'lsbench';
-import { DiagnosticsTracker, formatPublishLine, LspHarness, ServerOutput, WireTrace } from 'lsbench';
+import { DiagnosticsTracker, formatPublishLine, LspHarness, ServerOutput, WireLog, WireTrace } from 'lsbench';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('formatPublishLine', () => {
@@ -319,5 +321,246 @@ describe('WireTrace', () => {
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }
+    });
+});
+
+describe('WireLog', () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    function wireLog(): { log: WireLog; lines: string[]; advance: (ms: number) => void } {
+        const lines: string[] = [];
+        let now = 1000;
+        const log = new WireLog(
+            '/w',
+            (line) => lines.push(line),
+            () => now,
+        );
+        return { log, lines, advance: (ms) => (now += ms) };
+    }
+
+    const uri = 'file:///w/src/main.ts';
+
+    it('pairs an outgoing request with its response, timing and summarizing it', () => {
+        const { log, lines, advance } = wireLog();
+        log.message('out', {
+            jsonrpc: '2.0',
+            id: 4,
+            method: 'textDocument/completion',
+            params: { textDocument: { uri }, position: { line: 12, character: 8 } },
+        } as never);
+        advance(38.4);
+        log.message('in', { jsonrpc: '2.0', id: 4, result: { isIncomplete: false, items: [{}, {}] } } as never);
+        expect(lines).toEqual([
+            '→ textDocument/completion #4 src/main.ts:12:8',
+            '← textDocument/completion #4 (38ms) 2 items',
+        ]);
+    });
+
+    it('summarizes null, locations, items and diagnostic reports', () => {
+        const { log, lines } = wireLog();
+        const results = [
+            null,
+            [{ uri, range: {} }],
+            [{ targetUri: uri }, { targetUri: uri }],
+            [{ label: 'a' }],
+            [],
+            { kind: 'full', items: [{}, {}, {}] },
+            { kind: 'unchanged', resultId: '1' },
+            { contents: 'hover' },
+        ];
+        for (const [id, result] of results.entries()) {
+            log.message('out', { jsonrpc: '2.0', id, method: 'm' } as never);
+            log.message('in', { jsonrpc: '2.0', id, result } as never);
+        }
+        const replies = lines.filter((line) => line.startsWith('←')).map((line) => line.replace(/^.*\) /, ''));
+        expect(replies).toEqual([
+            'null',
+            '1 location',
+            '2 locations',
+            '1 item',
+            '0 items',
+            '3 diagnostics',
+            'unchanged',
+            'ok',
+        ]);
+    });
+
+    it('shows the code and message of an error response, and a cancelled request', () => {
+        const { log, lines } = wireLog();
+        log.message('out', { jsonrpc: '2.0', id: 1, method: 'textDocument/hover', params: {} } as never);
+        log.message('in', {
+            jsonrpc: '2.0',
+            id: 1,
+            error: { code: -32601, message: 'Unhandled method\ntextDocument/hover' },
+        } as never);
+        log.message('out', { jsonrpc: '2.0', id: 2, method: 'textDocument/definition' } as never);
+        log.message('out', { jsonrpc: '2.0', method: '$/cancelRequest', params: { id: 2 } } as never);
+        log.message('in', { jsonrpc: '2.0', id: 2, error: { code: -32800, message: 'Request cancelled' } } as never);
+        expect(lines).toEqual([
+            '→ textDocument/hover #1',
+            '← textDocument/hover #1 (0ms) error -32601 Unhandled method textDocument/hover',
+            '→ textDocument/definition #2',
+            '→ $/cancelRequest #2 (textDocument/definition)',
+            '← textDocument/definition #2 (0ms) cancelled -32800 Request cancelled',
+        ]);
+    });
+
+    it('shows a server request and the reply to it', () => {
+        const { log, lines } = wireLog();
+        log.message('in', { jsonrpc: '2.0', id: 0, method: 'workspace/configuration', params: { items: [] } } as never);
+        log.message('out', { jsonrpc: '2.0', id: 0, result: [null] } as never);
+        log.message('in', { jsonrpc: '2.0', id: 1, method: 'window/workDoneProgress/create', params: {} } as never);
+        log.message('out', { jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'nope' } } as never);
+        expect(lines).toEqual([
+            '← workspace/configuration #0 (server request)',
+            '→ workspace/configuration #0 reply',
+            '← window/workDoneProgress/create #1 (server request)',
+            '→ window/workDoneProgress/create #1 error -32603 nope',
+        ]);
+    });
+
+    it('shows notifications both ways, counting published diagnostics by severity', () => {
+        const { log, lines } = wireLog();
+        log.message('out', { jsonrpc: '2.0', method: 'initialized', params: {} } as never);
+        log.message('out', {
+            jsonrpc: '2.0',
+            method: 'textDocument/didOpen',
+            params: { textDocument: { uri: 'file:///other/a.ts', languageId: 'typescript', version: 1, text: '' } },
+        } as never);
+        log.message('in', {
+            jsonrpc: '2.0',
+            method: 'textDocument/publishDiagnostics',
+            params: { uri, diagnostics: [{ severity: 1 }, { severity: 1 }, { severity: 2 }, {}] },
+        } as never);
+        log.message('in', {
+            jsonrpc: '2.0',
+            method: 'textDocument/publishDiagnostics',
+            params: { uri, diagnostics: [] },
+        } as never);
+        log.message('in', { jsonrpc: '2.0', method: 'custom/status', params: { busy: true } } as never);
+        expect(lines).toEqual([
+            '→ initialized',
+            '→ textDocument/didOpen file:///other/a.ts',
+            '← textDocument/publishDiagnostics src/main.ts: 2 errors, 1 warning, 1 diagnostic',
+            '← textDocument/publishDiagnostics src/main.ts: no diagnostics',
+            '← custom/status',
+        ]);
+    });
+
+    it('leaves out progress and log notifications the console already shows', () => {
+        const { log, lines } = wireLog();
+        for (const method of ['$/progress', 'window/logMessage', '$/logTrace']) {
+            log.message('in', { jsonrpc: '2.0', method, params: {} } as never);
+        }
+        expect(lines).toEqual([]);
+    });
+
+    it('prints a response to an unknown id without a duration', () => {
+        const { log, lines } = wireLog();
+        log.message('in', { jsonrpc: '2.0', id: 9, result: null } as never);
+        expect(lines).toEqual(['← response #9 null']);
+    });
+
+    it('colors arrows, methods, durations and errors when color is forced', () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        const { log, lines, advance } = wireLog();
+        log.message('out', { jsonrpc: '2.0', id: 1, method: 'textDocument/hover' } as never);
+        advance(1500);
+        log.message('in', { jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'boom' } } as never);
+        expect(lines).toEqual([
+            '\x1b[36m→\x1b[39m \x1b[1mtextDocument/hover\x1b[22m \x1b[2m#1\x1b[22m',
+            '\x1b[32m←\x1b[39m \x1b[1mtextDocument/hover\x1b[22m \x1b[2m#1\x1b[22m ' +
+                '\x1b[1m\x1b[33m(1500ms)\x1b[39m\x1b[22m \x1b[31merror -32603 boom\x1b[39m',
+        ]);
+    });
+});
+
+const wireServer = `
+import * as rpc from 'vscode-jsonrpc/node';
+const conn = rpc.createMessageConnection(
+    new rpc.StreamMessageReader(process.stdin),
+    new rpc.StreamMessageWriter(process.stdout),
+);
+conn.onRequest('initialize', () => ({ capabilities: { hoverProvider: true, completionProvider: {} } }));
+conn.onNotification('initialized', async () => {
+    await conn.sendRequest('workspace/configuration', { items: [{ section: 'demo' }] });
+    conn.sendNotification('custom/ready', {});
+});
+conn.onRequest('textDocument/completion', () => ({ isIncomplete: false, items: [{ label: 'a' }, { label: 'b' }] }));
+conn.onRequest('textDocument/hover', () => {
+    throw new rpc.ResponseError(-32603, 'hover broke');
+});
+conn.onRequest('shutdown', () => null);
+conn.onNotification('exit', () => process.exit(0));
+conn.listen();
+`;
+
+describe('LspHarness wire lines in verbose mode', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+    });
+
+    async function run(): Promise<string[]> {
+        const lines: string[] = [];
+        vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+            lines.push(args.join(' '));
+        });
+        vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        const harness = new LspHarness(
+            { command: process.execPath, args: ['--input-type=module', '-e', wireServer] },
+            os.tmpdir(),
+            true,
+        );
+        try {
+            await harness.start();
+            await vi.waitFor(() => expect(stripVTControlCharacters(lines.join('\n'))).toContain('← custom/ready'));
+            const uri = pathToFileURL(path.join(os.tmpdir(), 'main.ts')).href;
+            await harness.sendRequest('textDocument/completion', {
+                textDocument: { uri },
+                position: { line: 12, character: 8 },
+            });
+            await expect(harness.sendRequest('textDocument/hover', {})).rejects.toThrow('hover broke');
+        } finally {
+            await harness.stop();
+        }
+        vi.restoreAllMocks();
+        return lines;
+    }
+
+    it('logs requests, responses, notifications, server requests and errors', async () => {
+        vi.stubEnv('FORCE_COLOR', '0');
+        const lines = await run();
+        const expected = [
+            /^\[lsbench\] → initialize #0$/,
+            /^\[lsbench\] ← initialize #0 \(\d+ms\) ok$/,
+            /^\[lsbench\] → initialized$/,
+            /^\[lsbench\] ← workspace\/configuration #0 \(server request\)$/,
+            /^\[lsbench\] → workspace\/configuration #0 reply$/,
+            /^\[lsbench\] ← custom\/ready$/,
+            /^\[lsbench\] → textDocument\/completion #1 main\.ts:12:8$/,
+            /^\[lsbench\] ← textDocument\/completion #1 \(\d+ms\) 2 items$/,
+            /^\[lsbench\] → textDocument\/hover #2$/,
+            /^\[lsbench\] ← textDocument\/hover #2 \(\d+ms\) error -32603 hover broke$/,
+            /^\[lsbench\] → shutdown #3$/,
+            /^\[lsbench\] → exit$/,
+        ];
+        let from = 0;
+        for (const pattern of expected) {
+            const index = lines.findIndex((line, i) => i >= from && pattern.test(line));
+            expect(index, `${pattern} after line ${from} in\n${lines.join('\n')}`).toBeGreaterThanOrEqual(from);
+            from = index + 1;
+        }
+    });
+
+    it('colors the lines when color is forced', async () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        const lines = await run();
+        expect(lines).toContain(
+            '\x1b[2m\x1b[35m[lsbench]\x1b[39m\x1b[22m \x1b[36m→\x1b[39m \x1b[1minitialize\x1b[22m \x1b[2m#0\x1b[22m',
+        );
+        expect(lines.some((line) => line.includes('\x1b[31merror -32603 hover broke\x1b[39m'))).toBe(true);
     });
 });

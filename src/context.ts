@@ -32,6 +32,7 @@ import type {
     UntilRejectedWaits,
     WaitForIdleResult,
 } from './types.js';
+import { prefix, style } from './log.js';
 import { errorMessage, round } from './util.js';
 
 /** JSON-RPC error code a server sends when a document change invalidated the result */
@@ -1691,7 +1692,9 @@ export class BenchContextImpl implements BenchContext {
         }
         this.timings.push(timing);
         this._lastError = failure;
-        this.log(`${method}${label ? ` [${label}]` : ''}: ${duration_ms.toFixed(1)}ms timeout, cancelled`);
+        this.log(
+            `${method}${label ? ` [${label}]` : ''}: ${duration_ms.toFixed(1)}ms ${style('yellow', 'timeout, cancelled')}`,
+        );
         return null as R;
     }
 
@@ -1701,7 +1704,7 @@ export class BenchContextImpl implements BenchContext {
 
     private log(msg: string): void {
         if (this.verbose) {
-            console.error(`[lsbench:ctx] ${msg}`);
+            console.error(`${prefix('lsbench:ctx')} ${msg}`);
         }
     }
 }

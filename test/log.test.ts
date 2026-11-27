@@ -1,8 +1,10 @@
+import * as tty from 'node:tty';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLogger, type LogLevel, logLevelOf } from '../src/log.js';
+import { createLogger, type LogLevel, logLevelOf, prefix, style } from '../src/log.js';
 
 afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
 });
 
 function capture(level: LogLevel): { stdout: string[]; stderr: string[] } {
@@ -57,5 +59,48 @@ describe('logLevelOf', () => {
 
     it('rejects quiet together with verbose', () => {
         expect(() => logLevelOf({ quiet: true, verbose: true })).toThrow('quiet and verbose cannot be combined.');
+    });
+});
+
+describe('style', () => {
+    function asTerminal(): void {
+        const stderr = process.stderr as unknown as Record<string, unknown>;
+        vi.stubEnv('TERM', 'xterm-256color');
+        vi.stubEnv('FORCE_COLOR', undefined);
+        vi.stubEnv('NO_COLOR', undefined);
+        vi.stubEnv('NODE_DISABLE_COLORS', undefined);
+        vi.stubEnv('CI', undefined);
+        Object.defineProperty(stderr, 'isTTY', { value: true, configurable: true });
+        Object.defineProperty(stderr, 'getColorDepth', {
+            value: tty.WriteStream.prototype.getColorDepth,
+            configurable: true,
+        });
+    }
+
+    afterEach(() => {
+        const stderr = process.stderr as unknown as Record<string, unknown>;
+        delete stderr.isTTY;
+        delete stderr.getColorDepth;
+    });
+
+    it('colors with FORCE_COLOR set', () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        expect(style('red', 'error')).toBe('\x1b[31merror\x1b[39m');
+        expect(prefix('lsbench')).toBe('\x1b[2m\x1b[35m[lsbench]\x1b[39m\x1b[22m');
+    });
+
+    it('stays plain when stderr is not a TTY', () => {
+        vi.stubEnv('FORCE_COLOR', undefined);
+        expect(process.stderr.isTTY).toBeFalsy();
+        expect(style('red', 'error')).toBe('error');
+        expect(prefix('server')).toBe('[server]');
+    });
+
+    it('colors a terminal unless NO_COLOR is set', () => {
+        asTerminal();
+        expect(style('red', 'error')).toBe('\x1b[31merror\x1b[39m');
+        vi.stubEnv('NO_COLOR', '1');
+        expect(style('red', 'error')).toBe('error');
+        expect(prefix('lsbench:ctx')).toBe('[lsbench:ctx]');
     });
 });

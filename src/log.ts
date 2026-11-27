@@ -1,3 +1,5 @@
+import { styleText } from 'node:util';
+
 export type LogLevel = 'quiet' | 'normal' | 'verbose';
 
 export interface Logger {
@@ -41,4 +43,20 @@ export function createLogger(level: LogLevel): Logger {
             console.error(message);
         },
     };
+}
+
+export type StyleFormat = Parameters<typeof styleText>[0];
+
+export function style(format: StyleFormat, text: string): string {
+    return styleText(format, text, { stream: process.stderr });
+}
+
+const PREFIX_STYLES = {
+    lsbench: ['dim', 'magenta'],
+    'lsbench:ctx': ['dim', 'blue'],
+    server: 'gray',
+} as const satisfies Record<string, StyleFormat>;
+
+export function prefix(source: keyof typeof PREFIX_STYLES): string {
+    return style(PREFIX_STYLES[source], `[${source}]`);
 }

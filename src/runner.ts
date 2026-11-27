@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { summarizeSupport } from './capabilities.js';
 import { BenchContextImpl, DEFAULT_REQUEST_TIMEOUT_MS, SilenceTracker } from './context.js';
 import { type DiagnosticsDelivery, LspHarness, WireTrace } from './harness.js';
-import { createLogger, type Logger, logLevelOf } from './log.js';
+import { createLogger, type Logger, logLevelOf, prefix } from './log.js';
 import { buildReport, printSummary, summarizeMethods } from './stats.js';
 import type {
     AbnormalExit,
@@ -465,11 +465,11 @@ async function waitIdleAfterStart(harness: LspHarness, timeoutMs: number | undef
 function printCapabilitySummary(harness: LspHarness, skipUnsupported: boolean): void {
     const { supported, unsupported } = summarizeSupport(harness.capabilities, harness.registrations);
     console.error(
-        `[lsbench] Server supports ${supported.length} of ${supported.length + unsupported.length} mapped requests`,
+        `${prefix('lsbench')} Server supports ${supported.length} of ${supported.length + unsupported.length} mapped requests`,
     );
     if (unsupported.length > 0) {
         const action = skipUnsupported ? 'skipped' : 'sent anyway (--no-skip-unsupported)';
-        console.error(`[lsbench] Unsupported, ${action} unless registered later: ${unsupported.join(', ')}`);
+        console.error(`${prefix('lsbench')} Unsupported, ${action} unless registered later: ${unsupported.join(', ')}`);
     }
 }
 

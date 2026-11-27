@@ -398,7 +398,10 @@ experimental/serverStatus (verbose mode logs progress titles).
                                    "node server.js --socket={port}"
           --connect-timeout <ms>   Wait this long for the socket connection, a refused
                                    connect is retried every 100ms                   (default: 10000)
-      -v, --verbose                Verbose logging: requests, publishes, progress   (default: false)
+      -v, --verbose                Verbose logging: each LSP message both ways with
+                                   its round trip time, publishes, progress and
+                                   server output, colored on a terminal. Adds
+                                   overhead to timings                              (default: false)
       -q, --quiet                  Print only errors on stderr, the report file and
                                    the check verdict, for CI. Warnings stay in the
                                    report. Rejected with -v                         (default: false)
@@ -546,7 +549,16 @@ Lifecycle timings are ok or error, lifecycle/idle and server/idle ok or timeout.
   - Compare servers: run the same script/workspace against different servers
     (e.g. typescript-language-server vs vtsls).
   - Debugging: -v prefixes lsbench lines [lsbench] (request timings [lsbench:ctx])
-    and logs each publish as
+    and logs each LSP message as one line: direction, method, id, the workspace
+    relative path with line:character, and for responses the round trip time and
+    a short summary (null, N items, N locations, error <code> <message>):
+      [lsbench] → textDocument/completion #4 src/main.ts:12:8
+      [lsbench] ← textDocument/completion #4 (38ms) 57 items
+      [lsbench] ← workspace/configuration #0 (server request)
+      [lsbench] → workspace/configuration #0 reply
+    $/progress, window/logMessage and $/logTrace get no message line. Colors
+    follow the terminal; NO_COLOR=1 turns them off, FORCE_COLOR=1 forces them.
+    Each publish is also logged as
       [lsbench] Publish src/a.ts v=3 n=2 current: <first message, max 100 chars>
     with status current, stale, closed, close candidate or unopened. Server
     stderr and log messages are prefixed [server]; --server-log <file> moves

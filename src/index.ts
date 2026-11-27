@@ -63,6 +63,7 @@ export {
     resolveConfigurationSection,
     ServerOutput,
     uriToPath,
+    WireLog,
     WireTrace,
 } from './harness.js';
 export type { ServerConfigOptions } from './runner.js';
