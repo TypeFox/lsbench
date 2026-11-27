@@ -12,7 +12,7 @@ Output lsbench.gif
 # terminal look & feel
 Set Shell "zsh"
 Set FontSize 16
-Set Width 1200
+Set Width 1400
 Set Height 700
 Set Padding 20
 Set Theme "Dracula"
